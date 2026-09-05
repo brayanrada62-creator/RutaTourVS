@@ -201,17 +201,6 @@ class AsientoReserva(models.Model):
     class Meta:
         db_table = "asientos_reserva"
 
-class Categoria(models.Model):
-    nombre = models.CharField(max_length=100)
-    descripcion = models.CharField(max_length=255)
-
-    def __str__(self):
-        return self.nombre
-
-    class Meta:
-        db_table = "categoria"
-
-
 class Pago(models.Model):
     ESTADOS = [
         ("pendiente", "Pendiente"),
@@ -221,7 +210,6 @@ class Pago(models.Model):
 
     precio = models.DecimalField(max_digits=10, decimal_places=2)
     reserva = models.ForeignKey(Reserva, on_delete=models.CASCADE, related_name="pagos")
-    categoria = models.ForeignKey(Categoria, on_delete=models.PROTECT, related_name="pagos")
     fecha_pago = models.DateTimeField()
     referencia = models.ImageField(max_length=100)
     comprobante = models.CharField(max_length=255)
