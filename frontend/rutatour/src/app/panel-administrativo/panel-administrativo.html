@@ -1,1 +1,107 @@
-<p>panel-administrativo works!</p>
+<div class="admin-layout">
+
+  <aside class="sidebar">
+
+    <div class="logo">🚌</div>
+
+    <nav class="nav-icons">
+
+      <button
+        class="nav-item"
+        [class.active]="seccionActiva === 'inicio'"
+        (click)="mostrarSeccion('inicio')">
+        <span class="icono">🏠</span>
+        <span class="tooltip">Inicio</span>
+      </button>
+
+      <button
+        class="nav-item"
+        [class.active]="seccionActiva === 'estadisticas'"
+        (click)="mostrarSeccion('estadisticas')">
+        <span class="icono">📊</span>
+        <span class="tooltip">Estadísticas</span>
+      </button>
+
+      <button
+        class="nav-item"
+        [class.active]="seccionActiva === 'tiempo-real'"
+        (click)="mostrarSeccion('tiempo-real')">
+        <span class="icono">🗺️</span>
+        <span class="tooltip">Tiempo real</span>
+      </button>
+
+      <button
+        class="nav-item"
+        [class.active]="seccionActiva === 'buses'"
+        (click)="mostrarSeccion('buses')">
+        <span class="icono">🚍</span>
+        <span class="tooltip">Buses</span>
+      </button>
+
+      <button
+        class="nav-item"
+        [class.active]="seccionActiva === 'conductores'"
+        (click)="mostrarSeccion('conductores')">
+        <span class="icono">🧑‍✈️</span>
+        <span class="tooltip">Conductores</span>
+      </button>
+
+      <button
+        class="nav-item"
+        [class.active]="seccionActiva === 'rutas'"
+        (click)="mostrarSeccion('rutas')">
+        <span class="icono">🛣️</span>
+        <span class="tooltip">Rutas</span>
+      </button>
+
+      <button
+        class="nav-item"
+        [class.active]="seccionActiva === 'reservas'"
+        (click)="mostrarSeccion('reservas')">
+        <span class="icono">🎫</span>
+        <span class="tooltip">Reservas</span>
+      </button>
+
+      <button
+        class="nav-item"
+        [class.active]="seccionActiva === 'usuarios'"
+        (click)="mostrarSeccion('usuarios')">
+        <span class="icono">👥</span>
+        <span class="tooltip">Usuarios</span>
+      </button>
+
+      <button
+        class="nav-item"
+        [class.active]="seccionActiva === 'soporte'"
+        (click)="mostrarSeccion('soporte')">
+        <span class="icono">🎧</span>
+        <span class="tooltip">Atención y soporte</span>
+      </button>
+
+    </nav>
+
+    <div class="avatar"></div>
+  </aside>
+
+  <div class="main">
+
+    <header class="topbar">
+      <div class="search-box">
+        <span class="icono-chico">🔍</span>
+        <input type="text" placeholder="Buscar en el panel...">
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-button" aria-label="Notificaciones">🔔</button>
+        <button class="icon-button" aria-label="Configuración">⚙️</button>
+      </div>
+    </header>
+
+    <main class="content">
+      <ng-container *ngIf="seccionActiva">
+        <h1 class="content-title">{{ titulos[seccionActiva] }}</h1>
+        <p class="content-subtitle">.</p>
+      </ng-container>
+    </main>
+  </div>
+
+</div>
