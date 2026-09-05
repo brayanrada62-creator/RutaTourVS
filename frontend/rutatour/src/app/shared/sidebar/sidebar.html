@@ -1,0 +1,115 @@
+<aside class="w-64 shrink-0 bg-white border-r border-gray-100 flex flex-col justify-between">
+  <div>
+<!-- Logo -->
+<div class="flex items-center gap-3 px-6 py-6">
+  <div class="w-9 h-9 rounded-lg overflow-hidden flex items-center justify-center">
+    <img 
+      src="/RutaTourVS/frontend/rutatour/src/assets/logoruta.png"
+      alt="Logo RutaTour"
+      class="w-full h-full object-contain"
+    />
+  </div>
+
+  <div>
+    <p class="font-semibold leading-tight text-gray-900">RutaTour</p>
+    <p class="text-[11px] tracking-wide text-gray-400">SUPERADMIN</p>
+  </div>
+</div>
+
+    <nav class="px-4 mt-2">
+      <!-- GENERAL -->
+      <p class="px-2 text-[11px] tracking-wide text-gray-400 mb-2">GENERAL</p>
+      <ul class="space-y-1 mb-6">
+        <li *ngFor="let item of navGeneral">
+          <a [routerLink]="item.path ?? null"
+             class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm"
+             [class.bg-emerald-50]="item.label === activeLabel"
+             [class.text-emerald-700]="item.label === activeLabel"
+             [class.font-medium]="item.label === activeLabel"
+             [class.text-gray-600]="item.label !== activeLabel"
+             [class.hover:bg-gray-50]="item.label !== activeLabel">
+            <span class="w-5 h-5 flex items-center justify-center">
+              <svg *ngIf="item.icon === 'home'" xmlns="http://www.w3.org/2000/svg" class="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 12l9-9 9 9M5 10v10a1 1 0 001 1h4a1 1 0 001-1v-4h2v4a1 1 0 001 1h4a1 1 0 001-1V10" />
+              </svg>
+              <svg *ngIf="item.icon === 'chart'" xmlns="http://www.w3.org/2000/svg" class="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 19V9m6 10V5m6 14v-6" />
+              </svg>
+              <svg *ngIf="item.icon === 'map'" xmlns="http://www.w3.org/2000/svg" class="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 20l-6-3V4l6 3m0 13l6-3m-6 3V7m6 10l6 3V7l-6-3m0 13V4m0 3L9 4" />
+              </svg>
+            </span>
+            {{ item.label }}
+          </a>
+        </li>
+      </ul>
+
+      <!-- PLATAFORMA -->
+      <p class="px-2 text-[11px] tracking-wide text-gray-400 mb-2">PLATAFORMA</p>
+      <ul class="space-y-1 mb-6">
+        <li *ngFor="let item of navPlataforma">
+          <a [routerLink]="item.path ?? null"
+             class="flex items-center justify-between px-3 py-2 rounded-lg text-sm"
+             [class.bg-emerald-50]="item.label === activeLabel"
+             [class.text-emerald-700]="item.label === activeLabel"
+             [class.font-medium]="item.label === activeLabel"
+             [class.text-gray-600]="item.label !== activeLabel"
+             [class.hover:bg-gray-50]="item.label !== activeLabel">
+            <span class="flex items-center gap-3">
+              <span class="w-5 h-5 flex items-center justify-center">
+                <svg *ngIf="item.icon === 'building'" xmlns="http://www.w3.org/2000/svg" class="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 21V7a1 1 0 011-1h6a1 1 0 011 1v14M4 21h16M12 21v-6a1 1 0 011-1h4a1 1 0 011 1v6M8 7V4a1 1 0 011-1h1M8 10h.01M8 13h.01M8 16h.01" />
+                </svg>
+                <svg *ngIf="item.icon === 'users'" xmlns="http://www.w3.org/2000/svg" class="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M17 20v-1a4 4 0 00-4-4H7a4 4 0 00-4 4v1m14 0h4v-1a4 4 0 00-3-3.87M13 7a4 4 0 11-8 0 4 4 0 018 0zm7 3a3 3 0 10-2-5.65" />
+                </svg>
+              </span>
+              {{ item.label }}
+            </span>
+            <span *ngIf="item.badge" class="text-[11px] bg-emerald-100 text-emerald-700 rounded-full w-5 h-5 flex items-center justify-center">{{ item.badge }}</span>
+          </a>
+        </li>
+      </ul>
+
+      <!-- SOPORTE -->
+      <p class="px-2 text-[11px] tracking-wide text-gray-400 mb-2">SOPORTE</p>
+      <ul class="space-y-1">
+        <li *ngFor="let item of navSoporte">
+          <a [routerLink]="item.path ?? null"
+             class="flex items-center justify-between px-3 py-2 rounded-lg text-sm"
+             [class.bg-emerald-50]="item.label === activeLabel"
+             [class.text-emerald-700]="item.label === activeLabel"
+             [class.font-medium]="item.label === activeLabel"
+             [class.text-gray-600]="item.label !== activeLabel"
+             [class.hover:bg-gray-50]="item.label !== activeLabel">
+            <span class="flex items-center gap-3">
+              <span class="w-5 h-5 flex items-center justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 15v-3a8 8 0 1116 0v3M4 15a2 2 0 002 2h1v-6H5a1 1 0 00-1 1v3zm16 0a2 2 0 01-2 2h-1v-6h2a1 1 0 011 1v3zM8 19a2 2 0 002 2h1" />
+                </svg>
+              </span>
+              {{ item.label }}
+            </span>
+            <span *ngIf="item.badge" class="text-[11px] bg-rose-100 text-rose-600 rounded-full w-5 h-5 flex items-center justify-center">{{ item.badge }}</span>
+          </a>
+        </li>
+      </ul>
+    </nav>
+  </div>
+
+  <!-- Usuario -->
+  <div class="flex items-center gap-3 px-6 py-5 border-t border-gray-100">
+    <div class="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center text-sm font-semibold text-gray-600">
+      {{ userName.charAt(0) }}
+    </div>
+    <div class="flex-1 min-w-0">
+      <p class="text-sm font-medium text-gray-900 truncate">{{ userName }}</p>
+      <p class="text-xs text-gray-400 truncate">{{ userRole }}</p>
+    </div>
+    <button class="text-gray-400 hover:text-gray-600" title="Cerrar sesión">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 5v1a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h5a2 2 0 012 2v1" />
+      </svg>
+    </button>
+  </div>
+</aside>

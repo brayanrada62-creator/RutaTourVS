@@ -1,0 +1,67 @@
+<div class="flex h-screen bg-gray-50 text-gray-800">
+
+  <app-sidebar activeLabel="Inicio" />
+
+  <main class="flex-1 overflow-y-auto">
+    <app-topbar />
+
+    <section class="px-8 pb-10">
+      <!-- Bienvenida -->
+      <h1 class="text-2xl font-semibold text-gray-900">Bienvenida, {{ userName }}</h1>
+      <p class="text-sm text-gray-500 mt-1">Resumen general de la plataforma {{ platformName }}.</p>
+
+      <!-- Tarjetas de estadísticas-->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
+        <div *ngFor="let stat of stats" class="bg-white rounded-2xl border border-gray-100 p-5">
+          <p class="text-[11px] tracking-wide text-gray-400">{{ stat.label }}</p>
+          <p class="text-2xl font-semibold text-gray-900 mt-2">{{ stat.value }}</p>
+          <p class="text-xs text-emerald-600 mt-1">{{ stat.hint }}</p>
+        </div>
+      </div>
+
+      <!-- Gráfico y mapa -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-6">
+        <!-- Ventas de la semana: datos vienen del backend  -->
+        <div class="lg:col-span-2 bg-white rounded-2xl border border-gray-100 p-6">
+          <p class="text-[11px] tracking-wide text-gray-400 mb-6">VENTAS DE LA PLATAFORMA (SEMANA)</p>
+          <div class="flex items-end justify-between gap-3 h-48">
+            <div *ngFor="let day of weeklySales" class="flex-1 flex flex-col items-center gap-2 h-full justify-end">
+              <div
+                class="w-full max-w-10 rounded-md bg-gradient-to-b from-emerald-400 to-emerald-600"
+                [style.height.%]="day.value">
+              </div>
+              <span class="text-xs text-gray-500">{{ day.day }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mapa general de viajes -->
+        <div class="bg-white rounded-2xl border border-gray-100 p-6 flex flex-col">
+          <p class="text-[11px] tracking-wide text-gray-400 mb-4">MAPA GENERAL DE VIAJES</p>
+          <!--
+            Aquí va el mapa real .
+          -->
+          <div class="flex-1 min-h-40 rounded-xl bg-emerald-600"></div>
+        </div>
+      </div>
+
+      <!-- Actividad reciente: datos vienen del backend  -->
+      <div class="bg-white rounded-2xl border border-gray-100 p-6 mt-6">
+        <p class="text-[11px] tracking-wide text-gray-400 mb-4">ACTIVIDAD RECIENTE EN LA PLATAFORMA</p>
+        <ul class="divide-y divide-gray-50">
+          <li *ngFor="let activity of recentActivity" class="flex items-center justify-between py-3">
+            <div class="flex items-center gap-3">
+              <div class="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h7l5 5v11a2 2 0 01-2 2z" />
+                </svg>
+              </div>
+              <span class="text-sm text-gray-700">{{ activity.text }}</span>
+            </div>
+            <span class="text-xs text-gray-400 shrink-0">{{ activity.time }}</span>
+          </li>
+        </ul>
+      </div>
+    </section>
+  </main>
+</div>
