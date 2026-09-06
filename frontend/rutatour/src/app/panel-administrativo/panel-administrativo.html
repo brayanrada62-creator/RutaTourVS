@@ -7,72 +7,64 @@
     <nav class="nav-icons">
 
       <button
-        class="nav-item"
-        [class.active]="seccionActiva === 'inicio'"
+        class="{{ seccionActiva === 'inicio' ? 'nav-item active' : 'nav-item' }}"
         (click)="mostrarSeccion('inicio')">
         <span class="icono">🏠</span>
         <span class="tooltip">Inicio</span>
       </button>
 
       <button
-        class="nav-item"
-        [class.active]="seccionActiva === 'estadisticas'"
+        class="{{ seccionActiva === 'estadisticas' ? 'nav-item active' : 'nav-item' }}"
         (click)="mostrarSeccion('estadisticas')">
         <span class="icono">📊</span>
-        <span class="tooltip">Estadísticas</span>
+        <span class="tooltip">reportes</span>
       </button>
 
       <button
-        class="nav-item"
-        [class.active]="seccionActiva === 'tiempo-real'"
+        class="{{ seccionActiva === 'tiempo-real' ? 'nav-item active' : 'nav-item' }}"
         (click)="mostrarSeccion('tiempo-real')">
         <span class="icono">🗺️</span>
         <span class="tooltip">Tiempo real</span>
       </button>
 
       <button
-        class="nav-item"
-        [class.active]="seccionActiva === 'buses'"
+        class="{{ seccionActiva === 'buses' ? 'nav-item active' : 'nav-item' }}"
         (click)="mostrarSeccion('buses')">
         <span class="icono">🚍</span>
         <span class="tooltip">Buses</span>
       </button>
 
       <button
-        class="nav-item"
-        [class.active]="seccionActiva === 'conductores'"
+      
+        class="{{ seccionActiva === 'conductores' ? 'nav-item active' : 'nav-item' }}"
         (click)="mostrarSeccion('conductores')">
         <span class="icono">🧑‍✈️</span>
         <span class="tooltip">Conductores</span>
       </button>
 
       <button
-        class="nav-item"
-        [class.active]="seccionActiva === 'rutas'"
+        class="{{ seccionActiva === 'rutas' ? 'nav-item active' : 'nav-item' }}"
         (click)="mostrarSeccion('rutas')">
         <span class="icono">🛣️</span>
-        <span class="tooltip">Rutas</span>
+        <span class="tooltip">viajes</span>
       </button>
 
       <button
-        class="nav-item"
-        [class.active]="seccionActiva === 'reservas'"
+        class="{{ seccionActiva === 'reservas' ? 'nav-item active' : 'nav-item' }}"
         (click)="mostrarSeccion('reservas')">
         <span class="icono">🎫</span>
         <span class="tooltip">Reservas</span>
       </button>
 
       <button
-        class="nav-item"
-        [class.active]="seccionActiva === 'usuarios'"
+        class="{{ seccionActiva === 'usuarios' ? 'nav-item active' : 'nav-item' }}"
         (click)="mostrarSeccion('usuarios')">
         <span class="icono">👥</span>
         <span class="tooltip">Usuarios</span>
       </button>
 
       <button
-        class="nav-item"
-        [class.active]="seccionActiva === 'soporte'"
+        class="{{ seccionActiva === 'soporte' ? 'nav-item active' : 'nav-item' }}"
         (click)="mostrarSeccion('soporte')">
         <span class="icono">🎧</span>
         <span class="tooltip">Atención y soporte</span>
@@ -91,15 +83,15 @@
         <input type="text" placeholder="Buscar en el panel...">
       </div>
       <div class="topbar-actions">
-        <button class="icon-button" aria-label="Notificaciones">🔔</button>
-        <button class="icon-button" aria-label="Configuración">⚙️</button>
+        <button class="icon-button">🔔</button>
+        <button class="icon-button">⚙️</button>
       </div>
     </header>
 
     <main class="content">
       <ng-container *ngIf="seccionActiva">
         <h1 class="content-title">{{ titulos[seccionActiva] }}</h1>
-        <p class="content-subtitle">.</p>
+        <p class="content-subtitle"></p>
       </ng-container>
     </main>
   </div>
