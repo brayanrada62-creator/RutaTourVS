@@ -2,9 +2,10 @@ import { Routes } from '@angular/router';
 import { AdminLayout } from './layout/admin-layout/admin-layout';
 import { Inicio } from './pages/inicio/inicio';
 import { EnConstruccion } from './pages/en-construccion/en-construccion';
+import {Login} from './login/login'
 
 export const routes: Routes = [
-  { path: '', redirectTo: 'admin/inicio', pathMatch: 'full' },
+  { path: '', component: Login},
   {
     path: 'admin',
     component: AdminLayout,

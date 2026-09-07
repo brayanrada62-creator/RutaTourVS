@@ -1,0 +1,100 @@
+
+  <div class="login-screen">
+
+    <!-- Panel izquierdo -->
+    <aside class="side-panel">
+      <div class="side-panel__bg"></div>
+
+      <div class="brand">
+        <span class="brand__icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="5" width="18" height="12" rx="2"></rect>
+            <path d="M3 11h18"></path>
+            <circle cx="7.5" cy="20" r="1.5"></circle>
+            <circle cx="16.5" cy="20" r="1.5"></circle>
+          </svg>
+        </span>
+        <span class="brand__name">RutaTour</span>
+      </div>
+
+      <div class="side-panel__copy">
+        <h1>El control de tus agencias, rutas y viajes en un solo lugar.</h1>
+        <p>Gestiona buses, conductores, tiquetes y el seguimiento en tiempo real de todas tus rutas turísticas desde un mismo panel.</p>
+      </div>
+
+      <div class="route-track">
+        <span class="route-track__dot"></span>
+        <span class="route-track__line"></span>
+        <span class="route-track__label">Bogotá &nbsp;→&nbsp; Villa de Leyva &nbsp;·&nbsp; En ruta</span>
+      </div>
+    </aside>
+
+    <!-- Panel derecho -->
+    <main class="form-panel">
+      <div class="form-card">
+
+        <h2>Iniciar sesión</h2>
+        <p class="form-subtitle">Ingresa tus credenciales para continuar</p>
+
+        <div class="role-tabs" role="tablist" aria-label="Tipo de acceso">
+          <button type="button"
+                  class="role-tab"
+                    class="role-tab is-active"
+                    role="tab"
+                    aria-selected="true">Administrador de agencia</button>
+          <button type="button"
+                    class="role-tab"
+                    role="tab"
+                    aria-selected="false">Superadministrador</button>
+        </div>
+
+        <form class="login-form" (ngSubmit)="login()" #loginForm="ngForm">
+          <label class="field">
+            <span class="field__label">Correo electrónico</span>
+            <span class="field__control">
+              <svg class="field__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+                <path d="m2 7 10 6 10-6"></path>
+              </svg>
+              <input type="email"
+                     name="email"
+                     placeholder="admin@rutatour.com"
+                     autocomplete="username"
+                     [(ngModel)]="usuario.correo"
+                     required>
+            </span>
+          </label>
+
+          <label class="field">
+            <span class="field__label">Contraseña</span>
+            <span class="field__control">
+              <svg class="field__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="10" rx="2"></rect>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+              </svg>
+              <input type="password"
+                     name="password"
+                     placeholder="••••••••••"
+                     autocomplete="current-password"
+                     [(ngModel)]="usuario.contrasena"
+                     required>
+            </span>
+          </label>
+
+          <div class="form-row">
+            <label class="checkbox">
+              <input type="checkbox" name="recordarme">
+              <span>Recordarme</span>
+            </label>
+            <a href="#" class="link">¿Olvidaste tu contraseña?</a>
+          </div>
+
+          <button type="submit" class="btn-submit" [disabled]="loginForm.invalid">Iniciar sesión</button>
+        </form>
+
+        <p class="form-footer">RutaTour Popayán · Acceso exclusivo para personal autorizado</p>
+      </div>
+    </main>
+
+  </div>
+  

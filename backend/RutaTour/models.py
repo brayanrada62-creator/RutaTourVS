@@ -26,8 +26,8 @@ class Agencia(models.Model):
 
 class Usuario(models.Model):
     nombre_completo = models.CharField(max_length=200)
-    agencia = models.ForeignKey(Agencia, on_delete=models.CASCADE, related_name="usuarios")
-    rol = models.ForeignKey(Rol, on_delete=models.PROTECT, related_name="usuarios")
+    agencia = models.ForeignKey(Agencia, on_delete=models.CASCADE)
+    rol = models.ForeignKey(Rol, on_delete=models.PROTECT)
     tipo_documento = models.CharField(max_length=30)
     numero_documento = models.CharField(max_length=30, unique=True)
     correo = models.EmailField(max_length=150)
@@ -42,7 +42,7 @@ class Usuario(models.Model):
 
 class TipoBus(models.Model):
     nombre = models.CharField(max_length=100)
-    agencia = models.ForeignKey(Agencia, on_delete=models.CASCADE, related_name="tipos_bus")
+    agencia = models.ForeignKey(Agencia, on_delete=models.CASCADE)
     capacidad = models.PositiveIntegerField()
     descripcion = models.CharField(max_length=300)
 
@@ -61,8 +61,8 @@ class Bus(models.Model):
     ]
 
     placa = models.CharField(max_length=15)
-    agencia = models.ForeignKey(Agencia, on_delete=models.CASCADE, related_name="buses")
-    tipo_bus = models.ForeignKey(TipoBus, on_delete=models.PROTECT, related_name="buses")
+    agencia = models.ForeignKey(Agencia, on_delete=models.CASCADE)
+    tipo_bus = models.ForeignKey(TipoBus, on_delete=models.PROTECT)
     marca = models.CharField(max_length=100)
     modelo = models.CharField(max_length=100)
     estado = models.CharField(max_length=20, default="activo")
@@ -77,7 +77,7 @@ class Bus(models.Model):
 
 class Asiento(models.Model):
     numero_asiento = models.IntegerField()
-    tipo_bus = models.ForeignKey(TipoBus, on_delete=models.CASCADE, related_name="asientos")
+    tipo_bus = models.ForeignKey(TipoBus, on_delete=models.CASCADE)
 
     def __str__(self):
         return str(self.numero_asiento)
@@ -99,7 +99,7 @@ class Destino(models.Model):
 
 class Hospedaje(models.Model):
     nombre = models.CharField(max_length=150)
-    destino = models.ForeignKey(Destino, on_delete=models.CASCADE, related_name="hospedajes")
+    destino = models.ForeignKey(Destino, on_delete=models.CASCADE)
     direccion = models.CharField(max_length=255)
     telefono = models.CharField(max_length=20)
     descripcion = models.CharField(max_length=300)
@@ -112,7 +112,7 @@ class Hospedaje(models.Model):
 
 
 class SitioTuristico(models.Model):
-    destino = models.ForeignKey(Destino, on_delete=models.CASCADE, related_name="sitios_turisticos")
+    destino = models.ForeignKey(Destino, on_delete=models.CASCADE)
     nombre = models.CharField(max_length=150)
     descripcion = models.CharField(max_length=300)
     recomendaciones = models.CharField(max_length=300)
@@ -126,7 +126,7 @@ class SitioTuristico(models.Model):
 
 class ImagenDestino(models.Model):
     url_img = models.ImageField(max_length=255)
-    destino = models.ForeignKey(Destino, on_delete=models.CASCADE, related_name="imagenes")
+    destino = models.ForeignKey(Destino, on_delete=models.CASCADE)
     descripcion = models.CharField(max_length=255)
 
     def __str__(self):
@@ -143,7 +143,7 @@ class Paquete(models.Model):
     ]
 
     nombre = models.CharField(max_length=150)
-    agencia = models.ForeignKey(Agencia, on_delete=models.CASCADE, related_name="paquetes")
+    agencia = models.ForeignKey(Agencia, on_delete=models.CASCADE)
     descripcion = models.CharField(max_length=300)
     duracion_estimada = models.CharField(max_length=50)
     estado = models.CharField(max_length=20, default="activo")
@@ -157,8 +157,8 @@ class Paquete(models.Model):
 
 
 class PaqueteDestino(models.Model):
-    paquete = models.ForeignKey(Paquete, on_delete=models.CASCADE, related_name="paquete_destinos")
-    destino = models.ForeignKey(Destino, on_delete=models.CASCADE, related_name="paquete_destinos")
+    paquete = models.ForeignKey(Paquete, on_delete=models.CASCADE)
+    destino = models.ForeignKey(Destino, on_delete=models.CASCADE)
 
     def __str__(self):
         return f"{self.paquete.nombre} - {self.destino.nombre}"
@@ -168,7 +168,7 @@ class PaqueteDestino(models.Model):
 
 class Itinerario(models.Model):
     titulo = models.CharField(max_length=150)
-    paquete = models.ForeignKey(Paquete, on_delete=models.CASCADE, related_name="itinerarios")
+    paquete = models.ForeignKey(Paquete, on_delete=models.CASCADE)
     dia = models.CharField(max_length=50)
     descripcion = models.CharField(max_length=300)
     hora = models.TimeField()
@@ -182,8 +182,8 @@ class Itinerario(models.Model):
 
 class Reserva(models.Model):
     fecha_reserva = models.DateTimeField()
-    usuario = models.ForeignKey(Usuario, on_delete=models.CASCADE, related_name="reservas")
-    paquete = models.ForeignKey(Paquete, on_delete=models.PROTECT, related_name="reservas")
+    usuario = models.ForeignKey(Usuario, on_delete=models.CASCADE)
+    paquete = models.ForeignKey(Paquete, on_delete=models.PROTECT)
 
     def __str__(self):
         return self.fecha_reserva
@@ -192,8 +192,8 @@ class Reserva(models.Model):
         db_table = "reserva"
 
 class AsientoReserva(models.Model):
-    reserva = models.ForeignKey(Reserva, on_delete=models.CASCADE, related_name="asientos_reserva")
-    asiento = models.ForeignKey(Asiento, on_delete=models.PROTECT, related_name="reservas_asiento")
+    reserva = models.ForeignKey(Reserva, on_delete=models.CASCADE)
+    asiento = models.ForeignKey(Asiento, on_delete=models.PROTECT)
 
     def __str__(self):
         return f"Reserva #{self.reserva_id} - Asiento {self.asiento.numero_asiento}"
@@ -209,7 +209,7 @@ class Pago(models.Model):
     ]
 
     precio = models.DecimalField(max_digits=10, decimal_places=2)
-    reserva = models.ForeignKey(Reserva, on_delete=models.CASCADE, related_name="pagos")
+    reserva = models.ForeignKey(Reserva, on_delete=models.CASCADE)
     fecha_pago = models.DateTimeField()
     referencia = models.ImageField(max_length=100)
     comprobante = models.CharField(max_length=255)
