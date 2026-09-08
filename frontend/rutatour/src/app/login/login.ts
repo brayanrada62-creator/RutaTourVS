@@ -10,19 +10,21 @@ import { Router } from '@angular/router';
   templateUrl: './login.html',
 })
 export class Login {
-usuario={
-  correo:'',
-  contrasena:''
-}
-  constructor(private http: HttpClient,
-    private router: Router
-  ) {}
-  login(){
-    this.http.post('http://127.0.0.1:8000/api/login/',
-      this.usuario).subscribe((respuesta:any)=>{
-        if (respuesta.token) {
-          this.router.navigate(['/inicio']);
-        }
-      });
+  rol: 'agencia' | 'super' = 'agencia';
+  recordarme = false;
+
+  usuario = {
+    correo: '',
+    contrasena: ''
+  };
+
+  constructor(private http: HttpClient, private router: Router) {}
+
+  login() {
+    this.http.post('http://127.0.0.1:8000/api/login/', this.usuario).subscribe((respuesta: any) => {
+      if (respuesta.token) {
+        this.router.navigate(['/inicio']);
+      }
+    });
   }
 }
