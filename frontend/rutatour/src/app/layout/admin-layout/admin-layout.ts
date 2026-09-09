@@ -1,5 +1,6 @@
-import { Component } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { AuthService, CurrentUser } from './auth.service';
 
 interface NavItem {
   label: string;
@@ -19,13 +20,13 @@ interface NavGroup {
   templateUrl: './admin-layout.html',
   styleUrl: './admin-layout.css'
 })
-export class AdminLayout {
+export class AdminLayout implements OnInit {
+  // Estructura de navegación del sidebar (fija, no viene de la base de datos)
   protected readonly navGroups: NavGroup[] = [
     {
       title: 'General',
       items: [
         { label: 'Inicio', icon: 'home', route: '/admin/inicio' },
-        { label: 'Reportes', icon: 'chart', route: '/admin/reportes' },
         { label: 'Tiempo real', icon: 'clock', route: '/admin/tiempo-real' }
       ]
     },
@@ -36,19 +37,18 @@ export class AdminLayout {
         { label: 'Buses', icon: 'bus', route: '/admin/buses' },
         { label: 'Conductores', icon: 'drivers', route: '/admin/conductores' }
       ]
-    },
-    {
-      title: 'Comercial',
-      items: [
-        { label: 'Tiquetes', icon: 'ticket', route: '/admin/tiquetes' },
-        { label: 'Usuarios', icon: 'users', route: '/admin/usuarios' },
-        { label: 'Soporte', icon: 'support', route: '/admin/soporte', badge: 3 }
-      ]
     }
   ];
 
-  protected readonly currentUser = {
-    name: 'Brayan Rada',
-    role: 'Administrador'
-  };
+  // Usuario logueado: llega de la base de datos, arranca en blanco
+  protected currentUser: CurrentUser = { name: '', role: '' };
+
+  constructor(private authService: AuthService) {}
+
+  ngOnInit(): void {
+    this.authService.getCurrentUser().subscribe({
+      next: (user) => (this.currentUser = user),
+      error: () => (this.currentUser = { name: '', role: '' })
+    });
+  }
 }
