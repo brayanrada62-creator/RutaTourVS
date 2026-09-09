@@ -1,1 +1,189 @@
 /* Estilos específicos de Inicio, si se necesitan más adelante */
+.dash-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  font-family: 'Poppins', Arial, sans-serif;
+}
+
+.dash-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #0f172a;
+  margin: 0;
+}
+
+.dash-subtitle {
+  margin-top: 0.25rem;
+  font-size: 0.875rem;
+  color: #64748b;
+}
+
+/* Tarjetas base */
+.dash-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 1.25rem;
+}
+
+.dash-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #94a3b8;
+  margin: 0;
+}
+
+.dash-value {
+  margin-top: 0.5rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.dash-trend {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.trend-up {
+  color: #16a34a;
+}
+
+.trend-flat {
+  color: #94a3b8;
+}
+
+/* Grid de métricas */
+.dash-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 640px) {
+  .dash-stats-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (min-width: 1024px) {
+  .dash-stats-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* Grid medio: gráfico + mapa */
+.dash-mid-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 1024px) {
+  .dash-mid-grid {
+    grid-template-columns: 2fr 1fr;
+  }
+}
+
+.dash-chart-card {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Barras */
+.dash-bars {
+  margin-top: 1.5rem;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  height: 14rem;
+}
+
+.dash-bar-col {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  height: 100%;
+  justify-content: flex-end;
+}
+
+.dash-bar {
+  width: 100%;
+  border-radius: 6px 6px 0 0;
+  background: linear-gradient(to top, #15803d, #4ade80);
+}
+
+.dash-bar-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #64748b;
+}
+
+/* Mapa */
+.dash-map-wrapper {
+  margin-top: 1rem;
+  height: 14rem;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.dash-map-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Actividad reciente */
+.dash-activity-list {
+  margin-top: 1rem;
+  list-style: none;
+  padding: 0;
+}
+
+.dash-activity-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.dash-activity-item:last-child {
+  border-bottom: none;
+}
+
+.dash-activity-icon {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #16a34a;
+}
+
+.dash-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.dash-activity-title {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #1e293b;
+  margin: 0;
+}
+
+.dash-activity-subtitle {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin: 0;
+}

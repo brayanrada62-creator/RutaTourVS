@@ -1,20 +1,20 @@
-<div class="flex flex-col gap-6">
+<div class="dash-container">
   <!-- Encabezado -->
   <div>
-    <h1 class="text-2xl font-semibold text-gray-900">Hola, {{ userName }}</h1>
-    <p class="mt-1 text-sm text-gray-500">Resumen general de la plataforma hoy, {{ today }}.</p>
+    <h1 class="dash-title">Hola, {{ userName }}</h1>
+    <p class="dash-subtitle">Resumen general de la plataforma hoy, {{ today }}.</p>
   </div>
 
   <!-- Tarjetas de métricas -->
-  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+  <div class="dash-stats-grid">
     @for (stat of stats; track stat.label) {
-      <div class="rounded-xl border border-gray-200 bg-white p-5">
-        <p class="text-xs font-semibold tracking-wide text-gray-400 uppercase">{{ stat.label }}</p>
-        <p class="mt-2 text-2xl font-semibold text-gray-900">{{ stat.value }}</p>
+      <div class="dash-card">
+        <p class="dash-label">{{ stat.label }}</p>
+        <p class="dash-value">{{ stat.value }}</p>
         <p
-          class="mt-1 text-xs font-medium"
-          [class.text-emerald-600]="stat.trendPositive"
-          [class.text-gray-400]="!stat.trendPositive"
+          class="dash-trend"
+          [class.trend-up]="stat.trendPositive"
+          [class.trend-flat]="!stat.trendPositive"
         >
           {{ stat.trend }}
         </p>
@@ -23,60 +23,60 @@
   </div>
 
   <!-- Gráfico + tiempo real -->
-  <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+  <div class="dash-mid-grid">
     <!-- Venta semanal -->
-    <div class="rounded-xl border border-gray-200 bg-white p-5 lg:col-span-2">
-      <p class="text-xs font-semibold tracking-wide text-gray-400 uppercase">Venta semanal</p>
-      <div class="mt-6 flex h-56 items-end gap-3">
+    <div class="dash-card dash-chart-card">
+      <p class="dash-label">Venta semanal</p>
+      <div class="dash-bars">
         @for (item of weeklySales; track item.day) {
-          <div class="flex flex-1 flex-col items-center gap-2">
+          <div class="dash-bar-col">
             <div
-              class="w-full rounded-t-md bg-gradient-to-t from-emerald-600 to-emerald-400"
+              class="dash-bar"
               [style.height.%]="(item.value / maxSaleValue) * 100"
             ></div>
-            <span class="text-xs font-medium text-gray-500">{{ item.day }}</span>
+            <span class="dash-bar-label">{{ item.day }}</span>
           </div>
         }
       </div>
     </div>
 
     <!-- Viajes en tiempo real -->
-    <div class="rounded-xl border border-gray-200 bg-white p-5">
-      <p class="text-xs font-semibold tracking-wide text-gray-400 uppercase">Viajes en tiempo real</p>
-      <div class="mt-4 h-56 overflow-hidden rounded-lg">
-        <img src="/mapa-tiempo-real.png" alt="Viajes en tiempo real" class="h-full w-full object-cover" />
+    <div class="dash-card">
+      <p class="dash-label">Viajes en tiempo real</p>
+      <div class="dash-map-wrapper">
+        <img src="/mapa-tiempo-real.png" alt="Viajes en tiempo real" class="dash-map-img" />
       </div>
     </div>
   </div>
 
   <!-- Actividad reciente -->
-  <div class="rounded-xl border border-gray-200 bg-white p-5">
-    <p class="text-xs font-semibold tracking-wide text-gray-400 uppercase">Actividad reciente</p>
-    <ul class="mt-4 divide-y divide-gray-100">
+  <div class="dash-card">
+    <p class="dash-label">Actividad reciente</p>
+    <ul class="dash-activity-list">
       @for (activity of recentActivity; track activity.title) {
-        <li class="flex items-center gap-3 py-3">
-          <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+        <li class="dash-activity-item">
+          <span class="dash-activity-icon">
             @switch (activity.icon) {
               @case ('trip') {
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                <svg xmlns="http://www.w3.org/2000/svg" class="dash-icon" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
                 </svg>
               }
               @case ('ticket') {
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                <svg xmlns="http://www.w3.org/2000/svg" class="dash-icon" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 0 0-2 2v3a2 2 0 0 1 0 4v3a2 2 0 0 0 2 2h2m6-14h2a2 2 0 0 1 2 2v3a2 2 0 0 0 0 4v3a2 2 0 0 1-2 2h-2M9 5v14M9 5l6 0M9 19l6 0" />
                 </svg>
               }
               @case ('driver') {
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                <svg xmlns="http://www.w3.org/2000/svg" class="dash-icon" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.5 20.118a7.5 7.5 0 0 1 15 0" />
                 </svg>
               }
             }
           </span>
           <div>
-            <p class="text-sm font-medium text-gray-800">{{ activity.title }}</p>
-            <p class="text-xs text-gray-500">{{ activity.subtitle }}</p>
+            <p class="dash-activity-title">{{ activity.title }}</p>
+            <p class="dash-activity-subtitle">{{ activity.subtitle }}</p>
           </div>
         </li>
       }
