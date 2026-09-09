@@ -1,1 +1,43 @@
 /* Estilos específicos del layout de admin, si se necesitan más adelante */
+:host {
+  display: block;
+  height: 100vh;
+  font-family: 'Poppins', Arial, sans-serif;
+}
+
+.shell {
+  position: relative;
+  overflow: hidden;
+  background: #050806;
+}
+
+.shell::before,
+.shell::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.shell::before {
+  top: -12%;
+  left: -10%;
+  width: 42rem;
+  height: 42rem;
+  background: rgba(16, 185, 129, 0.16);
+}
+
+.shell::after {
+  bottom: -18%;
+  right: -12%;
+  width: 38rem;
+  height: 38rem;
+  background: rgba(5, 150, 105, 0.14);
+}
+
+.shell > * {
+  position: relative;
+  z-index: 1;
+}
