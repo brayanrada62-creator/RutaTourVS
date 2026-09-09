@@ -1,0 +1,76 @@
+.module-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  color: #eafbf1;
+}
+
+.module-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.module-header h1 {
+  margin: 0.25rem 0 0;
+  font-size: 1.75rem;
+}
+
+.module-header p:not(.module-eyebrow) {
+  margin: 0.5rem 0 0;
+  color: #7fa393;
+}
+
+.module-eyebrow {
+  margin: 0;
+  color: #6ee7b7;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.module-header button {
+  border: 0;
+  border-radius: 0.5rem;
+  background: #10b981;
+  color: #052e1c;
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.7rem 1rem;
+}
+
+.module-table-wrapper,
+.module-state {
+  border: 1px solid rgba(110, 231, 183, 0.12);
+  border-radius: 1rem;
+  background: rgba(15, 26, 22, 0.55);
+  padding: 1.25rem;
+}
+
+.module-state {
+  color: #7fa393;
+}
+
+.module-error {
+  color: #fca5a5;
+}
+
+.module-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.module-table th,
+.module-table td {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 0.85rem 0.5rem;
+}
+
+.module-table th {
+  color: rgba(234, 251, 241, 0.45);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}

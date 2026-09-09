@@ -1,25 +1,30 @@
 import { Routes } from '@angular/router';
 import { AdminLayout } from './layout/admin-layout/admin-layout';
 import { Inicio } from './pages/inicio/inicio';
-import { EnConstruccion } from './pages/en-construccion/en-construccion';
-import {Login} from './login/login'
+import { Reportes } from './pages/reportes/reportes';
+import { TiempoReal } from './pages/tiempo-real/tiempo-real';
+import { Viajes } from './pages/viajes/viajes';
+import { Buses } from './pages/buses/buses';
+import { Conductores } from './pages/conductores/conductores';
+import { Tiquetes } from './pages/tiquetes/tiquetes';
+import { Usuarios } from './pages/usuarios/usuarios';
+import { Login } from './login/login';
 
 export const routes: Routes = [
-  { path: '', component: Login},
+  { path: '', component: Login },
   {
     path: 'admin',
     component: AdminLayout,
     children: [
       { path: '', redirectTo: 'inicio', pathMatch: 'full' },
       { path: 'inicio', component: Inicio },
-      { path: 'reportes', component: EnConstruccion, data: { title: 'Reportes' } },
-      { path: 'tiempo-real', component: EnConstruccion, data: { title: 'Tiempo real' } },
-      { path: 'viajes', component: EnConstruccion, data: { title: 'Viajes' } },
-      { path: 'buses', component: EnConstruccion, data: { title: 'Buses' } },
-      { path: 'conductores', component: EnConstruccion, data: { title: 'Conductores' } },
-      { path: 'tiquetes', component: EnConstruccion, data: { title: 'Tiquetes' } },
-      { path: 'usuarios', component: EnConstruccion, data: { title: 'Usuarios' } },
-      { path: 'soporte', component: EnConstruccion, data: { title: 'Soporte' } }
+      { path: 'reportes', component: Reportes },
+      { path: 'tiempo-real', component: TiempoReal },
+      { path: 'viajes', component: Viajes },
+      { path: 'buses', component: Buses },
+      { path: 'conductores', component: Conductores },
+      { path: 'tiquetes', component: Tiquetes },
+      { path: 'usuarios', component: Usuarios }
     ]
   },
   { path: '**', redirectTo: 'admin/inicio' }

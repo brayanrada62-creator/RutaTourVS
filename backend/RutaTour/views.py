@@ -54,6 +54,71 @@ class UsuarioView(APIView):
         )
         return Response({'message': 'Usuario creado exitosamente'})
     
+    @swagger_auto_schema(
+        operation_description="Obtiene todos los usuarios",
+        responses={200: UsuarioEntrada()}
+        )
+    def get(self, request):
+        usuariolista = Usuario.objects.all()
+        lista_usuarios = []
+        for usuario in usuariolista:
+            lista_usuarios.append({
+                'id': usuario.id,
+                'nombre_completo': usuario.nombre_completo,
+                'agencia_id': usuario.agencia_id,
+                'rol_id': usuario.rol_id,
+                'tipo_documento': usuario.tipo_documento,
+                'numero_documento': usuario.numero_documento,
+                'correo': usuario.correo,
+                'telefono': usuario.telefono
+            })
+            return Response(lista_usuarios)
+            
+class UsuarioIdView(APIView):
+    @swagger_auto_schema(
+        operation_description="Obtiene un usuario por su ID",
+        responses={200: UsuarioEntrada()}
+        )
+    def get(self, request, id):
+        usuario = Usuario.objects.get(id=id)
+        return Response({
+            'id': usuario.id,
+            'nombre_completo': usuario.nombre_completo,
+            'agencia_id': usuario.agencia_id,
+            'rol_id': usuario.rol_id,
+            'tipo_documento': usuario.tipo_documento,
+            'numero_documento': usuario.numero_documento,
+            'correo': usuario.correo,
+            'telefono': usuario.telefono
+        })
+        
+    @swagger_auto_schema(
+        operation_description="Actualiza un usuario por su ID",
+        request_body=UsuarioEntrada,
+        responses={200: MensajeSalida}
+        )
+    def put(self, request, id):
+        usuario = Usuario.objects.get(id=id)
+        usuario.nombre_completo = request.data.get('nombre_completo')
+        usuario.agencia_id = request.data.get('agencia_id')
+        usuario.rol_id = request.data.get('rol_id')
+        usuario.tipo_documento = request.data.get('tipo_documento')
+        usuario.numero_documento = request.data.get('numero_documento')
+        usuario.correo = request.data.get('correo')
+        usuario.telefono = request.data.get('telefono')
+        usuario.contrasena = request.data.get('contrasena')
+        usuario.save()
+        return Response({'message': 'Usuario actualizado exitosamente'})
+    
+    @swagger_auto_schema(
+        operation_description="Elimina un usuario por su ID",
+        responses={200: MensajeSalida}
+        )
+    def delete(self, request, id):
+        usuario = Usuario.objects.get(id=id)
+        usuario.delete()
+        return Response({'message': 'Usuario eliminado exitosamente'})
+    
 ##################################################################################################
 
 class AgenciaView(APIView):

@@ -1,0 +1,41 @@
+<section class="module-page">
+  <header class="module-header">
+    <div>
+      <p class="module-eyebrow">Administracion</p>
+      <h1>Usuarios</h1>
+      <p>Gestiona los usuarios y sus permisos desde este modulo.</p>
+    </div>
+    <button type="button">Nuevo usuario</button>
+  </header>
+
+  @if (cargando) {
+    <div class="module-state">Cargando usuarios...</div>
+  } @else if (error) {
+    <div class="module-state module-error">{{ error }}</div>
+  } @else if (!usuarios.length) {
+    <div class="module-state">No hay usuarios registrados.</div>
+  } @else {
+    <div class="module-table-wrapper">
+      <table class="module-table">
+        <thead>
+          <tr>
+            <th>Nombre</th>
+            <th>Correo</th>
+            <th>Rol</th>
+            <th>Telefono</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (usuario of usuarios; track usuario.id) {
+            <tr>
+              <td>{{ usuario.nombre_completo }}</td>
+              <td>{{ usuario.correo }}</td>
+              <td>{{ usuario.rol_id }}</td>
+              <td>{{ usuario.telefono }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>
