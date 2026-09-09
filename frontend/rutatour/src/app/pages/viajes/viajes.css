@@ -1,0 +1,185 @@
+.gestion-viajes {
+  padding: 24px 32px;
+  font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+  color: #1f2937;
+}
+
+.encabezado {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.encabezado h1 {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.encabezado .subtitulo {
+  color: #6b7280;
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+.btn-nuevo {
+  background-color: #16a34a;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-nuevo:hover {
+  background-color: #15803d;
+}
+
+.barra-busqueda {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.barra-busqueda input {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.btn-filtros {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px 16px;
+  cursor: pointer;
+}
+
+.tabla-viajes {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.tabla-viajes th {
+  text-align: left;
+  font-size: 11px;
+  color: #6b7280;
+  background: #f9fafb;
+  padding: 12px 16px;
+}
+
+.tabla-viajes td {
+  padding: 14px 16px;
+  font-size: 14px;
+  border-top: 1px solid #f3f4f6;
+}
+
+.tabla-viajes tr {
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.tabla-viajes tr:hover {
+  background-color: #f9fafb;
+}
+
+.fila-activa {
+  background-color: #f0fdf4;
+}
+
+.columna-acciones {
+  text-align: right;
+  color: #9ca3af;
+}
+
+.badge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.badge-activo {
+  background-color: #dcfce7;
+  color: #16a34a;
+}
+
+.badge-inactivo {
+  background-color: #f3f4f6;
+  color: #6b7280;
+}
+
+.panel-detalle {
+  margin-top: 24px;
+}
+
+.breadcrumb {
+  font-size: 13px;
+  color: #9ca3af;
+  margin-bottom: 12px;
+}
+
+.pestanas {
+  display: flex;
+  gap: 24px;
+  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 20px;
+}
+
+.pestanas span {
+  padding-bottom: 10px;
+  font-size: 14px;
+  color: #6b7280;
+  cursor: pointer;
+}
+
+.pestanas span.pestana-activa {
+  color: #16a34a;
+  border-bottom: 2px solid #16a34a;
+  font-weight: 600;
+}
+
+.contenido-pestana {
+  display: flex;
+  gap: 24px;
+}
+
+.formulario {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.formulario label {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 14px;
+  margin-bottom: 6px;
+}
+
+.formulario input {
+  padding: 10px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 14px;
+  background: #fafafa;
+}
+
+.vista-previa {
+  width: 240px;
+  min-height: 160px;
+  background: #f9fafb;
+  border: 1px dashed #d1d5db;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

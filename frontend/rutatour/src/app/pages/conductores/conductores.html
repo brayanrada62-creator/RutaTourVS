@@ -1,0 +1,45 @@
+<div class="lista-conductores">
+
+  <div class="encabezado">
+    <div>
+      <h1>Conductores</h1>
+      <p class="subtitulo">Administra el personal registrado.</p>
+    </div>
+    <button class="btn-nuevo">+ Nuevo conductor</button>
+  </div>
+
+  <div class="barra-busqueda">
+    <input
+      type="text"
+      placeholder="Buscar conductores..."
+      [(ngModel)]="terminoBusqueda"
+    />
+  </div>
+
+  <table class="tabla-conductores">
+    <thead>
+      <tr>
+        <th>CONDUCTOR</th>
+        <th>LICENCIA</th>
+        <th>TELÉFONO</th>
+        <th>ESTADO</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr *ngFor="let conductor of conductoresFiltrados">
+        <td class="columna-conductor">
+          <span class="avatar"></span>
+          {{ conductor.nombre }}
+        </td>
+        <td>{{ conductor.licencia }}</td>
+        <td>{{ conductor.telefono }}</td>
+        <td>
+          <span class="badge" [ngClass]="conductor.estado === 'Activo' ? 'badge-activo' : 'badge-inactivo'">
+            {{ conductor.estado }}
+          </span>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+</div>

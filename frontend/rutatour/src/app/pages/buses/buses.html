@@ -1,0 +1,42 @@
+<div class="flota-buses">
+
+  <div class="encabezado">
+    <div>
+      <h1>Flota de buses</h1>
+      <p class="subtitulo">Administra los vehículos registrados.</p>
+    </div>
+    <button class="btn-nuevo">+ Nuevo bus</button>
+  </div>
+
+  <div class="barra-busqueda">
+    <input
+      type="text"
+      placeholder="Buscar buses..."
+      [(ngModel)]="terminoBusqueda"
+    />
+  </div>
+
+  <table class="tabla-buses">
+    <thead>
+      <tr>
+        <th>PLACA</th>
+        <th>MODELO</th>
+        <th>CAPACIDAD</th>
+        <th>ESTADO</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr *ngFor="let bus of busesFiltrados">
+        <td>{{ bus.placa }}</td>
+        <td>{{ bus.modelo }}</td>
+        <td>{{ bus.capacidad }}</td>
+        <td>
+          <span class="badge" [ngClass]="claseEstado(bus.estado)">
+            {{ bus.estado }}
+          </span>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+</div>
