@@ -1,0 +1,50 @@
+.sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 77%;
+    width: 85px;
+    margin-top: 10%;
+
+    display: flex;
+    overflow: hidden;
+    flex-direction: column;
+
+    background: linear-gradient(180deg, #0d2818 0%, #123a20 100%);
+    padding: 25px 0;
+
+    border-bottom-right-radius: 20px;
+    border-top-right-radius: 20px;
+
+    transition: all 0.4s ease;
+    z-index: 50;
+}
+
+.sidebar:hover {
+    width: 260px;
+}
+
+.sidebar nav {
+    overflow-x: hidden;
+}
+
+.sidebar .logo-text,
+.sidebar .nav-section-title,
+.sidebar .nav-label,
+.sidebar .user-text {
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+}
+
+.sidebar:hover .logo-text,
+.sidebar:hover .nav-section-title,
+.sidebar:hover .nav-label,
+.sidebar:hover .user-text {
+    opacity: 1;
+}
+
+.sidebar .material-symbols-outlined {
+    font-size: 22px;
+    flex-shrink: 0;
+}
