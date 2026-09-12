@@ -1,0 +1,91 @@
+.lista-usuarios {
+  padding: 24px 32px;
+  font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+  color: #1f2937;
+}
+
+.encabezado {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.encabezado h1 {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.encabezado .subtitulo {
+  color: #6b7280;
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+.btn-nuevo {
+  background-color: #16a34a;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-nuevo:hover {
+  background-color: #15803d;
+}
+
+.barra-busqueda {
+  margin-bottom: 16px;
+}
+
+.barra-busqueda input {
+  width: 100%;
+  max-width: 400px;
+  padding: 10px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.tabla-usuarios {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.tabla-usuarios th {
+  text-align: left;
+  font-size: 11px;
+  color: #6b7280;
+  background: #f9fafb;
+  padding: 12px 16px;
+}
+
+.tabla-usuarios td {
+  padding: 14px 16px;
+  font-size: 14px;
+  border-top: 1px solid #f3f4f6;
+}
+
+.badge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.badge-activo {
+  background-color: #dcfce7;
+  color: #16a34a;
+}
+
+.badge-inactivo {
+  background-color: #f3f4f6;
+  color: #6b7280;
+}

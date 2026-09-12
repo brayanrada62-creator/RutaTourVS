@@ -1,0 +1,93 @@
+.atencion-soporte {
+  padding: 24px 32px;
+  font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+  color: #1f2937;
+}
+
+.encabezado {
+  margin-bottom: 20px;
+}
+
+.encabezado h1 {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.encabezado .subtitulo {
+  color: #6b7280;
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+.cuadricula-opciones {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.tarjeta-opcion {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 16px 20px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.tarjeta-opcion:hover {
+  background-color: #f9fafb;
+}
+
+.icono {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background-color: #f0fdf4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.titulo-opcion {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.descripcion-opcion {
+  font-size: 12px;
+  color: #6b7280;
+  margin: 2px 0 0;
+}
+
+.tarjeta-contacto {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 20px;
+}
+
+.etiqueta-contacto {
+  font-size: 11px;
+  color: #9ca3af;
+  margin: 0 0 8px;
+  letter-spacing: 0.03em;
+}
+
+.telefono {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.horario {
+  font-size: 13px;
+  color: #6b7280;
+  margin: 4px 0 0;
+}

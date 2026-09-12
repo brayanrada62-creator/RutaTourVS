@@ -1,0 +1,44 @@
+<div class="lista-tiquetes">
+
+  <div class="encabezado">
+    <div>
+      <h1>Tiquetes</h1>
+      <p class="subtitulo">Consulta y gestiona las ventas.</p>
+    </div>
+  </div>
+
+  <div class="barra-busqueda">
+    <input
+      type="text"
+      placeholder="Buscar tiquete o usuario..."
+      [(ngModel)]="terminoBusqueda"
+    />
+    <button class="btn-filtros">Filtros</button>
+  </div>
+
+  <table class="tabla-tiquetes">
+    <thead>
+      <tr>
+        <th>CÓDIGO</th>
+        <th>USUARIO</th>
+        <th>VIAJE</th>
+        <th>ESTADO</th>
+        <th>TOTAL</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr *ngFor="let tiquete of tiquetesFiltrados">
+        <td>{{ tiquete.codigo }}</td>
+        <td>{{ tiquete.usuario }}</td>
+        <td>{{ tiquete.viaje }}</td>
+        <td>
+          <span class="badge" [ngClass]="tiquete.estado === 'Vendido' ? 'badge-vendido' : 'badge-cancelado'">
+            {{ tiquete.estado }}
+          </span>
+        </td>
+        <td>{{ formatearTotal(tiquete.total) }}</td>
+      </tr>
+    </tbody>
+  </table>
+
+</div>

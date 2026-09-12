@@ -1,0 +1,40 @@
+<div class="lista-usuarios">
+
+  <div class="encabezado">
+    <div>
+      <h1>Usuarios</h1>
+      <p class="subtitulo">Gestiona los usuarios de la plataforma.</p>
+    </div>
+    <button class="btn-nuevo">+ Nuevo usuario</button>
+  </div>
+
+  <div class="barra-busqueda">
+    <input
+      type="text"
+      placeholder="Buscar usuarios..."
+      [(ngModel)]="terminoBusqueda"
+    />
+  </div>
+
+  <table class="tabla-usuarios">
+    <thead>
+      <tr>
+        <th>USUARIO</th>
+        <th>ROL</th>
+        <th>ESTADO</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr *ngFor="let usuario of usuariosFiltrados">
+        <td>{{ usuario.correo }}</td>
+        <td>{{ usuario.rol }}</td>
+        <td>
+          <span class="badge" [ngClass]="usuario.estado === 'Activo' ? 'badge-activo' : 'badge-inactivo'">
+            {{ usuario.estado }}
+          </span>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+</div>

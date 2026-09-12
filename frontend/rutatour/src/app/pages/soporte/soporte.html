@@ -1,0 +1,33 @@
+<div class="atencion-soporte">
+
+  <div class="encabezado">
+    <h1>Atención y soporte</h1>
+    <p class="subtitulo">Gestiona solicitudes y novedades.</p>
+  </div>
+
+  <div class="cuadricula-opciones">
+    <div
+      class="tarjeta-opcion"
+      *ngFor="let opcion of opciones"
+      (click)="abrirOpcion(opcion)"
+    >
+      <div class="icono">
+        <!-- Ícono genérico de círculo; luego puedes cambiarlo por un ícono real según opcion.icono -->
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="1.8">
+          <circle cx="12" cy="12" r="9"/>
+        </svg>
+      </div>
+      <div class="texto-opcion">
+        <p class="titulo-opcion">{{ opcion.titulo }}</p>
+        <p class="descripcion-opcion">{{ opcion.descripcion }}</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="tarjeta-contacto">
+    <p class="etiqueta-contacto">CONTACTO DE SOPORTE</p>
+    <p class="telefono">{{ telefono }}</p>
+    <p class="horario">{{ horario }}</p>
+  </div>
+
+</div>
