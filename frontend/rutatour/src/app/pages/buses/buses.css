@@ -46,7 +46,6 @@
   font-family: inherit;
 }
 
-/* Igual que .dash-card */
 .module-table-wrapper,
 .module-state {
   border: 1px solid rgba(110, 231, 183, 0.12);
@@ -118,7 +117,6 @@
   background: rgba(252, 165, 165, 0.1);
 }
 
-/* Modal con el mismo estilo de tarjeta */
 .module-modal-overlay {
   position: fixed;
   inset: 0;
