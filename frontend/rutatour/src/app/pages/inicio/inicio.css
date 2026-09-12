@@ -1,4 +1,3 @@
-/* Estilos específicos de Inicio */
 .dash-container {
   display: flex;
   flex-direction: column;
@@ -9,24 +8,21 @@
 .dash-title {
   font-size: 1.5rem;
   font-weight: 600;
-  color: #eafbf1;
+  color: #063a26;
   margin: 0;
 }
 
 .dash-subtitle {
   margin-top: 0.25rem;
   font-size: 0.875rem;
-  color: #7fa393;
+  color: #4f7867;
 }
 
-/* Tarjetas base */
 .dash-card {
-  border: 1px solid rgba(110, 231, 183, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.22);
   border-radius: 16px;
-  background: rgba(15, 26, 22, 0.55);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+  background: #e7f8ef;
+  box-shadow: 0 8px 24px rgba(16, 185, 129, 0.08);
   padding: 1.25rem;
 }
 
@@ -35,7 +31,7 @@
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: rgba(234, 251, 241, 0.35);
+  color: #4f7867;
   margin: 0;
 }
 
@@ -43,7 +39,7 @@
   margin-top: 0.5rem;
   font-size: 1.5rem;
   font-weight: 600;
-  color: #eafbf1;
+  color: #063a26;
 }
 
 .dash-trend {
@@ -52,52 +48,28 @@
   font-weight: 500;
 }
 
-.trend-up {
-  color: #4ade80;
-}
+.trend-up { color: #047857; }
+.trend-flat { color: #4f7867; }
 
-.trend-flat {
-  color: #7fa393;
-}
-
-/* Grid de métricas */
 .dash-stats-grid {
   display: grid;
   grid-template-columns: 1fr;
   gap: 1rem;
 }
 
-@media (min-width: 640px) {
-  .dash-stats-grid {
-    grid-template-columns: 1fr 1fr;
-  }
-}
+@media (min-width: 640px) { .dash-stats-grid { grid-template-columns: 1fr 1fr; } }
+@media (min-width: 1024px) { .dash-stats-grid { grid-template-columns: repeat(4, 1fr); } }
 
-@media (min-width: 1024px) {
-  .dash-stats-grid {
-    grid-template-columns: repeat(4, 1fr);
-  }
-}
-
-/* Grid medio: gráfico + mapa */
 .dash-mid-grid {
   display: grid;
   grid-template-columns: 1fr;
   gap: 1rem;
 }
 
-@media (min-width: 1024px) {
-  .dash-mid-grid {
-    grid-template-columns: 2fr 1fr;
-  }
-}
+@media (min-width: 1024px) { .dash-mid-grid { grid-template-columns: 2fr 1fr; } }
 
-.dash-chart-card {
-  display: flex;
-  flex-direction: column;
-}
+.dash-chart-card { display: flex; flex-direction: column; }
 
-/* Barras */
 .dash-bars {
   margin-top: 1.5rem;
   display: flex;
@@ -119,49 +91,37 @@
 .dash-bar {
   width: 100%;
   border-radius: 6px 6px 0 0;
-  background: linear-gradient(to top, #059669, #6ee7b7);
-  box-shadow: 0 0 16px rgba(52, 211, 153, 0.25);
+  background: linear-gradient(to top, #047857, #6ee7b7);
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.2);
 }
 
 .dash-bar-label {
   font-size: 0.75rem;
   font-weight: 500;
-  color: #7fa393;
+  color: #4f7867;
 }
 
-/* Mapa */
 .dash-map-wrapper {
   margin-top: 1rem;
   height: 14rem;
   border-radius: 12px;
   overflow: hidden;
-  border: 1px solid rgba(110, 231, 183, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.22);
 }
 
-.dash-map-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
+.dash-map-img { width: 100%; height: 100%; object-fit: cover; }
 
-/* Actividad reciente */
-.dash-activity-list {
-  margin-top: 1rem;
-  list-style: none;
-  padding: 0;
-}
+.dash-activity-list { margin-top: 1rem; list-style: none; padding: 0; }
 
 .dash-activity-item {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   padding: 0.75rem 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(16, 185, 129, 0.12);
 }
 
-.dash-activity-item:last-child {
-  border-bottom: none;
-}
+.dash-activity-item:last-child { border-bottom: none; }
 
 .dash-activity-icon {
   display: flex;
@@ -171,24 +131,11 @@
   width: 2rem;
   height: 2rem;
   border-radius: 999px;
-  background: rgba(52, 211, 153, 0.14);
-  color: #6ee7b7;
+  background: #d1fae5;
+  color: #047857;
 }
 
-.dash-icon {
-  width: 1rem;
-  height: 1rem;
-}
+.dash-icon { width: 1rem; height: 1rem; }
 
-.dash-activity-title {
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: #eafbf1;
-  margin: 0;
-}
-
-.dash-activity-subtitle {
-  font-size: 0.75rem;
-  color: #7fa393;
-  margin: 0;
-}
+.dash-activity-title { font-size: 0.875rem; font-weight: 500; color: #063a26; margin: 0; }
+.dash-activity-subtitle { font-size: 0.75rem; color: #4f7867; margin: 0; }

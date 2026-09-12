@@ -10,11 +10,13 @@
     overflow: hidden;
     flex-direction: column;
 
-    background: linear-gradient(180deg, #0d2818 0%, #123a20 100%);
+    background: linear-gradient(180deg, #047857 0%, #059669 100%);
     padding: 25px 0;
 
     border-bottom-right-radius: 20px;
     border-top-right-radius: 20px;
+
+    box-shadow: 0 8px 30px rgba(16, 185, 129, 0.25);
 
     transition: all 0.4s ease;
     z-index: 50;

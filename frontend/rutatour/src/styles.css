@@ -46,3 +46,7 @@ html, body {
   --sidebar-gradient-start: #16a34a;
   --sidebar-gradient-end: #22c55e;
 }
+
+body {
+  color: #063a26;
+}

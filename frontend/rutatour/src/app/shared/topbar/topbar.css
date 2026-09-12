@@ -6,13 +6,15 @@
     width: 70px;
     height: 70px;
 
-    background: linear-gradient(180deg, #0d2818 0%, #123a20 100%);
+    background: linear-gradient(180deg, #047857 0%, #059669 100%);
     border-radius: 50px;
 
     overflow: hidden;
     padding: 0 22px;
     cursor: pointer;
     z-index: 10;
+
+    box-shadow: 0 6px 20px rgba(16, 185, 129, 0.2);
 
     transition: width 0.7s cubic-bezier(0.8, -0.4, 0.2, 1.4);
 }
@@ -24,7 +26,7 @@
 
 .search-bar .search-icon {
     flex-shrink: 0;
-    color: #6ee7b7;
+    color: #d1fae5;
 }
 
 .search-bar input {
@@ -50,7 +52,7 @@
 }
 
 .search-bar input::placeholder {
-    color: rgba(234, 251, 241, 0.4);
+    color: rgba(234, 251, 241, 0.55);
 }
 
 .icon-btn {
@@ -58,18 +60,20 @@
     height: 44px;
     border-radius: 14px;
 
-    background: linear-gradient(180deg, #0d2818 0%, #123a20 100%);
-    border: 1px solid rgba(110, 231, 183, 0.15);
-    color: #6ee7b7;
+    background: linear-gradient(180deg, #047857 0%, #059669 100%);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #d1fae5;
 
     display: flex;
     align-items: center;
     justify-content: center;
     position: relative;
 
+    box-shadow: 0 6px 20px rgba(16, 185, 129, 0.2);
+
     transition: background 0.3s ease;
 }
 
 .icon-btn:hover {
-    background: linear-gradient(180deg, #123a20 0%, #16512b 100%);
+    background: linear-gradient(180deg, #059669 0%, #10b981 100%);
 }
