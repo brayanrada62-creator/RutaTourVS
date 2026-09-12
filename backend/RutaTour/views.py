@@ -80,7 +80,7 @@ class UsuarioView(APIView):
                 'correo': usuario.correo,
                 'telefono': usuario.telefono
             })
-            return Response(lista_usuarios)
+        return Response(lista_usuarios)
             
 class UsuarioIdView(APIView):
     @swagger_auto_schema(

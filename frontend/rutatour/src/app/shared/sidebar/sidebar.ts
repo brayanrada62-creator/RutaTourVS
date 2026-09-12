@@ -26,9 +26,11 @@ navGeneral: NavItem[] = [
 ];
 
 navPlataforma: NavItem[] = [
-  { label: 'Viajes', icon: 'route', path: '/admin/viajes' },
+  { label: 'Paquetes', icon: 'route', path: '/admin/paquetes' },
   { label: 'Buses', icon: 'directions_bus', path: '/admin/buses' },
-  { label: 'Conductores', icon: 'badge', path: '/admin/conductores' }
+  { label: 'Conductores', icon: 'badge', path: '/admin/conductores' },
+  { label: 'Hoteles', icon: 'hotel', path: '/admin/hoteles' },
+  { label: 'Destinos', icon: 'map', path: '/admin/destinos' }
 ];
 
 navSoporte: NavItem[] = [
