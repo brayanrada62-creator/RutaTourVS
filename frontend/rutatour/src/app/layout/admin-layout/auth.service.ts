@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable } from 'rxjs';
 
 export interface CurrentUser {
@@ -11,13 +11,15 @@ export interface CurrentUser {
   providedIn: 'root'
 })
 export class AuthService {
-  // TODO: reemplaza esta URL base por la de tu API real (Django REST, etc.)
-  private readonly apiUrl = '/api';
+  private readonly apiUrl = 'http://127.0.0.1:8000/api';
 
   constructor(private http: HttpClient) {}
 
-  // Usuario actualmente logueado (nombre y rol)
   getCurrentUser(): Observable<CurrentUser> {
-    return this.http.get<CurrentUser>(`${this.apiUrl}/usuario/perfil/`);
+    const token = localStorage.getItem('token');
+    const headers = new HttpHeaders(
+      token ? { Authorization: `Token ${token}` } : {}
+    );
+    return this.http.get<CurrentUser>(`${this.apiUrl}/usuario/perfil/`, { headers });
   }
 }

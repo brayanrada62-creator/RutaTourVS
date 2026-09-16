@@ -22,8 +22,6 @@ interface Usuario {
   styleUrl: './conductores.css'
 })
 export class Conductores implements OnInit {
-  // TODO: ajusta este valor al ID real del rol "conductor" en tu tabla `roles`.
-  // Mientras no exista un endpoint de Rol, este ID queda fijo aqui.
   private readonly ROL_CONDUCTOR_ID = 3;
 
   conductores: Usuario[] = [];
@@ -51,7 +49,6 @@ export class Conductores implements OnInit {
       .subscribe({
         next: (respuesta) => {
           console.log(respuesta);
-          // Filtramos en el frontend: solo usuarios con rol de conductor.
           this.conductores = respuesta.filter(u => u.rol_id === this.ROL_CONDUCTOR_ID);
           this.cargando = false;
           this.cdr.detectChanges();
@@ -93,11 +90,15 @@ export class Conductores implements OnInit {
   }
 
   guardarConductor(): void {
-    // Forzamos siempre el rol de conductor, sin importar lo que traiga el formulario.
     this.formConductor.rol_id = this.ROL_CONDUCTOR_ID;
 
     if (this.conductorEnEdicion) {
-      this.http.put<Usuario>(`${this.apiUrl}${this.conductorEnEdicion.id}/`, this.formConductor)
+      const payload: Partial<Usuario> = { ...this.formConductor };
+      if (!payload.contrasena) {
+        delete payload.contrasena;
+      }
+
+      this.http.put<Usuario>(`${this.apiUrl}${this.conductorEnEdicion.id}/`, payload)
         .subscribe({
           next: () => {
             this.traerConductores();

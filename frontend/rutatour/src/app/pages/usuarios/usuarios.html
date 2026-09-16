@@ -20,6 +20,7 @@
         <thead>
           <tr>
             <th>Nombre</th>
+            <th>Documento</th>
             <th>Correo</th>
             <th>Rol</th>
             <th>Telefono</th>
@@ -30,6 +31,7 @@
           @for (usuario of usuarios; track usuario.id) {
             <tr>
               <td>{{ usuario.nombre_completo }}</td>
+              <td>{{ usuario.tipo_documento }} {{ usuario.numero_documento }}</td>
               <td>{{ usuario.correo }}</td>
               <td>{{ usuario.rol_id }}</td>
               <td>{{ usuario.telefono }}</td>
@@ -61,6 +63,21 @@
         </label>
 
         <label>
+          Agencia (ID)
+          <input type="number" name="agencia_id" [(ngModel)]="formUsuario.agencia_id" required />
+        </label>
+
+        <label>
+          Tipo de documento
+          <input type="text" name="tipo_documento" placeholder="Ej. CC" [(ngModel)]="formUsuario.tipo_documento" required />
+        </label>
+
+        <label>
+          Numero de documento
+          <input type="text" name="numero_documento" [(ngModel)]="formUsuario.numero_documento" required />
+        </label>
+
+        <label>
           Correo
           <input type="email" name="correo" [(ngModel)]="formUsuario.correo" required />
         </label>
@@ -78,7 +95,7 @@
         @if (!usuarioEnEdicion) {
           <label>
             Contrasena
-            <input type="password" name="password" [(ngModel)]="formUsuario.password" required />
+            <input type="password" name="contrasena" [(ngModel)]="formUsuario.contrasena" required />
           </label>
         }
 
