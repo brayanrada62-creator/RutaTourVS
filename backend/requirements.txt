@@ -6,6 +6,7 @@ drf-yasg==1.21.15
 inflection==0.5.1
 mysqlclient==2.2.8
 packaging==26.2
+pillow==12.3.0
 PyMySQL==1.2.0
 pytz==2026.2
 PyYAML==6.0.3
