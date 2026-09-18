@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import (
     LoginView,
+    UsuarioPerfilView,
     UsuarioView, UsuarioIdView,
     AgenciaView, AgenciaIdView,
     TipoBusView, TipoBusIdView,
@@ -24,8 +25,6 @@ from .views import (
     ItinerarioTituloView, ItinerarioLugarView,
     ReservaFechaView, ReservaUsuarioView, 
     PagoPrecioView, PagoReferenciaView
-
-    
 )
 
 urlpatterns = [
@@ -112,4 +111,5 @@ urlpatterns = [
     path('pago/<int:id>/', PagoIdView.as_view(), name='pago-id'),
     path('pago/precio/<str:precio>/', PagoPrecioView.as_view(), name='pago-precio'),
     path('pago/referencia/<str:referencia>/', PagoReferenciaView.as_view(), name='pago-referencia'),
+    path('usuario/perfil/', UsuarioPerfilView.as_view(), name='usuario-perfil'),
 ]

@@ -20,6 +20,7 @@
         <thead>
           <tr>
             <th>Nombre</th>
+            <th>Documento</th>
             <th>Correo</th>
             <th>Rol</th>
             <th>Telefono</th>
@@ -30,6 +31,7 @@
           @for (usuario of usuarios; track usuario.id) {
             <tr>
               <td>{{ usuario.nombre_completo }}</td>
+              <td>{{ usuario.tipo_documento }} {{ usuario.numero_documento }}</td>
               <td>{{ usuario.correo }}</td>
               <td>{{ usuario.rol_id }}</td>
               <td>{{ usuario.telefono }}</td>
@@ -54,10 +56,25 @@
         <p class="module-modal-error">{{ error }}</p>
       }
 
-      <form (ngSubmit)="actualizarUsuario()" #usuarioForm="ngForm">
+      <form (ngSubmit)="guardarUsuario()" #usuarioForm="ngForm">
         <label>
           Nombre completo
           <input type="text" name="nombre_completo" [(ngModel)]="formUsuario.nombre_completo" required />
+        </label>
+
+        <label>
+          Agencia (ID)
+          <input type="number" name="agencia_id" [(ngModel)]="formUsuario.agencia_id" required />
+        </label>
+
+        <label>
+          Tipo de documento
+          <input type="text" name="tipo_documento" placeholder="Ej. CC" [(ngModel)]="formUsuario.tipo_documento" required />
+        </label>
+
+        <label>
+          Numero de documento
+          <input type="text" name="numero_documento" [(ngModel)]="formUsuario.numero_documento" required />
         </label>
 
         <label>
@@ -74,29 +91,17 @@
           Rol (ID)
           <input type="number" name="rol_id" [(ngModel)]="formUsuario.rol_id" required />
         </label>
-        <label>
-          Agencia (ID)
-          <input type="number" name="agencia_id" [(ngModel)]="formUsuario.agencia_id" />
-        </label>
-        <label>
-          Tipo de documento
-          <input type="text" name="tipo_documento" [(ngModel)]="formUsuario.tipo_documento" />
-        </label>
-        <label>
-          Número de documento
-          <input type="text" name="numero_documento" [(ngModel)]="formUsuario.numero_documento" />
-        </label>
 
         @if (!usuarioEnEdicion) {
           <label>
-            Contraseña
+            Contrasena
             <input type="password" name="contrasena" [(ngModel)]="formUsuario.contrasena" required />
           </label>
         }
 
         <div class="module-modal-actions">
           <button type="button" class="module-btn-secundario" (click)="cerrarModal()">Cancelar</button>
-          <button type="submit" (click)="guardarUsuario()">Guardar</button>
+          <button type="submit" [disabled]="usuarioForm.invalid">Guardar</button>
         </div>
       </form>
     </div>

@@ -1,0 +1,78 @@
+<section class="module-page">
+  <header class="module-header">
+    <div>
+      <p class="module-eyebrow">Operacion</p>
+      <h1>Destinos</h1>
+      <p>Gestiona los destinos turisticos disponibles para armar paquetes.</p>
+    </div>
+    <button type="button" (click)="abrirModalNuevo()">Nuevo destino</button>
+  </header>
+
+  @if (cargando) {
+    <div class="module-state">Cargando destinos...</div>
+  } @else if (error && !mostrarModal) {
+    <div class="module-state module-error">{{ error }}</div>
+  } @else if (!destinos.length) {
+    <div class="module-state">No hay destinos registrados.</div>
+  } @else {
+    <div class="module-table-wrapper">
+      <table class="module-table">
+        <thead>
+          <tr>
+            <th>Nombre</th>
+            <th>Departamento</th>
+            <th>Descripcion</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (destino of destinos; track destino.id) {
+            <tr>
+              <td>{{ destino.nombre }}</td>
+              <td>{{ destino.departamento }}</td>
+              <td>{{ destino.descripcion }}</td>
+              <td class="module-actions">
+                <button type="button" class="module-icon-btn" (click)="abrirModalEditar(destino)">Editar</button>
+                <button type="button" class="module-icon-btn module-icon-btn-danger" (click)="confirmarEliminar(destino)">Eliminar</button>
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>
+
+@if (mostrarModal) {
+  <div class="module-modal-overlay" (click)="cerrarModal()">
+    <div class="module-modal" (click)="$event.stopPropagation()">
+      <h2>{{ destinoEnEdicion ? 'Editar destino' : 'Nuevo destino' }}</h2>
+
+      @if (error) {
+        <p class="module-modal-error">{{ error }}</p>
+      }
+
+      <form (ngSubmit)="guardarDestino()" #destinoForm="ngForm">
+        <label>
+          Nombre
+          <input type="text" name="nombre" [(ngModel)]="formDestino.nombre" required />
+        </label>
+
+        <label>
+          Departamento
+          <input type="text" name="departamento" [(ngModel)]="formDestino.departamento" required />
+        </label>
+
+        <label>
+          Descripcion
+          <input type="text" name="descripcion" [(ngModel)]="formDestino.descripcion" required />
+        </label>
+
+        <div class="module-modal-actions">
+          <button type="button" class="module-btn-secundario" (click)="cerrarModal()">Cancelar</button>
+          <button type="submit" [disabled]="destinoForm.invalid">Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+}
