@@ -6,13 +6,13 @@ import { FormsModule } from '@angular/forms';
 interface Usuario {
   id: number;
   nombre_completo: string;
-  correo: string;
+  agencia_id: number;
   rol_id: number;
+  tipo_documento: string;
+  numero_documento: string;
+  correo: string;
   telefono: string;
   contrasena?: string;
-  agencia_id?: number; 
-  tipo_documento?: string;
-  numero_documento?: string;
 }
 
 @Component({
@@ -62,7 +62,16 @@ export class Usuarios implements OnInit {
 
   abrirModalNuevo(): void {
     this.usuarioEnEdicion = null;
-    this.formUsuario = { nombre_completo: '', correo: '', telefono: '', rol_id: undefined, agencia_id: undefined, contrasena: '' };
+    this.formUsuario = {
+      nombre_completo: '',
+      agencia_id: undefined,
+      rol_id: undefined,
+      tipo_documento: '',
+      numero_documento: '',
+      correo: '',
+      telefono: '',
+      contrasena: ''
+    };
     this.mostrarModal = true;
   }
 
@@ -78,10 +87,15 @@ export class Usuarios implements OnInit {
     this.error = '';
   }
 
-  actualizarUsuario(): void {
+  guardarUsuario(): void {
     if (this.usuarioEnEdicion) {
-      // Actualizar (PUT sobre el detalle del usuario)
-      this.http.put<Usuario>(`${this.apiUrl}${this.usuarioEnEdicion.id}/`, this.formUsuario)
+      // Si estamos editando, no reenviamos una contrasena vacia: eso la borraria.
+      const payload: Partial<Usuario> = { ...this.formUsuario };
+      if (!payload.contrasena) {
+        delete payload.contrasena;
+      }
+
+      this.http.put<Usuario>(`${this.apiUrl}${this.usuarioEnEdicion.id}/`, payload)
         .subscribe({
           next: () => {
             this.traerUsuarios();
@@ -124,30 +138,4 @@ export class Usuarios implements OnInit {
         }
       });
   }
-
-  guardarUsuario(){
-    this.http.post(this.apiUrl, this.formUsuario)
-      .subscribe({
-        next: () => {
-          this.traerUsuarios();
-          this.cerrarModal();
-        }
-      });
-  }
 }
-  // Descomenta esto cuando confirmes que el backend tiene un campo "activo":
-  //
-  // toggleActivo(usuario: Usuario): void {
-  //   this.http.patch(`${this.apiUrl}${usuario.id}/`, { activo: !usuario.activo })
-  //     .subscribe({
-  //       next: () => {
-  //         usuario.activo = !usuario.activo;
-  //         this.cdr.detectChanges();
-  //       },
-  //       error: (err) => {
-  //         console.log(err);
-  //         this.error = 'No se pudo cambiar el estado del usuario.';
-  //         this.cdr.detectChanges();
-  //       }
-  //     });
-  // }

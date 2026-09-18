@@ -14,7 +14,8 @@ from .models import (
 )
 from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
-    
+from rest_framework.permissions import IsAuthenticated
+
 class LoginView(APIView):
     @swagger_auto_schema(
         request_body=loginSerializer,
@@ -32,7 +33,27 @@ class LoginView(APIView):
             token, created = Token.objects.get_or_create(user=usuario)
             return Response({'message': 'Inicio de sesión exitoso', 'token': token.key})
         return Response({'message': 'Credenciales inválidas'}, status=401)
-    
+
+
+class UsuarioPerfilView(APIView):
+    """
+    Devuelve el nombre y el rol del usuario actualmente autenticado
+    (a partir del token enviado en el header Authorization).
+    """
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Obtiene el nombre y el rol del usuario autenticado"
+    )
+    def get(self, request):
+        usuario = Usuario.objects.filter(correo=request.user.email).first()
+        if not usuario:
+            return Response({'name': '', 'role': ''}, status=404)
+        return Response({
+            'name': usuario.nombre_completo,
+            'role': usuario.rol.rol
+        })
+
 ###########################################################################################
     
 class UsuarioView(APIView):
@@ -114,7 +135,8 @@ class UsuarioIdView(APIView):
         usuario.numero_documento = request.data.get('numero_documento')
         usuario.correo = request.data.get('correo')
         usuario.telefono = request.data.get('telefono')
-        usuario.contrasena = request.data.get('contrasena')
+        if request.data.get('contrasena'):
+            usuario.contrasena = request.data.get('contrasena')
         usuario.save()
         return Response({'message': 'Usuario actualizado exitosamente'})
     
@@ -126,97 +148,6 @@ class UsuarioIdView(APIView):
         usuario = Usuario.objects.get(id=id)
         usuario.delete()
         return Response({'message': 'Usuario eliminado exitosamente'})
-
-
-class UsuarioDocumentoView(APIView):
-    @swagger_auto_schema(
-        operation_description="Obtener usuario por numero documento",
-        responses={200: UsuarioEntrada()}
-        )
-    def get(self, request, numero_documento):
-        usuario = Usuario.objects.get(numero_documento=numero_documento)
-        return Response({
-            'id': usuario.id,
-            'nombre_completo': usuario.nombre_completo,
-            'agencia_id': usuario.agencia_id,
-            'rol_id': usuario.rol_id,
-            'tipo_documento': usuario.tipo_documento,
-            'numero_documento': usuario.numero_documento,
-            'correo': usuario.correo,
-            'telefono': usuario.telefono
-        })
-        
-    @swagger_auto_schema(
-        operation_description="Actualiza un usuario por su número de documento",
-        request_body=UsuarioEntrada,
-        responses={200: MensajeSalida}
-        )
-    def put(self, request, numero_documento):
-        usuario = Usuario.objects.get(numero_documento=numero_documento)
-        usuario.nombre_completo = request.data.get('nombre_completo')
-        usuario.agencia_id = request.data.get('agencia_id')
-        usuario.rol_id = request.data.get('rol_id')
-        usuario.tipo_documento = request.data.get('tipo_documento')
-        usuario.numero_documento = request.data.get('numero_documento')
-        usuario.correo = request.data.get('correo')
-        usuario.telefono = request.data.get('telefono')
-        usuario.contrasena = request.data.get('contrasena')
-        usuario.save()
-        return Response({'message': 'Usuario actualizado exitosamente'})
-    
-    @swagger_auto_schema(
-        operation_description="Elimina un usuario por su número de documento",
-        responses={200: MensajeSalida}
-        )
-    def delete(self, request, numero_documento):
-        usuario = Usuario.objects.get(numero_documento=numero_documento)
-        usuario.delete()
-        return Response({'message': 'Usuario eliminado exitosamente'})    
-
-class UsuarioNombreView(APIView):
-    @swagger_auto_schema(
-        operation_description="Obtiene un usuario por su nombre completo",
-        responses={200: UsuarioEntrada()}
-        )
-    def get(self, request, nombre_completo):
-        usuario = Usuario.objects.get(nombre_completo=nombre_completo)
-        return Response({
-            'id': usuario.id,
-            'nombre_completo': usuario.nombre_completo,
-            'agencia_id': usuario.agencia_id,
-            'rol_id': usuario.rol_id,
-            'tipo_documento': usuario.tipo_documento,
-            'numero_documento': usuario.numero_documento,
-            'correo': usuario.correo,
-            'telefono': usuario.telefono
-        })
-        
-    @swagger_auto_schema(
-        operation_description="Actualiza un usuario por su nombre completo",
-        request_body=UsuarioEntrada,
-        responses={200: MensajeSalida}
-        )
-    def put(self, request, nombre_completo):
-        usuario = Usuario.objects.get(nombre_completo=nombre_completo)
-        usuario.nombre_completo = request.data.get('nombre_completo')
-        usuario.agencia_id = request.data.get('agencia_id')
-        usuario.rol_id = request.data.get('rol_id')
-        usuario.tipo_documento = request.data.get('tipo_documento')
-        usuario.numero_documento = request.data.get('numero_documento')
-        usuario.correo = request.data.get('correo')
-        usuario.telefono = request.data.get('telefono')
-        usuario.contrasena = request.data.get('contrasena')
-        usuario.save()
-        return Response({'message': 'Usuario actualizado exitosamente'})
-    
-    @swagger_auto_schema(
-        operation_description="Elimina un usuario por su nombre completo",
-        responses={200: MensajeSalida}
-        )
-    def delete(self, request, nombre_completo):
-        usuario = Usuario.objects.get(nombre_completo=nombre_completo)
-        usuario.delete()
-        return Response({'message': 'Usuario eliminado exitosamente'})    
     
 ##################################################################################################
 
@@ -252,14 +183,15 @@ class AgenciaView(APIView):
         lista=[]
         for agencia in agenciaLista:
             lista.append({
-                "nombre": agencia.id,
+                "id": agencia.id,
+                "nombre": agencia.nombre,
                 "nit":agencia.nit,
                 "direccion":agencia.direccion,
                 "telefono":agencia.telefono,
                 "correo":agencia.correo,
 
             })
-        return Response(agencia)
+        return Response(lista)
 
 class AgenciaIdView(APIView):
     @swagger_auto_schema(
@@ -305,93 +237,6 @@ class AgenciaIdView(APIView):
             "telefono":registroEncontrado.telefono,
             "correo":registroEncontrado.correo,
         })
-
-class AgenciaNitView(APIView):
-    @swagger_auto_schema(
-                operation_description="Listar Agencia"
-        )
-    
-    def get(self, request, nit):
-        registroEncontrado=Agencia.objects.get(nit=nit)
-        return Response({
-            "id": registroEncontrado.id,
-            "nombre": registroEncontrado.nombre,
-            "nit":registroEncontrado.nit,
-            "direccion":registroEncontrado.direccion,
-            "telefono":registroEncontrado.telefono,
-            "correo":registroEncontrado.correo,
-        })
-    
-    @swagger_auto_schema(
-        operation_description="Actualizar Agencia",
-        request_body=AgenciaEntrada
-    )
-
-    def put(self, request, nit):
-        #buscar select * from agencia where nit=2
-        agenciaB=Agencia.objects.get(nit=nit)
-        agenciaB.nombre=request.data.get("nombre")
-        agenciaB.nit=request.data.get("nit")
-        agenciaB.direccion=request.data.get("direccion")
-        agenciaB.telefono=request.data.get("telefono")
-        agenciaB.correo=request.data.get("correo")
-        agenciaB.save()
-        return Response({"mensaje":"Agencia actualizada"})
-
-    @swagger_auto_schema(
-            operation_description="Eliminar  agencia"
-    )
-
-    def delete(self,request, nit):
-        agenciaEliminar=Agencia.objects.get(nit=nit)
-        agenciaEliminar.delete() #delete from agencia where nit=2
-        return Response({"mensaje": "Agencia eliminada" })
-
-class AgenciaDireccionView(APIView):
-
-    @swagger_auto_schema(
-        operation_description="Listar Agencia"
-    )
-
-    def get(self, request, direccion):
-        registroEncontrado=Agencia.objects.get(direccion=direccion)
-        return Response({
-            "id": registroEncontrado.id,
-            "nombre": registroEncontrado.nombre,
-            "nit":registroEncontrado.nit,
-            "direccion":registroEncontrado.direccion,
-            "telefono":registroEncontrado.telefono,
-            "correo":registroEncontrado.correo,
-        }) 
-
-
-    @swagger_auto_schema(
-        operation_description="Actualizar Agencia",
-        request_body=AgenciaEntrada
-    )
-
-    def put(self, request, direccion):
-        #buscar select * from agencia where direccion=2
-        agenciaB=Agencia.objects.get(direccion=direccion)
-        agenciaB.nombre=request.data.get("nombre")
-        agenciaB.nit=request.data.get("nit")
-        agenciaB.direccion=request.data.get("direccion")
-        agenciaB.telefono=request.data.get("telefono")
-        agenciaB.correo=request.data.get("correo")
-        agenciaB.save()
-        return Response({"mensaje":"Agencia actualizada"})
-
-    @swagger_auto_schema(
-            operation_description="Eliminar  agencia"
-    )
-
-    def delete(self,request, direccion):
-        agenciaEliminar=Agencia.objects.get(direccion=direccion)
-        agenciaEliminar.delete() #delete from agencia where direccion=2
-        return Response({"mensaje": "Agencia eliminada"})
-
-
-    
 ###################################################################
 class TipoBusView(APIView):
     @swagger_auto_schema(
@@ -408,7 +253,7 @@ class TipoBusView(APIView):
                 "descripcion":tipoBus.descripcion,
 
             })
-        return Response (lista)
+            return Response (lista)
 
     @swagger_auto_schema(
         operation_description="Guardar Bus",
@@ -556,47 +401,6 @@ class BusIdView(APIView):
         busEliminar.delete()
         return Response({"mensaje": "Bus eliminado"})
 
-class BusPlacaView(APIView):
-    @swagger_auto_schema(
-        operation_description="Listar bus por placa"
-    )
-    def get(self, request, placa):
-        registroEncontrado = Bus.objects.get(placa=placa)
-        return Response({
-            "id": registroEncontrado.id,
-            "placa": registroEncontrado.placa,
-            "agencia_id": registroEncontrado.agencia_id,
-            "tipo_bus_id": registroEncontrado.tipo_bus_id,
-            "marca": registroEncontrado.marca,
-            "modelo": registroEncontrado.modelo,
-            "estado": registroEncontrado.estado,
-            "fecha_registro": registroEncontrado.fecha_registro,
-        })
-
-    @swagger_auto_schema(
-        operation_description="Actualizar bus",
-        request_body=BusEntrada
-    )
-    def put(self, request, placa):
-        busB = Bus.objects.get(placa=placa)
-        busB.placa = request.data.get("placa")
-        busB.agencia_id = request.data.get("agencia_id")
-        busB.tipo_bus_id = request.data.get("tipo_bus_id")
-        busB.marca = request.data.get("marca")
-        busB.modelo = request.data.get("modelo")
-        busB.estado = request.data.get("estado")
-        busB.fecha_registro = request.data.get("fecha_registro")
-        busB.save()
-        return Response({"mensaje": "Bus actualizado"})
-
-    @swagger_auto_schema(
-        operation_description="Eliminar bus"
-    )
-    def delete(self, request, placa):
-        busEliminar = Bus.objects.get(placa=placa)
-        busEliminar.delete()
-        return Response({"mensaje": "Bus eliminado"})    
-
 
 ##################################################################################################
 class AsientoView(APIView):
@@ -660,37 +464,6 @@ class AsientoIdView(APIView):
         asientoEliminar = Asiento.objects.get(id=id)
         asientoEliminar.delete()
         return Response({"mensaje": "Asiento eliminado"})
-
-class AsientoNumeroView(APIView):
-    @swagger_auto_schema(
-        operation_description="Listar asiento por numero_asiento"
-    )
-    def get(self, request, numero_asiento):
-        registroEncontrado = Asiento.objects.get(numero_asiento=numero_asiento)
-        return Response({
-            "id": registroEncontrado.id,
-            "bus_id": registroEncontrado.bus_id,
-            "numero_asiento": registroEncontrado.numero_asiento,
-        })
-
-    @swagger_auto_schema(
-        operation_description="Actualizar asiento",
-        request_body=AsientoEntrada
-    )
-    def put(self, request, numero_asiento):
-        asientoB = Asiento.objects.get(numero_asiento=numero_asiento)
-        asientoB.bus_id = request.data.get("bus_id")
-        asientoB.numero_asiento = request.data.get("numero_asiento")
-        asientoB.save()
-        return Response({"mensaje": "Asiento actualizado"})
-
-    @swagger_auto_schema(
-        operation_description="Eliminar asiento"
-    )
-    def delete(self, request, numero_asiento):
-        asientoEliminar = Asiento.objects.get(numero_asiento=numero_asiento)
-        asientoEliminar.delete()
-        return Response({"mensaje": "Asiento eliminado"})    
 
 
 ##################################################################################################
@@ -761,72 +534,7 @@ class DestinoIdView(APIView):
         destinoEliminar.delete()
         return Response({"mensaje": "Destino eliminado"})
 
-class DestinoNombreView(APIView):
-    @swagger_auto_schema(
-        operation_description="Listar destino por nombre"
-    )
-    def get(self, request, nombre):
-        registroEncontrado = Destino.objects.get(nombre=nombre)
-        return Response({
-            "id": registroEncontrado.id,
-            "nombre": registroEncontrado.nombre,
-            "departamento": registroEncontrado.departamento,
-            "descripcion": registroEncontrado.descripcion,
-        })
 
-    @swagger_auto_schema(
-        operation_description="Actualizar destino",
-        request_body=DestinoEntrada
-    )
-    def put(self, request, nombre):
-        destinoB = Destino.objects.get(nombre=nombre)
-        destinoB.nombre = request.data.get("nombre")
-        destinoB.departamento = request.data.get("departamento")
-        destinoB.descripcion = request.data.get("descripcion")
-        destinoB.save()
-        return Response({"mensaje": "Destino actualizado"})
-
-    @swagger_auto_schema(
-        operation_description="Eliminar destino"
-    )
-    def delete(self, request, nombre):
-        destinoEliminar = Destino.objects.get(nombre=nombre)
-        destinoEliminar.delete()
-        return Response({"mensaje": "Destino eliminado"})
-
-class DestinoDepartamentoView(APIView):
-    @swagger_auto_schema(
-        operation_description="Listar destino por departamento"
-    )
-    def get(self, request, departamento):
-        registroEncontrado = Destino.objects.get(departamento=departamento)
-        return Response({
-            "id": registroEncontrado.id,
-            "nombre": registroEncontrado.nombre,
-            "departamento": registroEncontrado.departamento,
-            "descripcion": registroEncontrado.descripcion,
-        })
-
-    @swagger_auto_schema(
-        operation_description="Actualizar destino",
-        request_body=DestinoEntrada
-    )
-    def put(self, request, departamento):
-        destinoB = Destino.objects.get(departamento=departamento)
-        destinoB.nombre = request.data.get("nombre")
-        destinoB.departamento = request.data.get("departamento")
-        destinoB.descripcion = request.data.get("descripcion")
-        destinoB.save()
-        return Response({"mensaje": "Destino actualizado"})
-
-    @swagger_auto_schema(
-        operation_description="Eliminar destino"
-    )
-    def delete(self, request, departamento):
-        destinoEliminar = Destino.objects.get(departamento=departamento)
-        destinoEliminar.delete()
-        return Response({"mensaje": "Destino eliminado"})
-        
 ##################################################################################################
 class HospedajeView(APIView):
     @swagger_auto_schema(
@@ -905,43 +613,6 @@ class HospedajeIdView(APIView):
         hospedajeEliminar.delete()
         return Response({"mensaje": "Hospedaje eliminado"})
 
-class HospedajeNombreView(APIView):
-    @swagger_auto_schema(
-        operation_description="Listar hospedaje por nombre"
-    )
-    def get(self, request, nombre):
-        registroEncontrado = Hospedaje.objects.get(nombre=nombre)
-        return Response({
-            "id": registroEncontrado.id,
-            "nombre": registroEncontrado.nombre,
-            "destino_id": registroEncontrado.destino_id,
-            "direccion": registroEncontrado.direccion,
-            "telefono": registroEncontrado.telefono,
-            "descripcion": registroEncontrado.descripcion,
-        })
-
-    @swagger_auto_schema(
-        operation_description="Actualizar hospedaje",
-        request_body=HopedajeEntrada
-    )
-    def put(self, request, nombre):
-        hospedajeB = Hospedaje.objects.get(nombre=nombre)
-        hospedajeB.nombre = request.data.get("nombre")
-        hospedajeB.destino_id = request.data.get("destino_id")
-        hospedajeB.direccion = request.data.get("direccion")
-        hospedajeB.telefono = request.data.get("telefono")
-        hospedajeB.descripcion = request.data.get("descripcion")
-        hospedajeB.save()
-        return Response({"mensaje": "Hospedaje actualizado"})
-
-    @swagger_auto_schema(
-        operation_description="Eliminar hospedaje"
-    )
-    def delete(self, request, nombre):
-        hospedajeEliminar = Hospedaje.objects.get(nombre=nombre)
-        hospedajeEliminar.delete()
-        return Response({"mensaje": "Hospedaje eliminado"})
-    
 
 ##################################################################################################
 class SitioTuristicoView(APIView):
@@ -1016,40 +687,6 @@ class SitioTuristicoIdView(APIView):
         sitioEliminar.delete()
         return Response({"mensaje": "Sitio turistico eliminado"})
 
-class SitioTuristicoNombreView(APIView):
-    @swagger_auto_schema(
-        operation_description="Listar sitio turistico por nombre"
-    )
-    def get(self, request, nombre):
-        registroEncontrado = SitioTuristico.objects.get(nombre=nombre)
-        return Response({
-            "id": registroEncontrado.id,
-            "nombre": registroEncontrado.nombre,
-            "destino_id": registroEncontrado.destino_id,
-            "descripcion": registroEncontrado.descripcion,
-            "recomendaciones": registroEncontrado.recomendaciones,
-        })
-
-    @swagger_auto_schema(
-        operation_description="Actualizar sitio turistico",
-        request_body=SitioTuristicoEntrada
-    )
-    def put(self, request, nombre):
-        sitioB = SitioTuristico.objects.get(nombre=nombre)
-        sitioB.nombre = request.data.get("nombre")
-        sitioB.destino_id = request.data.get("destino_id")
-        sitioB.descripcion = request.data.get("descripcion")
-        sitioB.recomendaciones = request.data.get("recomendaciones")
-        sitioB.save()
-        return Response({"mensaje": "Sitio turistico actualizado"})
-
-    @swagger_auto_schema(
-        operation_description="Eliminar sitio turistico"
-    )
-    def delete(self, request, nombre):
-        sitioEliminar = SitioTuristico.objects.get(nombre=nombre)
-        sitioEliminar.delete()
-        return Response({"mensaje": "Sitio turistico eliminado"})
 
 ##################################################################################################
 class ImagenView(APIView):
@@ -1120,39 +757,7 @@ class ImagenIdView(APIView):
         imagenEliminar.delete()
         return Response({"mensaje": "Imagen eliminada"})
 
-class ImagenUrlView(APIView):
-    @swagger_auto_schema(
-        operation_description="Listar imagen por url_img"
-    )
-    def get(self, request, url_img):
-        registroEncontrado = ImagenDestino.objects.get(url_img=url_img)
-        return Response({
-            "id": registroEncontrado.id,
-            "url_img": registroEncontrado.url_img.url if registroEncontrado.url_img else None,
-            "destino_id": registroEncontrado.destino_id,
-            "descripcion": registroEncontrado.descripcion,
-        })
 
-    @swagger_auto_schema(
-        operation_description="Actualizar imagen",
-        request_body=ImagenEntrada
-    )
-    def put(self, request, url_img):
-        imagenB = ImagenDestino.objects.get(url_img=url_img)
-        imagenB.url_img = request.data.get("url_img")
-        imagenB.destino_id = request.data.get("destino_id")
-        imagenB.descripcion = request.data.get("descripcion")
-        imagenB.save()
-        return Response({"mensaje": "Imagen actualizada"})
-
-    @swagger_auto_schema(
-        operation_description="Eliminar imagen"
-    )
-    def delete(self, request, url_img):
-        imagenEliminar = ImagenDestino.objects.get(url_img=url_img)
-        imagenEliminar.delete()
-        return Response({"mensaje": "Imagen eliminada"})
-    
 ##################################################################################################
 class PaqueteView(APIView):
     @swagger_auto_schema(
@@ -1236,84 +841,6 @@ class PaqueteIdView(APIView):
         paqueteEliminar.delete()
         return Response({"mensaje": "Paquete eliminado"})
 
-class PaqueteNombreView(APIView):
-    @swagger_auto_schema(
-        operation_description="Listar paquete por nombre"
-    )
-    def get(self, request, nombre):
-        registroEncontrado = Paquete.objects.get(nombre=nombre)
-        return Response({
-            "id": registroEncontrado.id,
-            "nombre": registroEncontrado.nombre,
-            "agencia_id": registroEncontrado.agencia_id,
-            "descripcion": registroEncontrado.descripcion,
-            "duracion_estimada": registroEncontrado.duracion_estimada,
-            "estado": registroEncontrado.estado,
-            "fecha_creacion": registroEncontrado.fecha_creacion,
-        })
-
-    @swagger_auto_schema(
-        operation_description="Actualizar paquete",
-        request_body=PaqueteEntrada
-    )
-    def put(self, request, nombre):
-        paqueteB = Paquete.objects.get(nombre=nombre)
-        paqueteB.nombre = request.data.get("nombre")
-        paqueteB.agencia_id = request.data.get("agencia_id")
-        paqueteB.descripcion = request.data.get("descripcion")
-        paqueteB.duracion_estimada = request.data.get("duracion_estimada")
-        paqueteB.estado = request.data.get("estado")
-        paqueteB.fecha_creacion = request.data.get("fecha_creacion")
-        paqueteB.save()
-        return Response({"mensaje": "Paquete actualizado"})
-
-    @swagger_auto_schema(
-        operation_description="Eliminar paquete"
-    )
-    def delete(self, request, nombre):
-        paqueteEliminar = Paquete.objects.get(nombre=nombre)
-        paqueteEliminar.delete()
-        return Response({"mensaje": "Paquete eliminado"})
-
-class PaqueteDescripcionView(APIView):
-    @swagger_auto_schema(
-        operation_description="Listar paquete por descripcion"
-    )
-    def get(self, request, descripcion):
-        registroEncontrado = Paquete.objects.get(descripcion=descripcion)
-        return Response({
-            "id": registroEncontrado.id,
-            "nombre": registroEncontrado.nombre,
-            "agencia_id": registroEncontrado.agencia_id,
-            "descripcion": registroEncontrado.descripcion,
-            "duracion_estimada": registroEncontrado.duracion_estimada,
-            "estado": registroEncontrado.estado,
-            "fecha_creacion": registroEncontrado.fecha_creacion,
-        })
-
-    @swagger_auto_schema(
-        operation_description="Actualizar paquete",
-        request_body=PaqueteEntrada
-    )
-    def put(self, request, descripcion):
-        paqueteB = Paquete.objects.get(descripcion=descripcion)
-        paqueteB.nombre = request.data.get("nombre")
-        paqueteB.agencia_id = request.data.get("agencia_id")
-        paqueteB.descripcion = request.data.get("descripcion")
-        paqueteB.duracion_estimada = request.data.get("duracion_estimada")
-        paqueteB.estado = request.data.get("estado")
-        paqueteB.fecha_creacion = request.data.get("fecha_creacion")
-        paqueteB.save()
-        return Response({"mensaje": "Paquete actualizado"})
-
-    @swagger_auto_schema(
-        operation_description="Eliminar paquete"
-    )
-    def delete(self, request, descripcion):
-        paqueteEliminar = Paquete.objects.get(descripcion=descripcion)
-        paqueteEliminar.delete()
-        return Response({"mensaje": "Paquete eliminado"})
-        
 
 ##################################################################################################
 class PaqueteDestinoView(APIView):
@@ -1462,85 +989,7 @@ class ItinerarioIdView(APIView):
         itinerarioEliminar.delete()
         return Response({"mensaje": "Itinerario eliminado"})
 
-class ItinerarioTituloView(APIView):
-    @swagger_auto_schema(
-        operation_description="Listar itinerario por titulo"
-    )
-    def get(self, request, titulo):
-        registroEncontrado = Itinerario.objects.get(titulo=titulo)
-        return Response({
-            "id": registroEncontrado.id,
-            "titulo": registroEncontrado.titulo,
-            "paquete_id": registroEncontrado.paquete_id,
-            "dia": registroEncontrado.dia,
-            "descripcion": registroEncontrado.descripcion,
-            "hora": registroEncontrado.hora,
-            "lugar": registroEncontrado.lugar,
-        })
 
-    @swagger_auto_schema(
-        operation_description="Actualizar itinerario",
-        request_body=ItinerarioEntrada
-    )
-    def put(self, request, titulo):
-        itinerarioB = Itinerario.objects.get(titulo=titulo)
-        itinerarioB.titulo = request.data.get("titulo")
-        itinerarioB.paquete_id = request.data.get("paquete_id")
-        itinerarioB.dia = request.data.get("dia")
-        itinerarioB.descripcion = request.data.get("descripcion")
-        itinerarioB.hora = request.data.get("hora")
-        itinerarioB.lugar = request.data.get("lugar")
-        itinerarioB.save()
-        return Response({"mensaje": "Itinerario actualizado"})
-
-    @swagger_auto_schema(
-        operation_description="Eliminar itinerario"
-    )
-    def delete(self, request, titulo):
-        itinerarioEliminar = Itinerario.objects.get(titulo=titulo)
-        itinerarioEliminar.delete()
-        return Response({"mensaje": "Itinerario eliminado"})
-
-class ItinerarioLugarView(APIView):
-    @swagger_auto_schema(
-        operation_description="Listar itinerario por lugar"
-    )
-    def get(self, request, lugar):
-        registroEncontrado = Itinerario.objects.get(lugar=lugar)
-        return Response({
-            "id": registroEncontrado.id,
-            "titulo": registroEncontrado.titulo,
-            "paquete_id": registroEncontrado.paquete_id,
-            "dia": registroEncontrado.dia,
-            "descripcion": registroEncontrado.descripcion,
-            "hora": registroEncontrado.hora,
-            "lugar": registroEncontrado.lugar,
-        })
-
-    @swagger_auto_schema(
-        operation_description="Actualizar itinerario",
-        request_body=ItinerarioEntrada
-    )
-    def put(self, request, lugar):
-        itinerarioB = Itinerario.objects.get(lugar=lugar)
-        itinerarioB.titulo = request.data.get("titulo")
-        itinerarioB.paquete_id = request.data.get("paquete_id")
-        itinerarioB.dia = request.data.get("dia")
-        itinerarioB.descripcion = request.data.get("descripcion")
-        itinerarioB.hora = request.data.get("hora")
-        itinerarioB.lugar = request.data.get("lugar")
-        itinerarioB.save()
-        return Response({"mensaje": "Itinerario actualizado"})
-
-    @swagger_auto_schema(
-        operation_description="Eliminar itinerario"
-    )
-    def delete(self, request, lugar):
-        itinerarioEliminar = Itinerario.objects.get(lugar=lugar)
-        itinerarioEliminar.delete()
-        return Response({"mensaje": "Itinerario eliminado"})
-
-        
 ##################################################################################################
 class ReservaView(APIView):
     @swagger_auto_schema(
@@ -1609,71 +1058,6 @@ class ReservaIdView(APIView):
         reservaEliminar.delete()
         return Response({"mensaje": "Reserva eliminada"})
 
-class ReservaFechaView(APIView):
-    @swagger_auto_schema(
-        operation_description="Listar reserva por fecha_reserva"
-    )
-    def get(self, request, fecha_reserva):
-        registroEncontrado = Reserva.objects.get(fecha_reserva=fecha_reserva)
-        return Response({
-            "id": registroEncontrado.id,
-            "fecha_reserva": registroEncontrado.fecha_reserva,
-            "usuario_id": registroEncontrado.usuario_id,
-            "paquete_id": registroEncontrado.paquete_id,
-        })
-
-    @swagger_auto_schema(
-        operation_description="Actualizar reserva",
-        request_body=ReservaEntrada
-    )
-    def put(self, request, fecha_reserva):
-        reservaB = Reserva.objects.get(fecha_reserva=fecha_reserva)
-        reservaB.fecha_reserva = request.data.get("fecha_reserva")
-        reservaB.usuario_id = request.data.get("usuario_id")
-        reservaB.paquete_id = request.data.get("paquete_id")
-        reservaB.save()
-        return Response({"mensaje": "Reserva actualizada"})
-
-    @swagger_auto_schema(
-        operation_description="Eliminar reserva"
-    )
-    def delete(self, request, fecha_reserva):
-        reservaEliminar = Reserva.objects.get(fecha_reserva=fecha_reserva)
-        reservaEliminar.delete()
-        return Response({"mensaje": "Reserva eliminada"})
-
-class ReservaUsuarioView(APIView):
-    @swagger_auto_schema(
-        operation_description="Listar reserva por usuario_id"
-    )
-    def get(self, request, usuario_id):
-        registroEncontrado = Reserva.objects.get(usuario_id=usuario_id)
-        return Response({
-            "id": registroEncontrado.id,
-            "fecha_reserva": registroEncontrado.fecha_reserva,
-            "usuario_id": registroEncontrado.usuario_id,
-            "paquete_id": registroEncontrado.paquete_id,
-        })
-
-    @swagger_auto_schema(
-        operation_description="Actualizar reserva",
-        request_body=ReservaEntrada
-    )
-    def put(self, request, usuario_id):
-        reservaB = Reserva.objects.get(usuario_id=usuario_id)
-        reservaB.fecha_reserva = request.data.get("fecha_reserva")
-        reservaB.usuario_id = request.data.get("usuario_id")
-        reservaB.paquete_id = request.data.get("paquete_id")
-        reservaB.save()
-        return Response({"mensaje": "Reserva actualizada"})
-
-    @swagger_auto_schema(
-        operation_description="Eliminar reserva"
-    )
-    def delete(self, request, usuario_id):
-        reservaEliminar = Reserva.objects.get(usuario_id=usuario_id)
-        reservaEliminar.delete()
-        return Response({"mensaje": "Reserva eliminada"})
 
 ##################################################################################################
 class AsientoReservaView(APIView):
@@ -1828,86 +1212,368 @@ class PagoIdView(APIView):
         pagoEliminar.delete()
         return Response({"mensaje": "Pago eliminado"})
 
-class PagoPrecioView(APIView):
+# =====================================================================
+# VISTAS FALTANTES para RutaTour/views.py
+# Pega estas clases dentro de tu archivo views.py (donde corresponda,
+# junto a las vistas del mismo modelo, o al final del archivo).
+# Todas asumen que ya tienes importados: APIView, Response,
+# swagger_auto_schema y los modelos correspondientes.
+# =====================================================================
+
+
+# ---------------------- Usuario ----------------------
+class UsuarioDocumentoView(APIView):
     @swagger_auto_schema(
-        operation_description="Listar pago por precio"
+        operation_description="Busca un usuario por su número de documento"
     )
-    def get(self, request, precio):
-        registroEncontrado = Pago.objects.get(precio=precio)
+    def get(self, request, numero_documento):
+        usuario = Usuario.objects.filter(numero_documento=numero_documento).first()
+        if not usuario:
+            return Response({'message': 'Usuario no encontrado'}, status=404)
         return Response({
-            "id": registroEncontrado.id,
-            "precio": registroEncontrado.precio,
-            "reserva_id": registroEncontrado.reserva_id,
-            "fecha_pago": registroEncontrado.fecha_pago,
-            "referencia": registroEncontrado.referencia,
-            "comprobante": registroEncontrado.comprobante.url if registroEncontrado.comprobante else None,
-            "estado": registroEncontrado.estado,
-            "motivo_rechazo": registroEncontrado.motivo_rechazo,
+            'id': usuario.id,
+            'nombre_completo': usuario.nombre_completo,
+            'agencia_id': usuario.agencia_id,
+            'rol_id': usuario.rol_id,
+            'tipo_documento': usuario.tipo_documento,
+            'numero_documento': usuario.numero_documento,
+            'correo': usuario.correo,
+            'telefono': usuario.telefono
         })
 
-    @swagger_auto_schema(
-        operation_description="Actualizar pago",
-        request_body=PagoEntrada
-    )
-    def put(self, request, precio):
-        pagoB = Pago.objects.get(precio=precio)
-        pagoB.precio = request.data.get("precio")
-        pagoB.reserva_id = request.data.get("reserva_id")
-        pagoB.fecha_pago = request.data.get("fecha_pago")
-        pagoB.referencia = request.data.get("referencia")
-        pagoB.comprobante = request.data.get("comprobante")
-        pagoB.estado = request.data.get("estado")
-        pagoB.motivo_rechazo = request.data.get("motivo_rechazo")
-        pagoB.save()
-        return Response({"mensaje": "Pago actualizado"})
 
+##################################################################################################
+# ---------------------- Agencia ----------------------
+class AgenciaNitView(APIView):
     @swagger_auto_schema(
-        operation_description="Eliminar pago"
+        operation_description="Busca una agencia por su NIT"
     )
-    def delete(self, request, precio):
-        pagoEliminar = Pago.objects.get(precio=precio)
-        pagoEliminar.delete()
-        return Response({"mensaje": "Pago eliminado"})
+    def get(self, request, nit):
+        agencia = Agencia.objects.filter(nit=nit).first()
+        if not agencia:
+            return Response({"mensaje": "Agencia no encontrada"}, status=404)
+        return Response({
+            "id": agencia.id,
+            "nombre": agencia.nombre,
+            "nit": agencia.nit,
+            "direccion": agencia.direccion,
+            "telefono": agencia.telefono,
+            "correo": agencia.correo,
+        })
+
+
+class AgenciaDireccionView(APIView):
+    @swagger_auto_schema(
+        operation_description="Busca agencias por dirección"
+    )
+    def get(self, request, direccion):
+        agenciaLista = Agencia.objects.filter(direccion__icontains=direccion)
+        lista = []
+        for agencia in agenciaLista:
+            lista.append({
+                "id": agencia.id,
+                "nombre": agencia.nombre,
+                "nit": agencia.nit,
+                "direccion": agencia.direccion,
+                "telefono": agencia.telefono,
+                "correo": agencia.correo,
+            })
+        return Response(lista)
+
+
+##################################################################################################
+# ---------------------- Bus ----------------------
+class BusPlacaView(APIView):
+    @swagger_auto_schema(
+        operation_description="Busca un bus por su placa"
+    )
+    def get(self, request, placa):
+        bus = Bus.objects.filter(placa=placa).first()
+        if not bus:
+            return Response({"mensaje": "Bus no encontrado"}, status=404)
+        return Response({
+            "id": bus.id,
+            "placa": bus.placa,
+            "agencia_id": bus.agencia_id,
+            "tipo_bus_id": bus.tipo_bus_id,
+            "marca": bus.marca,
+            "modelo": bus.modelo,
+            "estado": bus.estado,
+            "fecha_registro": bus.fecha_registro,
+        })
+
+
+##################################################################################################
+# ---------------------- Asiento ----------------------
+class AsientoNumeroView(APIView):
+    @swagger_auto_schema(
+        operation_description="Busca asientos por número de asiento"
+    )
+    def get(self, request, numero_asiento):
+        asientoLista = Asiento.objects.filter(numero_asiento=numero_asiento)
+        lista = []
+        for asiento in asientoLista:
+            lista.append({
+                "id": asiento.id,
+                "bus_id": asiento.bus_id,
+                "numero_asiento": asiento.numero_asiento,
+            })
+        return Response(lista)
+
+
+##################################################################################################
+# ---------------------- Destino ----------------------
+class DestinoDepartamentoView(APIView):
+    @swagger_auto_schema(
+        operation_description="Busca destinos por departamento"
+    )
+    def get(self, request, departamento):
+        destinoLista = Destino.objects.filter(departamento__icontains=departamento)
+        lista = []
+        for destino in destinoLista:
+            lista.append({
+                "id": destino.id,
+                "nombre": destino.nombre,
+                "departamento": destino.departamento,
+                "descripcion": destino.descripcion,
+            })
+        return Response(lista)
+
+
+class DestinoNombreView(APIView):
+    @swagger_auto_schema(
+        operation_description="Busca destinos por nombre"
+    )
+    def get(self, request, nombre):
+        destinoLista = Destino.objects.filter(nombre__icontains=nombre)
+        lista = []
+        for destino in destinoLista:
+            lista.append({
+                "id": destino.id,
+                "nombre": destino.nombre,
+                "departamento": destino.departamento,
+                "descripcion": destino.descripcion,
+            })
+        return Response(lista)
+
+
+##################################################################################################
+# ---------------------- Hospedaje ----------------------
+class HospedajeNombreView(APIView):
+    @swagger_auto_schema(
+        operation_description="Busca hospedajes por nombre"
+    )
+    def get(self, request, nombre):
+        hospedajeLista = Hospedaje.objects.filter(nombre__icontains=nombre)
+        lista = []
+        for hospedaje in hospedajeLista:
+            lista.append({
+                "id": hospedaje.id,
+                "nombre": hospedaje.nombre,
+                "destino_id": hospedaje.destino_id,
+                "direccion": hospedaje.direccion,
+                "telefono": hospedaje.telefono,
+                "descripcion": hospedaje.descripcion,
+            })
+        return Response(lista)
+
+
+##################################################################################################
+# ---------------------- SitioTuristico ----------------------
+class SitioTuristicoNombreView(APIView):
+    @swagger_auto_schema(
+        operation_description="Busca sitios turísticos por nombre"
+    )
+    def get(self, request, nombre):
+        sitioLista = SitioTuristico.objects.filter(nombre__icontains=nombre)
+        lista = []
+        for sitio in sitioLista:
+            lista.append({
+                "id": sitio.id,
+                "nombre": sitio.nombre,
+                "destino_id": sitio.destino_id,
+                "descripcion": sitio.descripcion,
+                "recomendaciones": sitio.recomendaciones,
+            })
+        return Response(lista)
+
+
+##################################################################################################
+# ---------------------- Imagen ----------------------
+class ImagenUrlView(APIView):
+    @swagger_auto_schema(
+        operation_description="Busca una imagen por su URL"
+    )
+    def get(self, request, url_img):
+        imagen = ImagenDestino.objects.filter(url_img=url_img).first()
+        if not imagen:
+            return Response({"mensaje": "Imagen no encontrada"}, status=404)
+        return Response({
+            "id": imagen.id,
+            "url_img": imagen.url_img.url if imagen.url_img else None,
+            "destino_id": imagen.destino_id,
+            "descripcion": imagen.descripcion,
+        })
+
+
+##################################################################################################
+# ---------------------- Paquete ----------------------
+class PaqueteDescripcionView(APIView):
+    @swagger_auto_schema(
+        operation_description="Busca paquetes por descripción"
+    )
+    def get(self, request, descripcion):
+        paqueteLista = Paquete.objects.filter(descripcion__icontains=descripcion)
+        lista = []
+        for paquete in paqueteLista:
+            lista.append({
+                "id": paquete.id,
+                "nombre": paquete.nombre,
+                "agencia_id": paquete.agencia_id,
+                "descripcion": paquete.descripcion,
+                "duracion_estimada": paquete.duracion_estimada,
+                "estado": paquete.estado,
+                "fecha_creacion": paquete.fecha_creacion,
+            })
+        return Response(lista)
+
+
+class PaqueteNombreView(APIView):
+    @swagger_auto_schema(
+        operation_description="Busca paquetes por nombre"
+    )
+    def get(self, request, nombre):
+        paqueteLista = Paquete.objects.filter(nombre__icontains=nombre)
+        lista = []
+        for paquete in paqueteLista:
+            lista.append({
+                "id": paquete.id,
+                "nombre": paquete.nombre,
+                "agencia_id": paquete.agencia_id,
+                "descripcion": paquete.descripcion,
+                "duracion_estimada": paquete.duracion_estimada,
+                "estado": paquete.estado,
+                "fecha_creacion": paquete.fecha_creacion,
+            })
+        return Response(lista)
+
+
+##################################################################################################
+# ---------------------- Itinerario ----------------------
+class ItinerarioTituloView(APIView):
+    @swagger_auto_schema(
+        operation_description="Busca itinerarios por título"
+    )
+    def get(self, request, titulo):
+        itinerarioLista = Itinerario.objects.filter(titulo__icontains=titulo)
+        lista = []
+        for itinerario in itinerarioLista:
+            lista.append({
+                "id": itinerario.id,
+                "titulo": itinerario.titulo,
+                "paquete_id": itinerario.paquete_id,
+                "dia": itinerario.dia,
+                "descripcion": itinerario.descripcion,
+                "hora": itinerario.hora,
+                "lugar": itinerario.lugar,
+            })
+        return Response(lista)
+
+
+class ItinerarioLugarView(APIView):
+    @swagger_auto_schema(
+        operation_description="Busca itinerarios por lugar"
+    )
+    def get(self, request, lugar):
+        itinerarioLista = Itinerario.objects.filter(lugar__icontains=lugar)
+        lista = []
+        for itinerario in itinerarioLista:
+            lista.append({
+                "id": itinerario.id,
+                "titulo": itinerario.titulo,
+                "paquete_id": itinerario.paquete_id,
+                "dia": itinerario.dia,
+                "descripcion": itinerario.descripcion,
+                "hora": itinerario.hora,
+                "lugar": itinerario.lugar,
+            })
+        return Response(lista)
+
+
+##################################################################################################
+# ---------------------- Reserva ----------------------
+class ReservaFechaView(APIView):
+    @swagger_auto_schema(
+        operation_description="Busca reservas por fecha"
+    )
+    def get(self, request, fecha_reserva):
+        reservaLista = Reserva.objects.filter(fecha_reserva=fecha_reserva)
+        lista = []
+        for reserva in reservaLista:
+            lista.append({
+                "id": reserva.id,
+                "fecha_reserva": reserva.fecha_reserva,
+                "usuario_id": reserva.usuario_id,
+                "paquete_id": reserva.paquete_id,
+            })
+        return Response(lista)
+
+
+class ReservaUsuarioView(APIView):
+    @swagger_auto_schema(
+        operation_description="Busca reservas por usuario"
+    )
+    def get(self, request, usuario_id):
+        reservaLista = Reserva.objects.filter(usuario_id=usuario_id)
+        lista = []
+        for reserva in reservaLista:
+            lista.append({
+                "id": reserva.id,
+                "fecha_reserva": reserva.fecha_reserva,
+                "usuario_id": reserva.usuario_id,
+                "paquete_id": reserva.paquete_id,
+            })
+        return Response(lista)
+
+
+##################################################################################################
+# ---------------------- Pago ----------------------
+class PagoPrecioView(APIView):
+    @swagger_auto_schema(
+        operation_description="Busca pagos por precio"
+    )
+    def get(self, request, precio):
+        pagoLista = Pago.objects.filter(precio=precio)
+        lista = []
+        for pago in pagoLista:
+            lista.append({
+                "id": pago.id,
+                "precio": pago.precio,
+                "reserva_id": pago.reserva_id,
+                "fecha_pago": pago.fecha_pago,
+                "referencia": pago.referencia,
+                "comprobante": pago.comprobante.url if pago.comprobante else None,
+                "estado": pago.estado,
+                "motivo_rechazo": pago.motivo_rechazo,
+            })
+        return Response(lista)
+
 
 class PagoReferenciaView(APIView):
     @swagger_auto_schema(
-        operation_description="Listar pago por referencia"
+        operation_description="Busca un pago por su referencia"
     )
     def get(self, request, referencia):
-        registroEncontrado = Pago.objects.get(referencia=referencia)
+        pago = Pago.objects.filter(referencia=referencia).first()
+        if not pago:
+            return Response({"mensaje": "Pago no encontrado"}, status=404)
         return Response({
-            "id": registroEncontrado.id,
-            "precio": registroEncontrado.precio,
-            "reserva_id": registroEncontrado.reserva_id,
-            "fecha_pago": registroEncontrado.fecha_pago,
-            "referencia": registroEncontrado.referencia,
-            "comprobante": registroEncontrado.comprobante.url if registroEncontrado.comprobante else None,
-            "estado": registroEncontrado.estado,
-            "motivo_rechazo": registroEncontrado.motivo_rechazo,
+            "id": pago.id,
+            "precio": pago.precio,
+            "reserva_id": pago.reserva_id,
+            "fecha_pago": pago.fecha_pago,
+            "referencia": pago.referencia,
+            "comprobante": pago.comprobante.url if pago.comprobante else None,
+            "estado": pago.estado,
+            "motivo_rechazo": pago.motivo_rechazo,
         })
-
-    @swagger_auto_schema(
-        operation_description="Actualizar pago",
-        request_body=PagoEntrada
-    )
-    def put(self, request, referencia):
-        pagoB = Pago.objects.get(referencia=referencia)
-        pagoB.precio = request.data.get("precio")
-        pagoB.reserva_id = request.data.get("reserva_id")
-        pagoB.fecha_pago = request.data.get("fecha_pago")
-        pagoB.referencia = request.data.get("referencia")
-        pagoB.comprobante = request.data.get("comprobante")
-        pagoB.estado = request.data.get("estado")
-        pagoB.motivo_rechazo = request.data.get("motivo_rechazo")
-        pagoB.save()
-        return Response({"mensaje": "Pago actualizado"})
-
-    @swagger_auto_schema(
-        operation_description="Eliminar pago"
-    )
-    def delete(self, request, referencia):
-        pagoEliminar = Pago.objects.get(referencia=referencia)
-        pagoEliminar.delete()
-        return Response({"mensaje": "Pago eliminado"})
-
-        
