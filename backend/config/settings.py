@@ -12,6 +12,9 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import pymysql
 pymysql.install_as_MySQLdb()
@@ -104,9 +107,12 @@ DATABASES = {
         'NAME': os.environ.get('DB_NAME', 'defaultdb'),
         'USER': os.environ.get('DB_USER', 'avnadmin'),
         'PASSWORD': os.environ.get('DB_PASSWORD', ''),
-        'HOST': os.environ.get('DB_HOST', 'mysql-3a138db3-brayanrada62-ee64.aivencloud.com'),
-        'PORT': os.environ.get('DB_PORT', '26674'),    
+        'HOST': os.environ.get('DB_HOST', 'mysql-3a138db3-brayanrada62-ee64.f.aivencloud.com'),
+        'PORT': os.environ.get('DB_PORT', '26674'),
+        'OPTIONS': {
+            'ssl': {'ssl-mode': 'REQUIRED'},
     }
+}
 }
 
 
@@ -146,3 +152,5 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
