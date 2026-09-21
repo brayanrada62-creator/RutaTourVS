@@ -1,4 +1,8 @@
 from django.shortcuts import render
+import uuid
+import qrcode
+import io
+import base64
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
@@ -10,7 +14,7 @@ from .serializer import (
 )
 from .models import (
     Usuario, Agencia, TipoBus, Bus, Asiento, Destino, Hospedaje, SitioTuristico,
-    ImagenDestino, Paquete, PaqueteDestino, Itinerario, Reserva, AsientoReserva, Pago
+    ImagenDestino, Paquete, PaqueteDestino, Itinerario, Reserva, AsientoReserva, Pago,
 )
 from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
@@ -1590,7 +1594,7 @@ class ReservaIdView(APIView):
         })
 
     @swagger_auto_schema(
-        operation_description="Actualizar reserva",
+        operation_description="Actualizar Reserva",
         request_body=ReservaEntrada
     )
     def put(self, request, id):
@@ -1607,7 +1611,31 @@ class ReservaIdView(APIView):
     def delete(self, request, id):
         reservaEliminar = Reserva.objects.get(id=id)
         reservaEliminar.delete()
-        return Response({"mensaje": "Reserva eliminada"})
+        return Response({"mensaje": "Reserva Eliminada"})
+
+class ReservaQRView(APIView):
+    @swagger_auto_schema(
+        operation_description="Obtenemos el codigo QR de configuracion de una reserva"
+    )
+    def get(self, request, id):
+        reserva = Reserva.objects.get(id=id)
+
+        if not reserva.codigo_confirmacion:
+            return Response(
+                {"mensaje": "En esta reserva aun no tenemos un pago aprobado"},
+                status=400
+            )
+
+        img = qrcode.make(reserva.codigo_confirmacion)
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        qr_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+        return Response({
+            "reserva_id": reserva.id,
+            "codigo_configuracion": reserva.codigo_confirmacion,
+            "qr_imagen": f"data:image/png;base64,{qr_base64}"
+        })
 
 class ReservaFechaView(APIView):
     @swagger_auto_schema(
@@ -1623,7 +1651,7 @@ class ReservaFechaView(APIView):
         })
 
     @swagger_auto_schema(
-        operation_description="Actualizar reserva",
+        operation_description="Actualizar Reserva",
         request_body=ReservaEntrada
     )
     def put(self, request, fecha_reserva):
@@ -1632,7 +1660,7 @@ class ReservaFechaView(APIView):
         reservaB.usuario_id = request.data.get("usuario_id")
         reservaB.paquete_id = request.data.get("paquete_id")
         reservaB.save()
-        return Response({"mensaje": "Reserva actualizada"})
+        return Response({"mensaje": "Reserva Actualizada"})
 
     @swagger_auto_schema(
         operation_description="Eliminar reserva"
@@ -1640,7 +1668,7 @@ class ReservaFechaView(APIView):
     def delete(self, request, fecha_reserva):
         reservaEliminar = Reserva.objects.get(fecha_reserva=fecha_reserva)
         reservaEliminar.delete()
-        return Response({"mensaje": "Reserva eliminada"})
+        return Response({"mensaje": "Reserva Eliminada"})
 
 class ReservaUsuarioView(APIView):
     @swagger_auto_schema(
@@ -1818,6 +1846,11 @@ class PagoIdView(APIView):
         pagoB.estado = request.data.get("estado")
         pagoB.motivo_rechazo = request.data.get("motivo_rechazo")
         pagoB.save()
+        if pagoB.estado == "aprobado":
+            reserva = pagoB.reserva
+            if not reserva.codigo_confirmacion:
+                reserva.codigo_confirmacion = str(uuid.uuid4())
+                reserva.save()
         return Response({"mensaje": "Pago actualizado"})
 
     @swagger_auto_schema(

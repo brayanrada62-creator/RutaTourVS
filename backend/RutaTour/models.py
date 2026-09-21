@@ -184,6 +184,7 @@ class Reserva(models.Model):
     fecha_reserva = models.DateTimeField()
     usuario = models.ForeignKey(Usuario, on_delete=models.CASCADE)
     paquete = models.ForeignKey(Paquete, on_delete=models.PROTECT)
+    codigo_confirmacion = models.CharField(max_length=100, unique=True, blank=True, null=True)
 
     def __str__(self):
         return self.fecha_reserva

@@ -1,30 +1,29 @@
 from django.urls import path
 from .views import (
-    LoginView,
-    UsuarioView, UsuarioIdView,
-    AgenciaView, AgenciaIdView,
-    TipoBusView, TipoBusIdView,
-    BusView, BusIdView,
-    AsientoView, AsientoIdView,
-    DestinoView, DestinoIdView,
-    HospedajeView, HospedajeIdView,
-    SitioTuristicoView, SitioTuristicoIdView,
-    ImagenView, ImagenIdView,
-    PaqueteView, PaqueteIdView,
-    PaqueteDestinoView, PaqueteDestinoIdView,
-    ItinerarioView, ItinerarioIdView,
-    ReservaView, ReservaIdView,
-    AsientoReservaView, AsientoReservaIdView,
-    PagoView, PagoIdView, UsuarioDocumentoView,
-    AgenciaNitView, AgenciaDireccionView, BusPlacaView, 
-    AsientoNumeroView, DestinoDepartamentoView,
-    DestinoNombreView, HospedajeNombreView,
-    SitioTuristicoNombreView, ImagenUrlView,
-    PaqueteDescripcionView, PaqueteNombreView,
-    ItinerarioTituloView, ItinerarioLugarView,
-    ReservaFechaView, ReservaUsuarioView, 
-    PagoPrecioView, PagoReferenciaView
-
+  UsuarioView,
+  LoginView, UsuarioIdView,
+  AgenciaView, AgenciaIdView,
+  TipoBusView, TipoBusIdView,
+  BusView, BusIdView,
+  AsientoView, AsientoIdView,
+  DestinoView, DestinoIdView,
+  HospedajeView, HospedajeIdView,
+  SitioTuristicoView, SitioTuristicoIdView,
+  ImagenView, ImagenIdView,
+  PaqueteView, PaqueteIdView,
+  PaqueteDestinoView, PaqueteDestinoIdView,
+  ItinerarioView, ItinerarioId View,
+  ReservaView, ReservaIdView,
+  AsientoReservaView, AsientoReservaIdView,
+  PagoView, PagoIdView, UsuarioDocumentoView,
+  AgenciaNitView, AgenciaDireccionView, BusPlacaView,
+  AsientoNumeroView, DestinoDepartamentoView,
+  DestinoNombreView, HospedajeNombreView,
+  SitioTuristicoNombreView, ImagenUrlView,
+  PaqueteDescripcionView, PaqueteNombreView,
+  ItinerarioTituloView, ItinerarioLugarView,
+  ReservaFechaView, ReservaUsuarioView, ReservaQRView,
+  PagoPrecioView, PagoReferenciaView
     
 )
 
@@ -101,7 +100,7 @@ urlpatterns = [
     path('reserva/<int:id>/', ReservaIdView.as_view(), name='reserva-id'),
     path('reserva/fecha/<str:fecha_reserva>/', ReservaFechaView.as_view(), name='reserva-fecha'),
     path('reserva/usuario/<int:usuario_id>/', ReservaUsuarioView.as_view(), name='reserva-usuario'),
-
+    path('reserva/<int:id>/qr/', ReservaQRView.as_view(), name='reserva-qr'),
     
     # AsientoReserva
     path('asientoreserva/', AsientoReservaView.as_view(), name='asientoreserva'),
