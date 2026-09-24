@@ -5,7 +5,41 @@ from drf_yasg.utils import swagger_auto_schema
 from .serializer import (
     PaqueteEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida
 )
-from .models import Paquete, PaqueteDestino, Itinerario
+from .models import Paquete, PaqueteDestino, Itinerario, Viaje
+
+
+def paquete_json(paquete):
+    return {
+        "id": paquete.id,
+        "nombre": paquete.nombre,
+        "agencia_id": paquete.agencia_id,
+        "descripcion": paquete.descripcion,
+        "duracion_estimada": paquete.duracion_estimada,
+        "estado": paquete.estado,
+        "fecha_creacion": paquete.fecha_creacion,
+        "precio": str(paquete.precio),
+    }
+
+
+def viaje_json(viaje):
+    tipo = viaje.tipo_bus
+    bus = viaje.bus
+    return {
+        "id": viaje.id,
+        "paquete_id": viaje.paquete_id,
+        "bus_id": viaje.bus_id,
+        "tipo_bus_id": viaje.tipo_bus_id,
+        "conductor_id": viaje.conductor_id,
+        "fecha": viaje.fecha,
+        "hora": viaje.hora,
+        "precio": str(viaje.precio),
+        "estado": viaje.estado,
+        "tipo_bus": tipo.nombre if tipo else "",
+        "capacidad": tipo.capacidad if tipo else 0,
+        "agencia": bus.placa if bus else "",
+        "origen": viaje.paquete.nombre,
+        "destino": viaje.paquete.nombre,
+    }
 
 
 class PaqueteView(APIView):
@@ -16,15 +50,7 @@ class PaqueteView(APIView):
         paqueteLista = Paquete.objects.all()
         lista = []
         for paquete in paqueteLista:
-            lista.append({
-                "id": paquete.id,
-                "nombre": paquete.nombre,
-                "agencia_id": paquete.agencia_id,
-                "descripcion": paquete.descripcion,
-                "duracion_estimada": paquete.duracion_estimada,
-                "estado": paquete.estado,
-                "fecha_creacion": paquete.fecha_creacion,
-            })
+            lista.append(paquete_json(paquete))
         return Response(lista)
 
     @swagger_auto_schema(
@@ -46,7 +72,8 @@ class PaqueteView(APIView):
             descripcion=descripcion,
             duracion_estimada=duracion_estimada,
             estado=estado,
-            fecha_creacion=fecha_creacion
+            fecha_creacion=fecha_creacion,
+            precio=request.data.get("precio") or 0
         )
         return Response({"mensaje": "Paquete almacenado correctamente"})
 
@@ -57,15 +84,7 @@ class PaqueteIdView(APIView):
     )
     def get(self, request, id):
         registroEncontrado = Paquete.objects.get(id=id)
-        return Response({
-            "id": registroEncontrado.id,
-            "nombre": registroEncontrado.nombre,
-            "agencia_id": registroEncontrado.agencia_id,
-            "descripcion": registroEncontrado.descripcion,
-            "duracion_estimada": registroEncontrado.duracion_estimada,
-            "estado": registroEncontrado.estado,
-            "fecha_creacion": registroEncontrado.fecha_creacion,
-        })
+        return Response(paquete_json(registroEncontrado))
 
     @swagger_auto_schema(
         operation_description="Actualizar paquete",
@@ -297,6 +316,54 @@ class ItinerarioTituloView(APIView):
                 "lugar": itinerario.lugar,
             })
         return Response(lista)
+
+
+class ViajeView(APIView):
+    def get(self, request):
+        lista = Viaje.objects.all()
+        paquete_id = request.query_params.get("paquete_id")
+        if paquete_id:
+            lista = lista.filter(paquete_id=paquete_id)
+        return Response([viaje_json(v) for v in lista])
+
+    def post(self, request):
+        viaje = Viaje.objects.create(
+            paquete_id=request.data.get("paquete_id"),
+            bus_id=request.data.get("bus_id"),
+            tipo_bus_id=request.data.get("tipo_bus_id"),
+            conductor_id=request.data.get("conductor_id"),
+            fecha=request.data.get("fecha"),
+            hora=request.data.get("hora"),
+            precio=request.data.get("precio") or 0,
+            estado=request.data.get("estado") or "PROGRAMADO",
+        )
+        return Response(viaje_json(viaje), status=201)
+
+
+class ViajeIdView(APIView):
+    def get(self, request, id):
+        return Response(viaje_json(Viaje.objects.get(id=id)))
+
+
+class ViajeConductorView(APIView):
+    def get(self, request, id):
+        return Response([viaje_json(v) for v in Viaje.objects.filter(conductor_id=id)])
+
+
+class ViajeIniciarView(APIView):
+    def post(self, request, id):
+        viaje = Viaje.objects.get(id=id)
+        viaje.estado = "EN_CURSO"
+        viaje.save()
+        return Response(viaje_json(viaje))
+
+
+class ViajeFinalizarView(APIView):
+    def post(self, request, id):
+        viaje = Viaje.objects.get(id=id)
+        viaje.estado = "COMPLETADO"
+        viaje.save()
+        return Response(viaje_json(viaje))
 
 
 class ItinerarioLugarView(APIView):

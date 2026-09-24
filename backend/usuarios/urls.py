@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     LoginView,
     UsuarioPerfilView,
+    PasswordResetView,
     UsuarioView, UsuarioIdView, UsuarioDocumentoView,
     AgenciaView, AgenciaIdView, AgenciaNitView, AgenciaDireccionView,
 )
@@ -9,6 +10,7 @@ from .views import (
 urlpatterns = [
     # Login
     path('login/', LoginView.as_view(), name='login'),
+    path('password/reset/', PasswordResetView.as_view(), name='password-reset'),
 
     # Usuario
     path('usuario/', UsuarioView.as_view(), name='usuario'),

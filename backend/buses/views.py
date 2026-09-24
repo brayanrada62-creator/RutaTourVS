@@ -4,6 +4,7 @@ from drf_yasg.utils import swagger_auto_schema
 
 from .serializer import TipoBusEntrada, BusEntrada, AsientoEntrada, MensajeSalida
 from .models import TipoBus, Bus, Asiento
+from reservas.models import AsientoReserva
 
 
 class TipoBusView(APIView):
@@ -201,12 +202,19 @@ class AsientoView(APIView):
     )
     def get(self, request):
         asientoLista = Asiento.objects.all()
+        tipo = request.query_params.get("tipo_bus_id")
+        if tipo:
+            asientoLista = asientoLista.filter(tipo_bus_id=tipo)
+        ocupados = set(
+            AsientoReserva.objects.exclude(reserva__estado="cancelada").values_list("asiento_id", flat=True)
+        )
         lista = []
         for asiento in asientoLista:
             lista.append({
                 "id": asiento.id,
                 "tipo_bus_id": asiento.tipo_bus_id,
                 "numero_asiento": asiento.numero_asiento,
+                "ocupado": asiento.id in ocupados,
             })
         return Response(lista)
 
