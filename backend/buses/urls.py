@@ -2,7 +2,7 @@ from django.urls import path
 from .views import (
     TipoBusView, TipoBusIdView,
     BusView, BusIdView, BusPlacaView,
-    AsientoView, AsientoIdView, AsientoNumeroView,
+    AsientoView, AsientoIdView, AsientoNumeroView, BusConductorView
 )
 
 urlpatterns = [
@@ -14,6 +14,10 @@ urlpatterns = [
     path('bus/', BusView.as_view(), name='bus'),
     path('bus/<int:id>/', BusIdView.as_view(), name='bus-id'),
     path('bus/placa/<str:placa>/', BusPlacaView.as_view(), name='bus-placa'),
+    
+    # Bus-Conductor
+    path('bus-conductor/', BusConductorView.as_view(), name='bus-conductor'),
+    path('bus-conductor/<int:id>/', BusConductorView.as_view(), name='bus-conductor-id'),
 
     # Asiento
     path('asiento/', AsientoView.as_view(), name='asiento'),

@@ -5,6 +5,8 @@ class Reserva(models.Model):
     fecha_reserva = models.DateTimeField()
     usuario = models.ForeignKey("usuarios.Usuario", on_delete=models.CASCADE)
     paquete = models.ForeignKey("paquetes.Paquete", on_delete=models.PROTECT)
+    estado = models.CharField(max_length=20, default="pendiente")
+    abordado = models.CharField(max_length=20, default="PENDIENTE")
 
     def __str__(self):
         return str(self.fecha_reserva)
@@ -22,3 +24,36 @@ class AsientoReserva(models.Model):
 
     class Meta:
         db_table = "asientos_reserva"
+
+
+class GpsPunto(models.Model):
+    paquete = models.ForeignKey("paquetes.Paquete", on_delete=models.CASCADE)
+    lat = models.DecimalField(max_digits=10, decimal_places=6, default=0)
+    lng = models.DecimalField(max_digits=10, decimal_places=6, default=0)
+    velocidad = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    fecha = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "gps_puntos"
+
+
+class Novedad(models.Model):
+    paquete = models.ForeignKey("paquetes.Paquete", on_delete=models.SET_NULL, null=True, blank=True)
+    tipo = models.CharField(max_length=80, default="novedad")
+    detalle = models.CharField(max_length=400, default="")
+    fecha = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "novedades"
+
+
+class ChatMensaje(models.Model):
+    paquete = models.ForeignKey("paquetes.Paquete", on_delete=models.SET_NULL, null=True, blank=True)
+    usuario = models.ForeignKey("usuarios.Usuario", on_delete=models.SET_NULL, null=True, blank=True)
+    texto = models.CharField(max_length=400, default="")
+    fecha = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "chat_mensajes"
+
+

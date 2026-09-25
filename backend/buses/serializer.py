@@ -25,7 +25,10 @@ class BusEntrada(serializers.Serializer):
     estado = serializers.CharField(max_length=20)
     fecha_registro = serializers.DateField()
     conductor_id = serializers.IntegerField(required=False, allow_null=True)
-
+    
+class BusConductorEntrada(serializers.Serializer):
+    bus_id = serializers.IntegerField()
+    conductor_id = serializers.IntegerField()
 
 class AsientoEntrada(serializers.Serializer):
     tipo_bus_id = serializers.IntegerField()

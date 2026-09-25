@@ -1,6 +1,9 @@
 from rest_framework import serializers
 
 
+class DepartamentoSerializer(serializers.ModelSerializer):
+    nombre = serializers.CharField(max_length=100)   
+
 class MensajeSalida(serializers.Serializer):
     message = serializers.CharField(max_length=255)
 

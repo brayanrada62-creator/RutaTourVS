@@ -14,6 +14,7 @@ class Paquete(models.Model):
     duracion_estimada = models.CharField(max_length=50)
     estado = models.CharField(max_length=20, default="activo")
     fecha_creacion = models.DateTimeField()
+    precio = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     def __str__(self):
         return self.nombre
@@ -46,3 +47,4 @@ class Itinerario(models.Model):
 
     class Meta:
         db_table = "itinerarios"
+

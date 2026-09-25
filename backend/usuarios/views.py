@@ -1,12 +1,28 @@
 from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework import status
 from drf_yasg.utils import swagger_auto_schema
 from .serializer import (UsuarioEntrada, loginSerializer, AgenciaEntrada, MensajeSalida)
 from .models import (Usuario, Agencia)
 from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import IsAuthenticated
+
+
+def usuario_json(usuario):
+    return {
+        'id': usuario.id,
+        'nombre_completo': usuario.nombre_completo,
+        'agencia_id': usuario.agencia_id,
+        'rol_id': usuario.rol_id,
+        'tipo_documento': usuario.tipo_documento,
+        'numero_documento': usuario.numero_documento,
+        'correo': usuario.correo,
+        'telefono': usuario.telefono,
+        'licencia': usuario.licencia,
+    }
+
 
 class LoginView(APIView):
     @swagger_auto_schema(
@@ -22,29 +38,48 @@ class LoginView(APIView):
                 username=logeo.correo,
                 defaults={'email': logeo.correo},
             )
+            if not usuario.email:
+                usuario.email = logeo.correo
+                usuario.save(update_fields=['email'])
             token, created = Token.objects.get_or_create(user=usuario)
-            return Response({'message': 'Inicio de sesión exitoso', 'token': token.key})
+            data = usuario_json(logeo)
+            return Response({
+                'message': 'Inicio de sesión exitoso',
+                'token': token.key,
+                'id': logeo.id,
+                'usuario_id': logeo.id,
+                'rol_id': logeo.rol_id,
+                'nombre_completo': logeo.nombre_completo,
+                'correo': logeo.correo,
+                'telefono': logeo.telefono,
+                'usuario': data,
+            })
         return Response({'message': 'Credenciales inválidas'})
 
 
 class UsuarioPerfilView(APIView):
-    """
-    Devuelve el nombre y el rol del usuario actualmente autenticado
-    (a partir del token enviado en el header Authorization).
-    """
     permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
-        operation_description="Obtiene el nombre y el rol del usuario autenticado"
+        operation_description="Obtiene el perfil del usuario autenticado"
     )
     def get(self, request):
         usuario = Usuario.objects.filter(correo=request.user.email).first()
         if not usuario:
             return Response({'name': '', 'role': ''})
-        return Response({
-            'name': usuario.nombre_completo,
-            'role': usuario.rol.rol
-        })
+        data = usuario_json(usuario)
+        data['name'] = usuario.nombre_completo
+        data['role'] = usuario.rol.rol
+        return Response(data)
+
+
+class PasswordResetView(APIView):
+    @swagger_auto_schema(operation_description="Solicita restablecer contraseña")
+    def post(self, request):
+        correo = request.data.get("correo")
+        if not correo:
+            return Response({"message": "Escribe el correo"})
+        return Response({"message": "Si el correo existe, se enviará el enlace"})
 
 ##################################################################################################
 class UsuarioView(APIView):

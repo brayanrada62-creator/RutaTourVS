@@ -3,10 +3,25 @@ from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
 
 from .serializer import (
-    DestinoEntrada, HopedajeEntrada, SitioTuristicoEntrada, ImagenEntrada, MensajeSalida
+    DestinoEntrada, HopedajeEntrada, SitioTuristicoEntrada, ImagenEntrada, MensajeSalida, DepartamentoSerializer
 )
-from .models import Destino, Hospedaje, SitioTuristico, ImagenDestino
+from .models import Destino, Hospedaje, SitioTuristico, ImagenDestino, Departamento
 
+class DepartamentoView(APIView):
+    @swagger_auto_schema(
+        operation_description="Listar departamentos"
+    )
+    def get(self, request):
+        departamentoLista = Departamento.objects.all()
+        lista = []
+        for departamento in departamentoLista:
+            lista.append({
+                "id": departamento.id,
+                "nombre": departamento.nombre,
+            })
+        return Response(lista)
+    
+##########################################################################################3
 
 class DestinoView(APIView):
     @swagger_auto_schema(

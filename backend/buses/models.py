@@ -28,18 +28,19 @@ class Bus(models.Model):
     modelo = models.CharField(max_length=100)
     estado = models.CharField(max_length=20, default="activo")
     fecha_registro = models.DateTimeField()
-    conductor = models.ForeignKey(
-        "usuarios.Usuario",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-    )
 
     def __str__(self):
         return self.placa
 
     class Meta:
         db_table = "buses"
+        
+class Bus_Conductor(models.Model):
+    bus = models.ForeignKey(Bus, on_delete=models.CASCADE)
+    conductor = models.ForeignKey("usuarios.Usuario", on_delete=models.CASCADE)
+
+    class Meta:
+        db_table = "bus_conductor"
 
 
 class Asiento(models.Model):

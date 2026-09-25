@@ -3,10 +3,11 @@ from .views import (
     DestinoView, DestinoIdView, DestinoNombreView, DestinoDepartamentoView,
     HospedajeView, HospedajeIdView, HospedajeNombreView,
     SitioTuristicoView, SitioTuristicoIdView, SitioTuristicoNombreView,
-    ImagenView, ImagenIdView, ImagenUrlView,
+    ImagenView, ImagenIdView, ImagenUrlView,DepartamentoView,
 )
-
 urlpatterns = [
+    # Departamento
+    path('departamento/', DepartamentoView.as_view(), name='departamento'),
     # Destino
     path('destino/', DestinoView.as_view(), name='destino'),
     path('destino/<int:id>/', DestinoIdView.as_view(), name='destino-id'),
