@@ -1,9 +1,19 @@
 from django.db import models
 
 
+
+class Departamento(models.Model):
+    nombre = models.CharField(max_length=100)
+
+    def __str__(self):
+        return self.nombre
+
+    class Meta:
+        db_table = "departamento"
+        
 class Destino(models.Model):
     nombre = models.CharField(max_length=150)
-    departamento = models.CharField(max_length=100)
+    departamento = models.ForeignKey(Departamento, on_delete=models.CASCADE)
     descripcion = models.CharField(max_length=300)
 
     def __str__(self):

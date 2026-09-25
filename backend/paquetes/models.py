@@ -48,25 +48,3 @@ class Itinerario(models.Model):
     class Meta:
         db_table = "itinerarios"
 
-
-class Viaje(models.Model):
-    ESTADOS = [
-        ("PROGRAMADO", "Programado"),
-        ("EN_CURSO", "En curso"),
-        ("COMPLETADO", "Completado"),
-    ]
-
-    paquete = models.ForeignKey(Paquete, on_delete=models.CASCADE)
-    bus = models.ForeignKey("buses.Bus", on_delete=models.SET_NULL, null=True, blank=True)
-    tipo_bus = models.ForeignKey("buses.TipoBus", on_delete=models.SET_NULL, null=True, blank=True)
-    conductor = models.ForeignKey("usuarios.Usuario", on_delete=models.SET_NULL, null=True, blank=True)
-    fecha = models.DateField()
-    hora = models.TimeField()
-    precio = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    estado = models.CharField(max_length=20, default="PROGRAMADO")
-
-    def __str__(self):
-        return f"Viaje {self.id} - {self.paquete.nombre}"
-
-    class Meta:
-        db_table = "viajes"

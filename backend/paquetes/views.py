@@ -5,7 +5,7 @@ from drf_yasg.utils import swagger_auto_schema
 from .serializer import (
     PaqueteEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida
 )
-from .models import Paquete, PaqueteDestino, Itinerario, Viaje
+from .models import Paquete, PaqueteDestino, Itinerario
 
 
 def paquete_json(paquete):
@@ -19,28 +19,6 @@ def paquete_json(paquete):
         "fecha_creacion": paquete.fecha_creacion,
         "precio": str(paquete.precio),
     }
-
-
-def viaje_json(viaje):
-    tipo = viaje.tipo_bus
-    bus = viaje.bus
-    return {
-        "id": viaje.id,
-        "paquete_id": viaje.paquete_id,
-        "bus_id": viaje.bus_id,
-        "tipo_bus_id": viaje.tipo_bus_id,
-        "conductor_id": viaje.conductor_id,
-        "fecha": viaje.fecha,
-        "hora": viaje.hora,
-        "precio": str(viaje.precio),
-        "estado": viaje.estado,
-        "tipo_bus": tipo.nombre if tipo else "",
-        "capacidad": tipo.capacidad if tipo else 0,
-        "agencia": bus.placa if bus else "",
-        "origen": viaje.paquete.nombre,
-        "destino": viaje.paquete.nombre,
-    }
-
 
 class PaqueteView(APIView):
     @swagger_auto_schema(
@@ -317,53 +295,6 @@ class ItinerarioTituloView(APIView):
             })
         return Response(lista)
 
-
-class ViajeView(APIView):
-    def get(self, request):
-        lista = Viaje.objects.all()
-        paquete_id = request.query_params.get("paquete_id")
-        if paquete_id:
-            lista = lista.filter(paquete_id=paquete_id)
-        return Response([viaje_json(v) for v in lista])
-
-    def post(self, request):
-        viaje = Viaje.objects.create(
-            paquete_id=request.data.get("paquete_id"),
-            bus_id=request.data.get("bus_id"),
-            tipo_bus_id=request.data.get("tipo_bus_id"),
-            conductor_id=request.data.get("conductor_id"),
-            fecha=request.data.get("fecha"),
-            hora=request.data.get("hora"),
-            precio=request.data.get("precio") or 0,
-            estado=request.data.get("estado") or "PROGRAMADO",
-        )
-        return Response(viaje_json(viaje), status=201)
-
-
-class ViajeIdView(APIView):
-    def get(self, request, id):
-        return Response(viaje_json(Viaje.objects.get(id=id)))
-
-
-class ViajeConductorView(APIView):
-    def get(self, request, id):
-        return Response([viaje_json(v) for v in Viaje.objects.filter(conductor_id=id)])
-
-
-class ViajeIniciarView(APIView):
-    def post(self, request, id):
-        viaje = Viaje.objects.get(id=id)
-        viaje.estado = "EN_CURSO"
-        viaje.save()
-        return Response(viaje_json(viaje))
-
-
-class ViajeFinalizarView(APIView):
-    def post(self, request, id):
-        viaje = Viaje.objects.get(id=id)
-        viaje.estado = "COMPLETADO"
-        viaje.save()
-        return Response(viaje_json(viaje))
 
 
 class ItinerarioLugarView(APIView):

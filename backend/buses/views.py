@@ -2,8 +2,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
 
-from .serializer import TipoBusEntrada, BusEntrada, AsientoEntrada, MensajeSalida
-from .models import TipoBus, Bus, Asiento
+from .serializer import TipoBusEntrada, BusEntrada, AsientoEntrada, MensajeSalida, BusConductorEntrada
+from .models import Bus_Conductor, TipoBus, Bus, Asiento
 from reservas.models import AsientoReserva
 
 
@@ -97,7 +97,6 @@ class BusView(APIView):
                 "modelo": bus.modelo,
                 "estado": bus.estado,
                 "fecha_registro": bus.fecha_registro,
-                "conductor_id": bus.conductor_id,
             })
         return Response(lista)
 
@@ -114,7 +113,6 @@ class BusView(APIView):
         modelo = request.data.get("modelo")
         estado = request.data.get("estado")
         fecha_registro = request.data.get("fecha_registro")
-        conductor_id = request.data.get("conductor_id")
 
         Bus.objects.create(
             placa=placa,
@@ -123,8 +121,7 @@ class BusView(APIView):
             marca=marca,
             modelo=modelo,
             estado=estado,
-            fecha_registro=fecha_registro,
-            conductor_id=conductor_id
+            fecha_registro=fecha_registro
         )
         return Response({"mensaje": "Bus almacenado correctamente"})
 
@@ -144,7 +141,6 @@ class BusIdView(APIView):
             "modelo": registroEncontrado.modelo,
             "estado": registroEncontrado.estado,
             "fecha_registro": registroEncontrado.fecha_registro,
-            "conductor_id": registroEncontrado.conductor_id,
         })
 
     @swagger_auto_schema(
@@ -160,8 +156,6 @@ class BusIdView(APIView):
         busB.modelo = request.data.get("modelo")
         busB.estado = request.data.get("estado")
         busB.fecha_registro = request.data.get("fecha_registro")
-        if "conductor_id" in request.data:
-            busB.conductor_id = request.data.get("conductor_id")
         busB.save()
         return Response({"mensaje": "Bus actualizado"})
 
@@ -191,10 +185,58 @@ class BusPlacaView(APIView):
             "modelo": bus.modelo,
             "estado": bus.estado,
             "fecha_registro": bus.fecha_registro,
-            "conductor_id": bus.conductor_id,
         })
+        
+######################################################################################################################
+class BusConductorView(APIView):
+    @swagger_auto_schema(
+        operation_description="Asociar un bus con un conductor",
+        request_body=BusConductorEntrada,
+        responses={201: MensajeSalida}
+    )
+    def post(self, request):
+        bus_id = request.data.get("bus_id")
+        conductor_id = request.data.get("conductor_id")
+        
+        Bus_Conductor.objects.create(
+            bus_id=bus_id,
+            conductor_id=conductor_id
+        )
+        return Response({"mensaje": "Bus asociado con conductor correctamente"})
+    
+    @swagger_auto_schema(
+        operation_description="Listar buses asociados a un conductor"
+    )
+    def get(self, request, conductor_id):
+        bus_conductor_lista = Bus_Conductor.objects.filter(conductor_id=conductor_id)
+        lista = []
+        for bus_conductor in bus_conductor_lista:
+            lista.append({
+                "id": bus_conductor.id,
+                "bus_id": bus_conductor.bus_id,
+                "conductor_id": bus_conductor.conductor_id,
+            })
+        return Response(lista)
 
-
+    @swagger_auto_schema(
+        operation_description="Eliminar asociación de bus y conductor"
+    )
+    def delete(self, request, id):
+        bus_conductor_eliminar = Bus_Conductor.objects.get(id=id)
+        bus_conductor_eliminar.delete()
+        return Response({"mensaje": "Asociación de bus y conductor eliminada"})
+    
+    @swagger_auto_schema(
+        operation_description="Actualizar asociación de bus y conductor",
+        request_body=BusConductorEntrada
+    )
+    def put(self, request, id):
+        bus_conductor_actualizar = Bus_Conductor.objects.get(id=id)
+        bus_conductor_actualizar.bus_id = request.data.get("bus_id")
+        bus_conductor_actualizar.conductor_id = request.data.get("conductor_id")
+        bus_conductor_actualizar.save()
+        return Response({"mensaje": "Asociación de bus y conductor actualizada"})
+    
 ##################################################################################################
 class AsientoView(APIView):
     @swagger_auto_schema(

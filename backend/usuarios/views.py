@@ -54,7 +54,7 @@ class LoginView(APIView):
                 'telefono': logeo.telefono,
                 'usuario': data,
             })
-        return Response({'message': 'Credenciales inválidas'}, status=status.HTTP_401_UNAUTHORIZED)
+        return Response({'message': 'Credenciales inválidas'})
 
 
 class UsuarioPerfilView(APIView):
@@ -66,7 +66,7 @@ class UsuarioPerfilView(APIView):
     def get(self, request):
         usuario = Usuario.objects.filter(correo=request.user.email).first()
         if not usuario:
-            return Response({'name': '', 'role': ''}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'name': '', 'role': ''})
         data = usuario_json(usuario)
         data['name'] = usuario.nombre_completo
         data['role'] = usuario.rol.rol
@@ -78,7 +78,7 @@ class PasswordResetView(APIView):
     def post(self, request):
         correo = request.data.get("correo")
         if not correo:
-            return Response({"message": "Escribe el correo"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"message": "Escribe el correo"})
         return Response({"message": "Si el correo existe, se enviará el enlace"})
 
 ##################################################################################################

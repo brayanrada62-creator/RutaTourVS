@@ -5,7 +5,6 @@ class Reserva(models.Model):
     fecha_reserva = models.DateTimeField()
     usuario = models.ForeignKey("usuarios.Usuario", on_delete=models.CASCADE)
     paquete = models.ForeignKey("paquetes.Paquete", on_delete=models.PROTECT)
-    viaje = models.ForeignKey("paquetes.Viaje", on_delete=models.SET_NULL, null=True, blank=True)
     estado = models.CharField(max_length=20, default="pendiente")
     abordado = models.CharField(max_length=20, default="PENDIENTE")
 
@@ -28,7 +27,7 @@ class AsientoReserva(models.Model):
 
 
 class GpsPunto(models.Model):
-    viaje = models.ForeignKey("paquetes.Viaje", on_delete=models.CASCADE)
+    paquete = models.ForeignKey("paquetes.Paquete", on_delete=models.CASCADE)
     lat = models.DecimalField(max_digits=10, decimal_places=6, default=0)
     lng = models.DecimalField(max_digits=10, decimal_places=6, default=0)
     velocidad = models.DecimalField(max_digits=6, decimal_places=2, default=0)
@@ -39,7 +38,7 @@ class GpsPunto(models.Model):
 
 
 class Novedad(models.Model):
-    viaje = models.ForeignKey("paquetes.Viaje", on_delete=models.SET_NULL, null=True, blank=True)
+    paquete = models.ForeignKey("paquetes.Paquete", on_delete=models.SET_NULL, null=True, blank=True)
     tipo = models.CharField(max_length=80, default="novedad")
     detalle = models.CharField(max_length=400, default="")
     fecha = models.DateTimeField(auto_now_add=True)
@@ -49,7 +48,7 @@ class Novedad(models.Model):
 
 
 class ChatMensaje(models.Model):
-    viaje = models.ForeignKey("paquetes.Viaje", on_delete=models.SET_NULL, null=True, blank=True)
+    paquete = models.ForeignKey("paquetes.Paquete", on_delete=models.SET_NULL, null=True, blank=True)
     usuario = models.ForeignKey("usuarios.Usuario", on_delete=models.SET_NULL, null=True, blank=True)
     texto = models.CharField(max_length=400, default="")
     fecha = models.DateTimeField(auto_now_add=True)
@@ -58,11 +57,3 @@ class ChatMensaje(models.Model):
         db_table = "chat_mensajes"
 
 
-class ParadaViaje(models.Model):
-    viaje = models.ForeignKey("paquetes.Viaje", on_delete=models.CASCADE)
-    nombre = models.CharField(max_length=150)
-    orden = models.IntegerField(default=1)
-    cumplida = models.BooleanField(default=False)
-
-    class Meta:
-        db_table = "paradas_viaje"

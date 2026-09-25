@@ -3,7 +3,6 @@ from .views import (
     PaqueteView, PaqueteIdView, PaqueteNombreView, PaqueteDescripcionView,
     PaqueteDestinoView, PaqueteDestinoIdView,
     ItinerarioView, ItinerarioIdView, ItinerarioTituloView, ItinerarioLugarView,
-    ViajeView, ViajeIdView, ViajeConductorView, ViajeIniciarView, ViajeFinalizarView,
 )
 
 urlpatterns = [
@@ -22,10 +21,4 @@ urlpatterns = [
     path('itinerario/<int:id>/', ItinerarioIdView.as_view(), name='itinerario-id'),
     path('itinerario/titulo/<str:titulo>/', ItinerarioTituloView.as_view(), name='itinerario-titulo'),
     path('itinerario/lugar/<str:lugar>/', ItinerarioLugarView.as_view(), name='itinerario-lugar'),
-
-    path('viaje/', ViajeView.as_view(), name='viaje'),
-    path('viaje/<int:id>/', ViajeIdView.as_view(), name='viaje-id'),
-    path('viaje/conductor/<int:id>/', ViajeConductorView.as_view(), name='viaje-conductor'),
-    path('viaje/<int:id>/iniciar/', ViajeIniciarView.as_view(), name='viaje-iniciar'),
-    path('viaje/<int:id>/finalizar/', ViajeFinalizarView.as_view(), name='viaje-finalizar'),
 ]
