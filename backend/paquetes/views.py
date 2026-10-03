@@ -1,18 +1,23 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework import status
+from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 
 from .serializer import (
     PaqueteEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida
 )
 from .models import Paquete, PaqueteDestino, Itinerario
+from usuarios.models import Usuario
 
 
 def paquete_json(paquete):
+    agencia = getattr(paquete, "agencia", None)
     return {
         "id": paquete.id,
         "nombre": paquete.nombre,
         "agencia_id": paquete.agencia_id,
+        "agencia_nombre": agencia.nombre if agencia else None,
         "descripcion": paquete.descripcion,
         "duracion_estimada": paquete.duracion_estimada,
         "estado": paquete.estado,
@@ -20,16 +25,66 @@ def paquete_json(paquete):
         "precio": str(paquete.precio),
     }
 
+
+def rol_normalizado(usuario):
+    if not usuario or not usuario.rol_id or not usuario.rol.rol:
+        return ""
+    return usuario.rol.rol.replace(" ", "").replace("_", "").lower()
+
+
+def usuario_de_request(request):
+    user = getattr(request, "user", None)
+    if user is not None and getattr(user, "is_authenticated", False):
+        encontrado = Usuario.objects.select_related("rol").filter(correo=user.email).first()
+        if encontrado:
+            return encontrado
+    usuario_id = request.query_params.get("usuario_id")
+    if usuario_id not in (None, "", "null"):
+        return Usuario.objects.select_related("rol").filter(pk=usuario_id).first()
+    return None
+
+
+def filtrar_paquetes(request, queryset, agencia_id=None):
+    if agencia_id in (None, "", "null"):
+        agencia_id = request.query_params.get("agencia_id")
+    usuario = usuario_de_request(request)
+    rol = rol_normalizado(usuario)
+    if rol == "admin":
+        if not usuario.agencia_id:
+            return queryset.none()
+        return queryset.filter(agencia_id=usuario.agencia_id)
+    if agencia_id not in (None, "", "null"):
+        return queryset.filter(agencia_id=agencia_id)
+    return queryset
+
+
+def listar_paquetes(queryset):
+    return [paquete_json(paquete) for paquete in queryset.select_related("agencia")]
+
+
+agencia_param = openapi.Parameter(
+    "agencia_id",
+    openapi.IN_QUERY,
+    description="Muestra los paquetes de esa agencia. Un admin solo ve los de la suya.",
+    type=openapi.TYPE_INTEGER,
+    required=False,
+)
+usuario_param = openapi.Parameter(
+    "usuario_id",
+    openapi.IN_QUERY,
+    description="Si el usuario es admin, el listado queda limitado a su agencia.",
+    type=openapi.TYPE_INTEGER,
+    required=False,
+)
+
 class PaqueteView(APIView):
     @swagger_auto_schema(
-        operation_description="Listar paquetes"
+        operation_description="Listar paquetes. Superadmin ve todos o filtra por agencia. Admin ve solo los de su agencia.",
+        manual_parameters=[agencia_param, usuario_param],
     )
     def get(self, request):
-        paqueteLista = Paquete.objects.all()
-        lista = []
-        for paquete in paqueteLista:
-            lista.append(paquete_json(paquete))
-        return Response(lista)
+        paquetes = filtrar_paquetes(request, Paquete.objects.all())
+        return Response(listar_paquetes(paquetes))
 
     @swagger_auto_schema(
         operation_description="Guardar paquete",
@@ -61,7 +116,10 @@ class PaqueteIdView(APIView):
         operation_description="Listar paquete por id"
     )
     def get(self, request, id):
-        registroEncontrado = Paquete.objects.get(id=id)
+        paquetes = filtrar_paquetes(request, Paquete.objects.filter(id=id))
+        registroEncontrado = paquetes.select_related("agencia").first()
+        if not registroEncontrado:
+            return Response({"mensaje": "Paquete no encontrado"}, status=status.HTTP_404_NOT_FOUND)
         return Response(paquete_json(registroEncontrado))
 
     @swagger_auto_schema(
@@ -93,19 +151,11 @@ class PaqueteDescripcionView(APIView):
         operation_description="Busca paquetes por descripción"
     )
     def get(self, request, descripcion):
-        paqueteLista = Paquete.objects.filter(descripcion__icontains=descripcion)
-        lista = []
-        for paquete in paqueteLista:
-            lista.append({
-                "id": paquete.id,
-                "nombre": paquete.nombre,
-                "agencia_id": paquete.agencia_id,
-                "descripcion": paquete.descripcion,
-                "duracion_estimada": paquete.duracion_estimada,
-                "estado": paquete.estado,
-                "fecha_creacion": paquete.fecha_creacion,
-            })
-        return Response(lista)
+        paquetes = filtrar_paquetes(
+            request,
+            Paquete.objects.filter(descripcion__icontains=descripcion),
+        )
+        return Response(listar_paquetes(paquetes))
 
 
 class PaqueteNombreView(APIView):
@@ -113,19 +163,21 @@ class PaqueteNombreView(APIView):
         operation_description="Busca paquetes por nombre"
     )
     def get(self, request, nombre):
-        paqueteLista = Paquete.objects.filter(nombre__icontains=nombre)
-        lista = []
-        for paquete in paqueteLista:
-            lista.append({
-                "id": paquete.id,
-                "nombre": paquete.nombre,
-                "agencia_id": paquete.agencia_id,
-                "descripcion": paquete.descripcion,
-                "duracion_estimada": paquete.duracion_estimada,
-                "estado": paquete.estado,
-                "fecha_creacion": paquete.fecha_creacion,
-            })
-        return Response(lista)
+        paquetes = filtrar_paquetes(
+            request,
+            Paquete.objects.filter(nombre__icontains=nombre),
+        )
+        return Response(listar_paquetes(paquetes))
+
+
+class PaqueteAgenciaView(APIView):
+    @swagger_auto_schema(
+        operation_description="Lista los paquetes de una agencia. Un admin solo obtiene los de su propia agencia.",
+        manual_parameters=[usuario_param],
+    )
+    def get(self, request, agencia_id):
+        paquetes = filtrar_paquetes(request, Paquete.objects.all(), agencia_id=agencia_id)
+        return Response(listar_paquetes(paquetes))
 
 
 ##################################################################################################

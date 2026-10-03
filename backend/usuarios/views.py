@@ -4,10 +4,26 @@ from rest_framework.response import Response
 from rest_framework import status
 from drf_yasg.utils import swagger_auto_schema
 from .serializer import (UsuarioEntrada, loginSerializer, AgenciaEntrada, MensajeSalida)
-from .models import (Usuario, Agencia)
+from .models import (Usuario, Agencia, Rol)
 from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import IsAuthenticated
+
+
+def es_superadmin(rol_id):
+    if rol_id in (None, ""):
+        return False
+    rol = Rol.objects.filter(pk=rol_id).only("rol").first()
+    if not rol or not rol.rol:
+        return False
+    nombre = rol.rol.replace(" ", "").replace("_", "").lower()
+    return nombre == "superadmin"
+
+
+def normalizar_agencia_id(rol_id, agencia_id):
+    if es_superadmin(rol_id) or agencia_id in (None, "", "null"):
+        return None
+    return agencia_id
 
 
 def usuario_json(usuario):
@@ -21,6 +37,7 @@ def usuario_json(usuario):
         'correo': usuario.correo,
         'telefono': usuario.telefono,
         'licencia': usuario.licencia,
+        'activo': usuario.activo,
     }
 
 
@@ -33,6 +50,8 @@ class LoginView(APIView):
         email = request.data.get('correo')
         password = request.data.get('contrasena')
         logeo = Usuario.objects.filter(correo=email, contrasena=password).first()
+        if logeo and not logeo.activo:
+            return Response({'message': 'Esta cuenta está desactivada'})
         if logeo:
             usuario, created = User.objects.get_or_create(
                 username=logeo.correo,
@@ -98,6 +117,7 @@ class UsuarioView(APIView):
         telefono = request.data.get('telefono')
         contrasena = request.data.get('contrasena')
         licencia = request.data.get('licencia', '')
+        agencia_id = normalizar_agencia_id(rol_id, agencia_id)
         Usuario.objects.create(
             nombre_completo=nombre_completo,
             agencia_id=agencia_id,
@@ -117,20 +137,7 @@ class UsuarioView(APIView):
     )
     def get(self, request):
         usuariolista = Usuario.objects.all()
-        lista_usuarios = []
-        for usuario in usuariolista:
-            lista_usuarios.append({
-                'id': usuario.id,
-                'nombre_completo': usuario.nombre_completo,
-                'agencia_id': usuario.agencia_id,
-                'rol_id': usuario.rol_id,
-                'tipo_documento': usuario.tipo_documento,
-                'numero_documento': usuario.numero_documento,
-                'correo': usuario.correo,
-                'telefono': usuario.telefono,
-                'licencia': usuario.licencia,
-            })
-        return Response(lista_usuarios)
+        return Response([usuario_json(usuario) for usuario in usuariolista])
 
 
 class UsuarioIdView(APIView):
@@ -140,17 +147,7 @@ class UsuarioIdView(APIView):
     )
     def get(self, request, id):
         usuario = Usuario.objects.get(id=id)
-        return Response({
-            'id': usuario.id,
-            'nombre_completo': usuario.nombre_completo,
-            'agencia_id': usuario.agencia_id,
-            'rol_id': usuario.rol_id,
-            'tipo_documento': usuario.tipo_documento,
-            'numero_documento': usuario.numero_documento,
-            'correo': usuario.correo,
-            'telefono': usuario.telefono,
-            'licencia': usuario.licencia,
-        })
+        return Response(usuario_json(usuario))
 
     @swagger_auto_schema(
         operation_description="Actualiza un usuario por su ID",
@@ -160,8 +157,11 @@ class UsuarioIdView(APIView):
     def put(self, request, id):
         usuario = Usuario.objects.get(id=id)
         usuario.nombre_completo = request.data.get('nombre_completo')
-        usuario.agencia_id = request.data.get('agencia_id')
         usuario.rol_id = request.data.get('rol_id')
+        usuario.agencia_id = normalizar_agencia_id(
+            usuario.rol_id,
+            request.data.get('agencia_id'),
+        )
         usuario.tipo_documento = request.data.get('tipo_documento')
         usuario.numero_documento = request.data.get('numero_documento')
         usuario.correo = request.data.get('correo')
@@ -191,17 +191,31 @@ class UsuarioDocumentoView(APIView):
         usuario = Usuario.objects.filter(numero_documento=numero_documento).first()
         if not usuario:
             return Response({'message': 'Usuario no encontrado'})
-        return Response({
-            'id': usuario.id,
-            'nombre_completo': usuario.nombre_completo,
-            'agencia_id': usuario.agencia_id,
-            'rol_id': usuario.rol_id,
-            'tipo_documento': usuario.tipo_documento,
-            'numero_documento': usuario.numero_documento,
-            'correo': usuario.correo,
-            'telefono': usuario.telefono,
-            'licencia': usuario.licencia,
-        })
+        return Response(usuario_json(usuario))
+
+
+class UsuarioEstadoView(APIView):
+    @swagger_auto_schema(
+        operation_description="Activa o desactiva un usuario",
+        responses={200: MensajeSalida}
+    )
+    def post(self, request, id):
+        usuario = Usuario.objects.filter(id=id).first()
+        if not usuario:
+            return Response({'message': 'Usuario no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+        if 'activo' not in request.data:
+            return Response({'message': 'Falta el estado del usuario'}, status=status.HTTP_400_BAD_REQUEST)
+        usuario.activo = valor_activo(request.data.get('activo'))
+        usuario.save(update_fields=['activo'])
+        return Response(usuario_json(usuario))
+
+
+def valor_activo(valor):
+    if isinstance(valor, bool):
+        return valor
+    if isinstance(valor, str):
+        return valor.strip().lower() in ('1', 'true', 'si', 'sí')
+    return bool(valor)
 
 
 ##################################################################################################
