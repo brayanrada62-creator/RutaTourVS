@@ -8,6 +8,16 @@ from .models import (Usuario, Agencia)
 from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import IsAuthenticated
+from django.contrib.auth.hashers import make_password
+
+
+def usuario_actual(request):
+    return Usuario.objects.select_related('rol').filter(correo=request.user.email).first()
+
+def usuarios_visibles(yo):
+    if yo.agencia_id is None:
+        return Usuario.objects.all()
+    return Usuario.objects.filter(agencia_id=yo.agencia_id)
 
 
 def usuario_json(usuario):
