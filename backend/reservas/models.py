@@ -55,5 +55,3 @@ class ChatMensaje(models.Model):
 
     class Meta:
         db_table = "chat_mensajes"
-
-
