@@ -34,7 +34,7 @@ class DestinoView(APIView):
             lista.append({
                 "id": destino.id,
                 "nombre": destino.nombre,
-                "departamento": destino.departamento,
+                "departamento": destino.departamento.nombre,
                 "descripcion": destino.descripcion,
             })
         return Response(lista)
@@ -66,7 +66,7 @@ class DestinoIdView(APIView):
         return Response({
             "id": registroEncontrado.id,
             "nombre": registroEncontrado.nombre,
-            "departamento": registroEncontrado.departamento,
+            "departamento": registroEncontrado.departamento.nombre,
             "descripcion": registroEncontrado.descripcion,
         })
 
@@ -96,13 +96,13 @@ class DestinoDepartamentoView(APIView):
         operation_description="Busca destinos por departamento"
     )
     def get(self, request, departamento):
-        destinoLista = Destino.objects.filter(departamento__icontains=departamento)
+        destinoLista = Destino.objects.filter(departamento__nombre__icontains=departamento)
         lista = []
         for destino in destinoLista:
             lista.append({
                 "id": destino.id,
                 "nombre": destino.nombre,
-                "departamento": destino.departamento,
+                "departamento": destino.departamento.nombre,
                 "descripcion": destino.descripcion,
             })
         return Response(lista)
@@ -119,7 +119,7 @@ class DestinoNombreView(APIView):
             lista.append({
                 "id": destino.id,
                 "nombre": destino.nombre,
-                "departamento": destino.departamento,
+                "departamento": destino.departamento.nombre,
                 "descripcion": destino.descripcion,
             })
         return Response(lista)
