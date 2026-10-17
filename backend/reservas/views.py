@@ -22,7 +22,6 @@ def reserva_json(reserva):
         "fecha_reserva": reserva.fecha_reserva,
         "usuario_id": reserva.usuario_id,
         "paquete_id": reserva.paquete_id,
-        "viaje_id": reserva.viaje_id,
         "estado": estado,
         "abordado": reserva.abordado,
         "asientos": ",".join(str(n) for n in asientos),
@@ -46,7 +45,6 @@ class ReservaView(APIView):
             fecha_reserva=request.data.get("fecha_reserva"),
             usuario_id=request.data.get("usuario_id"),
             paquete_id=request.data.get("paquete_id"),
-            viaje_id=request.data.get("viaje_id"),
             estado=request.data.get("estado") or "pendiente",
         )
         return Response(reserva_json(reserva), status=status.HTTP_201_CREATED)
@@ -61,8 +59,6 @@ class ReservaIdView(APIView):
         reservaB.fecha_reserva = request.data.get("fecha_reserva", reservaB.fecha_reserva)
         reservaB.usuario_id = request.data.get("usuario_id", reservaB.usuario_id)
         reservaB.paquete_id = request.data.get("paquete_id", reservaB.paquete_id)
-        if "viaje_id" in request.data:
-            reservaB.viaje_id = request.data.get("viaje_id")
         if "estado" in request.data:
             reservaB.estado = request.data.get("estado")
         reservaB.save()
