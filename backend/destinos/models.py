@@ -51,7 +51,7 @@ class SitioTuristico(models.Model):
 
 
 class ImagenDestino(models.Model):
-    url_img = models.ImageField(max_length=255)
+    url_img = models.ImageField(upload_to="destinos/", max_length=255)
     destino = models.ForeignKey(Destino, on_delete=models.CASCADE)
     descripcion = models.CharField(max_length=255)
 
