@@ -26,6 +26,22 @@ class UsuarioEntrada(serializers.Serializer):
     licencia = serializers.CharField(max_length=30, required=False, allow_blank=True)
 
 
+class RecuperarContrasenaEntrada(serializers.Serializer):
+    correo = serializers.EmailField()
+
+
+class ConfirmarContrasenaEntrada(serializers.Serializer):
+    token = serializers.CharField(required=False, allow_blank=True)
+    correo = serializers.EmailField(required=False)
+    codigo = serializers.CharField(required=False, max_length=6, allow_blank=True)
+    contrasena = serializers.CharField(min_length=6, max_length=255)
+    confirmar = serializers.CharField(required=False, allow_blank=True)
+
+
+class LoginGoogleEntrada(serializers.Serializer):
+    id_token = serializers.CharField(help_text="ID token que devuelve Google Sign-In en la app o web")
+
+
 class AgenciaEntrada(serializers.Serializer):
     nombre = serializers.CharField(max_length=150)
     nit = serializers.CharField(max_length=30)

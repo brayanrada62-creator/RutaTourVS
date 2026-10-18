@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import (
     PaqueteView, PaqueteIdView, PaqueteNombreView, PaqueteDescripcionView,
+    PaqueteRegistrarView,
     PaqueteDestinoView, PaqueteDestinoIdView,
     ItinerarioView, ItinerarioIdView, ItinerarioTituloView, ItinerarioLugarView,
 )
@@ -8,6 +9,7 @@ from .views import (
 urlpatterns = [
     # Paquete
     path('paquete/', PaqueteView.as_view(), name='paquete'),
+    path('paquete/registrar/', PaqueteRegistrarView.as_view(), name='paquete-registrar'),
     path('paquete/<int:id>/', PaqueteIdView.as_view(), name='paquete-id'),
     path('paquete/nombre/<str:nombre>/', PaqueteNombreView.as_view(), name='paquete-nombre'),
     path('paquete/descripcion/<str:descripcion>/', PaqueteDescripcionView.as_view(), name='paquete-descripcion'),

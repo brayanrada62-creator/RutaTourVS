@@ -17,6 +17,28 @@ class PaqueteEntrada(serializers.Serializer):
     estado = serializers.CharField(max_length=20)
     fecha_creacion = serializers.DateField()
     precio = serializers.DecimalField(max_digits=12, decimal_places=2)
+    imagen = serializers.ImageField(required=False)
+    destino_ids = serializers.CharField(required=False)
+    imagenes_destino = serializers.ImageField(required=False)
+    destinos_imagen = serializers.CharField(
+        required=False,
+    )
+
+
+class PaqueteRegistrarEntrada(serializers.Serializer):
+    nombre = serializers.CharField(max_length=150)
+    agencia_id = serializers.IntegerField(required=False)
+    descripcion = serializers.CharField(max_length=10000, required=False, allow_blank=True)
+    duracion_estimada = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    estado = serializers.CharField(max_length=20, required=False)
+    fecha_creacion = serializers.DateTimeField(required=False)
+    precio = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    imagen = serializers.ImageField(required=False)
+    destino_ids = serializers.CharField(required=False)
+    imagenes_destino = serializers.ImageField(required=False)
+    destinos_imagen = serializers.CharField(
+        required=False,
+    )
 
 
 class PaqueteDestinoEntrada(serializers.Serializer):
