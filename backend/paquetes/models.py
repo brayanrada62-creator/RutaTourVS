@@ -10,7 +10,7 @@ class Paquete(models.Model):
 
     nombre = models.CharField(max_length=150)
     agencia = models.ForeignKey("usuarios.Agencia", on_delete=models.CASCADE)
-    descripcion = models.CharField(max_length=300)
+    descripcion = models.CharField(max_length=10000)
     duracion_estimada = models.CharField(max_length=50)
     estado = models.CharField(max_length=20, default="activo")
     fecha_creacion = models.DateTimeField()

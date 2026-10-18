@@ -43,6 +43,7 @@ class PaqueteView(APIView):
         duracion_estimada = request.data.get("duracion_estimada")
         estado = request.data.get("estado")
         fecha_creacion = request.data.get("fecha_creacion")
+        precio = request.data.get("precio") or 0
 
         Paquete.objects.create(
             nombre=nombre,
@@ -51,7 +52,7 @@ class PaqueteView(APIView):
             duracion_estimada=duracion_estimada,
             estado=estado,
             fecha_creacion=fecha_creacion,
-            precio=request.data.get("precio") or 0
+            precio=precio or 0
         )
         return Response({"mensaje": "Paquete almacenado correctamente"})
 
@@ -76,6 +77,7 @@ class PaqueteIdView(APIView):
         paqueteB.duracion_estimada = request.data.get("duracion_estimada")
         paqueteB.estado = request.data.get("estado")
         paqueteB.fecha_creacion = request.data.get("fecha_creacion")
+        paqueteB.precio = request.data.get("precio") or 0
         paqueteB.save()
         return Response({"mensaje": "Paquete actualizado"})
 

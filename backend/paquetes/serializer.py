@@ -12,10 +12,11 @@ class MensajeSalida(serializers.Serializer):
 class PaqueteEntrada(serializers.Serializer):
     nombre = serializers.CharField(max_length=100)
     agencia_id = serializers.IntegerField()
-    descripcion = serializers.CharField(max_length=300)
+    descripcion = serializers.CharField(max_length=10000)
     duracion_estimada = serializers.CharField(max_length=100)
     estado = serializers.CharField(max_length=20)
     fecha_creacion = serializers.DateField()
+    precio = serializers.DecimalField(max_digits=12, decimal_places=2)
 
 
 class PaqueteDestinoEntrada(serializers.Serializer):
