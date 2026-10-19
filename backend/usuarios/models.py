@@ -27,13 +27,6 @@ class Agencia(models.Model):
 
 class Usuario(models.Model):
     nombre_completo = models.CharField(max_length=200)
-    agencia = models.ForeignKey(
-        Agencia,
-        on_delete=models.CASCADE,
-        null=True,
-        blank=True,
-    )
-
     rol = models.ForeignKey(Rol, on_delete=models.PROTECT)
     tipo_documento = models.CharField(max_length=30)
     numero_documento = models.CharField(max_length=30, unique=True)
@@ -47,3 +40,12 @@ class Usuario(models.Model):
 
     class Meta:
         db_table = "usuarios"
+        
+class UsuarioAgencia(models.Model):
+    usuario = models.ForeignKey(Usuario, on_delete=models.CASCADE)
+    agencia = models.ForeignKey(Agencia, on_delete=models.CASCADE)
+    
+    def __str__(self):
+        return f"{self.usuario.nombre_completo} - {self.agencia.nombre}"
+    class Meta:
+        db_table = "usuario_agencia"
