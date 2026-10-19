@@ -16,11 +16,10 @@ from rest_framework import status
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework.authtoken.models import Token
 from django.contrib.auth.hashers import make_password
-from django.db import transaction
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
 from .serializer import (
-    UsuarioEntrada, loginSerializer, AgenciaEntrada, MensajeSalida,
+    UsuarioEntrada, UsuarioCreadoSalida, loginSerializer, AgenciaEntrada, MensajeSalida,
     UsuarioAgenciaEntrada, RecuperarContrasenaEntrada,
     ConfirmarContrasenaEntrada, LoginGoogleEntrada,
 )
@@ -279,7 +278,6 @@ class LoginGoogleView(APIView):
                 documento = f"G{secrets.randbelow(10**9)}"
             usuario = Usuario.objects.create(
                 nombre_completo=nombre,
-                agencia=None,
                 rol=rol_cliente(),
                 tipo_documento="google",
                 numero_documento=documento,
@@ -294,20 +292,22 @@ class UsuarioView(APIView):
     @swagger_auto_schema(
         operation_description="Crea un nuevo usuario",
         request_body=UsuarioEntrada,
-        responses={201: MensajeSalida}
+        responses={201: UsuarioCreadoSalida}
     )
     def post(self, request):
         serializer = UsuarioEntrada(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        usuario_data = serializer.validated_data.copy()
-        agencia = usuario_data.pop('agencia', None)
-        with transaction.atomic():
-            usuario = Usuario.objects.create(**usuario_data)
-            if agencia is not None:
-                UsuarioAgencia.objects.create(usuario=usuario, agencia=agencia)
-        return Response({'message': 'Usuario creado exitosamente'})
+        usuario = Usuario.objects.create(**serializer.validated_data)
+        return Response(
+            {
+                'message': 'Usuario creado exitosamente',
+                'id': usuario.id,
+                'usuario_id': usuario.id,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
     @swagger_auto_schema(
         operation_description="Obtiene todos los usuarios",
@@ -522,14 +522,19 @@ class UsuarioAgenciaView(APIView):
         responses={201: MensajeSalida}
     )
     def post(self, request):
-        usuario_id = request.data.get('usuario_id')
-        agencia_id = request.data.get('agencia_id')
+        serializer = UsuarioAgenciaEntrada(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        UsuarioAgencia.objects.create(
-            usuario_id=usuario_id,
-            agencia_id=agencia_id
+        asociacion = UsuarioAgencia.objects.create(**serializer.validated_data)
+        return Response(
+            {
+                'id': asociacion.id,
+                'usuario_id': asociacion.usuario_id,
+                'agencia_id': asociacion.agencia_id,
+            },
+            status=status.HTTP_201_CREATED,
         )
-        return Response({'message': 'Usuario asociado a la agencia exitosamente'})
     
     @swagger_auto_schema(
         operation_description="Obtiene todas las asociaciones de usuarios y agencias",

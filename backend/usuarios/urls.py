@@ -6,6 +6,7 @@ from .views import (
     PasswordResetView,
     PasswordResetConfirmarView,
     UsuarioView, UsuarioIdView, UsuarioDocumentoView,
+    UsuarioAgenciaView,
     AgenciaView, AgenciaIdView, AgenciaNitView, AgenciaDireccionView,
 )
 
@@ -23,6 +24,8 @@ urlpatterns = [
     path('usuario/<int:id>/', UsuarioIdView.as_view(), name='usuario-id'),
     path('usuario/perfil/', UsuarioPerfilView.as_view(), name='usuario-perfil'),
     path('usuarios/documento/<str:numero_documento>/', UsuarioDocumentoView.as_view(), name='usuario-documento'),
+    path('usuario-agencia/', UsuarioAgenciaView.as_view(), name='usuario-agencia'),
+    path('usuario-agencia/<int:id>/', UsuarioAgenciaView.as_view(), name='usuario-agencia-id'),
 
     # Agencia
     path('agencia/', AgenciaView.as_view(), name='agencia'),

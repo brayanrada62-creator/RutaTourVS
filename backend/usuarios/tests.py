@@ -2,7 +2,7 @@ from django.test import TestCase
 from rest_framework.test import APIRequestFactory
 
 from .models import Agencia, Rol, Usuario, UsuarioAgencia
-from .views import UsuarioView
+from .views import UsuarioAgenciaView, UsuarioView
 
 
 class UsuarioViewTests(TestCase):
@@ -30,35 +30,42 @@ class UsuarioViewTests(TestCase):
         request = self.factory.post('/usuario/', payload, format='json')
         return UsuarioView.as_view()(request)
 
-    def test_post_creates_usuario_and_agency_association(self):
-        response = self.post_usuario({
-            **self.payload,
-            'agencia_id': self.agencia.id,
-        })
-
-        self.assertEqual(response.status_code, 200)
-        usuario = Usuario.objects.get(numero_documento=self.payload['numero_documento'])
-        self.assertTrue(
-            UsuarioAgencia.objects.filter(
-                usuario=usuario,
-                agencia=self.agencia,
-            ).exists()
-        )
-
-    def test_post_without_agency_creates_usuario_without_association(self):
+    def test_post_creates_usuario_without_agency_field(self):
         response = self.post_usuario(self.payload)
 
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(
-            Usuario.objects.filter(numero_documento=self.payload['numero_documento']).exists()
-        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['usuario_id'], response.data['id'])
+        self.assertTrue(Usuario.objects.filter(
+            numero_documento=self.payload['numero_documento']
+        ).exists())
         self.assertFalse(UsuarioAgencia.objects.exists())
 
-    def test_post_with_unknown_agency_returns_validation_error(self):
-        response = self.post_usuario({
-            **self.payload,
-            'agencia_id': self.agencia.id + 1,
-        })
+    def test_association_endpoint_links_existing_user_and_agency(self):
+        self.post_usuario(self.payload)
+        usuario = Usuario.objects.get(numero_documento=self.payload['numero_documento'])
+        response = self.client.post(
+            '/api/usuario-agencia/',
+            data={
+                'usuario_id': usuario.id,
+                'agencia_id': self.agencia.id,
+            },
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(UsuarioAgencia.objects.filter(
+            usuario=usuario,
+            agencia=self.agencia,
+        ).exists())
+
+    def test_association_endpoint_rejects_unknown_ids(self):
+        request = self.factory.post(
+            '/usuario-agencia/',
+            {'usuario_id': 999, 'agencia_id': self.agencia.id},
+            format='json',
+        )
+
+        response = UsuarioAgenciaView.as_view()(request)
 
         self.assertEqual(response.status_code, 400)
         self.assertFalse(Usuario.objects.exists())

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Agencia
+from .models import Agencia, Usuario
 
 
 class MensajeSalida(serializers.Serializer):
@@ -7,6 +7,12 @@ class MensajeSalida(serializers.Serializer):
 
     class Meta:
         ref_name = "UsuariosMensajeSalida"
+
+
+class UsuarioCreadoSalida(serializers.Serializer):
+    message = serializers.CharField(max_length=255)
+    id = serializers.IntegerField()
+    usuario_id = serializers.IntegerField()
 
 
 
@@ -17,12 +23,6 @@ class loginSerializer(serializers.Serializer):
 
 class UsuarioEntrada(serializers.Serializer):
     nombre_completo = serializers.CharField(max_length=200)
-    agencia_id = serializers.PrimaryKeyRelatedField(
-        source='agencia',
-        queryset=Agencia.objects.all(),
-        required=False,
-        allow_null=True,
-    )
     rol_id = serializers.IntegerField()
     tipo_documento = serializers.CharField(max_length=30)
     numero_documento = serializers.CharField(max_length=30)
@@ -56,5 +56,11 @@ class AgenciaEntrada(serializers.Serializer):
     correo = serializers.EmailField(max_length=150)
     
 class UsuarioAgenciaEntrada(serializers.Serializer):
-    usuario_id = serializers.IntegerField()
-    agencia_id = serializers.IntegerField()
+    usuario_id = serializers.PrimaryKeyRelatedField(
+        source='usuario',
+        queryset=Usuario.objects.all(),
+    )
+    agencia_id = serializers.PrimaryKeyRelatedField(
+        source='agencia',
+        queryset=Agencia.objects.all(),
+    )
