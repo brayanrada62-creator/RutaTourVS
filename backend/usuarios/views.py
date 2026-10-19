@@ -21,9 +21,10 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 
 from .serializer import (
     UsuarioEntrada, loginSerializer, AgenciaEntrada, MensajeSalida,
-    RecuperarContrasenaEntrada, ConfirmarContrasenaEntrada, LoginGoogleEntrada,
+    UsuarioAgenciaEntrada, RecuperarContrasenaEntrada,
+    ConfirmarContrasenaEntrada, LoginGoogleEntrada,
 )
-from .models import Usuario, Agencia, Rol, RecuperarContrasena
+from .models import Usuario, Agencia, Rol, UsuarioAgencia, RecuperarContrasena
 
 def usuario_json(usuario):
     return {
