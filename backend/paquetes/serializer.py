@@ -18,11 +18,12 @@ class PaqueteEntrada(serializers.Serializer):
     fecha_creacion = serializers.DateField()
     precio = serializers.DecimalField(max_digits=12, decimal_places=2)
     imagen = serializers.ImageField(required=False)
+    destinos = serializers.CharField(
+        required=False,
+        help_text='Lista JSON: [{"nombre":"Guatapé","departamento":"Antioquia"}] o IDs: 1,2,3',
+    )
     destino_ids = serializers.CharField(required=False)
     imagenes_destino = serializers.ImageField(required=False)
-    destinos_imagen = serializers.CharField(
-        required=False,
-    )
 
 
 class PaqueteRegistrarEntrada(serializers.Serializer):
@@ -34,11 +35,12 @@ class PaqueteRegistrarEntrada(serializers.Serializer):
     fecha_creacion = serializers.DateTimeField(required=False)
     precio = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
     imagen = serializers.ImageField(required=False)
+    destinos = serializers.CharField(
+        required=False,
+        help_text='Lista JSON: [{"nombre":"Guatapé","departamento":"Antioquia"}] o IDs: 1,2,3',
+    )
     destino_ids = serializers.CharField(required=False)
     imagenes_destino = serializers.ImageField(required=False)
-    destinos_imagen = serializers.CharField(
-        required=False,
-    )
 
 
 class PaqueteDestinoEntrada(serializers.Serializer):
