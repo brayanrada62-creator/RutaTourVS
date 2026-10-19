@@ -247,9 +247,11 @@ class AsientoView(APIView):
         tipo = request.query_params.get("tipo_bus_id")
         if tipo:
             asientoLista = asientoLista.filter(tipo_bus_id=tipo)
-        ocupados = set(
-            AsientoReserva.objects.exclude(reserva__estado="cancelada").values_list("asiento_id", flat=True)
-        )
+        ocupados_qs = AsientoReserva.objects.exclude(reserva__estado__iexact="cancelada")
+        paquete_id = request.query_params.get("paquete_id")
+        if paquete_id:
+            ocupados_qs = ocupados_qs.filter(reserva__paquete_id=paquete_id)
+        ocupados = set(ocupados_qs.values_list("asiento_id", flat=True))
         lista = []
         for asiento in asientoLista:
             lista.append({

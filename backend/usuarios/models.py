@@ -49,3 +49,14 @@ class UsuarioAgencia(models.Model):
         return f"{self.usuario.nombre_completo} - {self.agencia.nombre}"
     class Meta:
         db_table = "usuario_agencia"
+
+
+class RecuperarContrasena(models.Model):
+    usuario = models.ForeignKey(Usuario, on_delete=models.CASCADE)
+    token_hash = models.CharField(max_length=64, unique=True)
+    codigo_hash = models.CharField(max_length=64)
+    creado = models.DateTimeField(auto_now_add=True)
+    usado = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "recuperar_contrasena"

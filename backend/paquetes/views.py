@@ -1,11 +1,246 @@
+import json
+import re
+
+from django.db import transaction
+from django.utils import timezone
+from rest_framework import status
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
 
+from destinos.models import Departamento, Destino, ImagenDestino
+
 from .serializer import (
-    PaqueteEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida
+    PaqueteRegistrarEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida
 )
 from .models import Paquete, PaqueteDestino, Itinerario
+
+
+def imagen_url(campo):
+    if not campo:
+        return None
+    try:
+        return campo.url
+    except ValueError:
+        return None
+
+
+def parse_ids(valor):
+    if valor is None or valor == "":
+        return []
+    if isinstance(valor, (list, tuple)):
+        piezas = valor
+    else:
+        texto = str(valor).strip()
+        if texto.startswith("[") and texto.endswith("]"):
+            texto = texto[1:-1]
+        piezas = texto.replace(";", ",").split(",")
+    ids = []
+    for pieza in piezas:
+        pieza = str(pieza).strip().strip('"').strip("'")
+        if pieza.isdigit():
+            ids.append(int(pieza))
+    return ids
+
+
+def maybe_json(valor):
+    if isinstance(valor, (list, dict)):
+        return valor
+    if not isinstance(valor, str):
+        return valor
+    texto = valor.strip()
+    if not texto or texto[0] not in "[{":
+        return valor
+    try:
+        return json.loads(texto)
+    except json.JSONDecodeError:
+        return valor
+
+
+def valores_campo(data, *claves):
+    valores = []
+    for clave in claves:
+        if hasattr(data, "getlist"):
+            valores.extend([v for v in data.getlist(clave) if v not in (None, "")])
+            valores.extend([v for v in data.getlist(f"{clave}[]") if v not in (None, "")])
+        got = data.get(clave) if hasattr(data, "get") else None
+        if got not in (None, "", [], valores):
+            if got not in valores:
+                valores.append(got)
+    return valores
+
+
+def resolver_departamento(valor):
+    if valor in (None, ""):
+        depto = Departamento.objects.order_by("id").first()
+        if depto:
+            return depto
+        return Departamento.objects.create(nombre="Sin departamento")
+    if str(valor).isdigit():
+        depto = Departamento.objects.filter(id=int(valor)).first()
+        if depto:
+            return depto
+    nombre = str(valor).strip()
+    depto = Departamento.objects.filter(nombre__iexact=nombre).first()
+    if depto:
+        return depto
+    return Departamento.objects.create(nombre=nombre[:100])
+
+
+def guardar_imagen_destino(destino, archivo, descripcion=""):
+    if not archivo:
+        return
+    ImagenDestino.objects.create(
+        url_img=archivo,
+        destino=destino,
+        descripcion=descripcion or "",
+    )
+
+
+def resolver_destino(item, archivo=None):
+    if isinstance(item, Destino):
+        guardar_imagen_destino(item, archivo)
+        return item
+    if isinstance(item, int) or (isinstance(item, str) and str(item).strip().isdigit()):
+        destino = Destino.objects.filter(id=int(item)).first()
+        if not destino:
+            raise ValueError(f"El destino {item} no existe")
+        guardar_imagen_destino(destino, archivo)
+        return destino
+    if isinstance(item, str):
+        item = {"nombre": item.strip()}
+    if not isinstance(item, dict):
+        raise ValueError("Formato de destino no válido")
+
+    destino_id = item.get("id") or item.get("destino_id")
+    archivo = archivo or item.get("imagen") or item.get("url_img") or item.get("foto")
+    if destino_id:
+        destino = Destino.objects.filter(id=int(destino_id)).first()
+        if not destino:
+            raise ValueError(f"El destino {destino_id} no existe")
+        guardar_imagen_destino(destino, archivo, item.get("descripcion_imagen") or "")
+        return destino
+
+    nombre = (item.get("nombre") or item.get("destino") or "").strip()
+    if not nombre:
+        raise ValueError("Cada destino necesita id o nombre")
+    descripcion = item.get("descripcion") or ""
+    destino = Destino.objects.filter(nombre__iexact=nombre).first()
+    if destino is None:
+        destino = Destino.objects.create(
+            nombre=nombre[:150],
+            departamento=resolver_departamento(item.get("departamento") or item.get("departamento_id")),
+            descripcion=str(descripcion)[:300],
+        )
+    elif descripcion and not destino.descripcion:
+        destino.descripcion = str(descripcion)[:300]
+        destino.save(update_fields=["descripcion"])
+    guardar_imagen_destino(destino, archivo, item.get("descripcion_imagen") or "")
+    return destino
+
+
+def destinos_anidados(data, files):
+    por_indice = {}
+    patron = re.compile(r"^destinos\[(\d+)\]\[(\w+)\]$|^destinos\.(\d+)\.(\w+)$")
+    fuentes = []
+    if hasattr(data, "keys"):
+        fuentes.append(data)
+    if files is not None and hasattr(files, "keys"):
+        fuentes.append(files)
+    for fuente in fuentes:
+        for clave in fuente.keys():
+            match = patron.match(clave)
+            if not match:
+                continue
+            indice = int(match.group(1) or match.group(3))
+            campo = match.group(2) or match.group(4)
+            por_indice.setdefault(indice, {})
+            if hasattr(fuente, "getlist"):
+                valores = fuente.getlist(clave)
+                por_indice[indice][campo] = valores[0] if len(valores) == 1 else valores
+            else:
+                por_indice[indice][campo] = fuente.get(clave)
+    return [por_indice[i] for i in sorted(por_indice)]
+
+
+def extraer_items_destino(request):
+    data = request.data
+    items = destinos_anidados(data, request.FILES)
+    if items:
+        return items, True
+
+    enviados = False
+    for valor in valores_campo(
+        data,
+        "destinos",
+        "destino",
+        "destino_ids",
+        "destino_id",
+        "destinos_ids",
+        "ids_destino",
+    ):
+        enviados = True
+        valor = maybe_json(valor)
+        if isinstance(valor, list):
+            items.extend(valor)
+        elif isinstance(valor, str) and "," in valor and "{" not in valor:
+            items.extend([parte.strip() for parte in valor.split(",") if parte.strip()])
+        else:
+            items.append(valor)
+
+    if hasattr(data, "getlist"):
+        extras = data.getlist("destino_ids") + data.getlist("destino_id") + data.getlist("destinos[]")
+        if extras:
+            enviados = True
+            for extra in extras:
+                extra = maybe_json(extra)
+                if extra not in items:
+                    items.append(extra)
+    return items, enviados
+
+
+def archivos_destino(request, cantidad):
+    archivos = []
+    if hasattr(request.FILES, "getlist"):
+        archivos.extend(request.FILES.getlist("imagenes_destino"))
+        archivos.extend(request.FILES.getlist("imagen_destino"))
+        archivos.extend(request.FILES.getlist("imagenes_destinos"))
+    for i in range(cantidad):
+        archivo = request.FILES.get(f"imagen_destino_{i}") or request.FILES.get(f"destinos[{i}][imagen]")
+        if archivo:
+            while len(archivos) <= i:
+                archivos.append(None)
+            archivos[i] = archivo
+    return archivos
+
+
+def destinos_de_paquete(paquete):
+    relaciones = (
+        PaqueteDestino.objects
+        .filter(paquete=paquete)
+        .select_related("destino", "destino__departamento")
+    )
+    destinos = []
+    for rel in relaciones:
+        destino = rel.destino
+        imagenes = [
+            {
+                "id": img.id,
+                "url_img": imagen_url(img.url_img),
+                "descripcion": img.descripcion,
+            }
+            for img in ImagenDestino.objects.filter(destino=destino)
+        ]
+        destinos.append({
+            "id": destino.id,
+            "nombre": destino.nombre,
+            "departamento": destino.departamento.nombre if destino.departamento_id else None,
+            "descripcion": destino.descripcion,
+            "imagen": imagenes[0]["url_img"] if imagenes else None,
+            "imagenes": imagenes,
+        })
+    return destinos
 
 
 def paquete_json(paquete):
@@ -18,11 +253,70 @@ def paquete_json(paquete):
         "estado": paquete.estado,
         "fecha_creacion": paquete.fecha_creacion,
         "precio": str(paquete.precio),
+        "imagen": imagen_url(getattr(paquete, "imagen", None)),
+        "destinos": destinos_de_paquete(paquete),
     }
 
+
+def vincular_destinos(paquete, destinos):
+    vistos = set()
+    for destino in destinos:
+        if destino.id in vistos:
+            continue
+        PaqueteDestino.objects.get_or_create(paquete=paquete, destino=destino)
+        vistos.add(destino.id)
+
+
+def crear_o_actualizar_paquete(request, paquete=None):
+    items, destinos_enviados = extraer_items_destino(request)
+    archivos = archivos_destino(request, len(items))
+    destinos = []
+    for indice, item in enumerate(items):
+        archivo = archivos[indice] if indice < len(archivos) else None
+        destinos.append(resolver_destino(item, archivo))
+
+    if destinos_enviados and not destinos:
+        raise ValueError("No se pudieron leer los destinos. Envíalos como destinos o destino_ids.")
+
+    imagen = request.FILES.get("imagen")
+    datos = {
+        "nombre": request.data.get("nombre"),
+        "agencia_id": request.data.get("agencia_id"),
+        "descripcion": request.data.get("descripcion") or "",
+        "duracion_estimada": request.data.get("duracion_estimada") or "",
+        "estado": request.data.get("estado") or "activo",
+        "precio": request.data.get("precio") or 0,
+    }
+    fecha = request.data.get("fecha_creacion")
+    with transaction.atomic():
+        if paquete is None:
+            paquete = Paquete.objects.create(
+                **datos,
+                fecha_creacion=fecha or timezone.now(),
+                imagen=imagen,
+            )
+        else:
+            paquete.nombre = datos["nombre"]
+            paquete.agencia_id = datos["agencia_id"]
+            paquete.descripcion = datos["descripcion"]
+            paquete.duracion_estimada = datos["duracion_estimada"]
+            paquete.estado = datos["estado"]
+            paquete.precio = datos["precio"]
+            if fecha:
+                paquete.fecha_creacion = fecha
+            if imagen:
+                paquete.imagen = imagen
+            paquete.save()
+            if destinos_enviados:
+                PaqueteDestino.objects.filter(paquete=paquete).delete()
+        vincular_destinos(paquete, destinos)
+    return paquete
+
 class PaqueteView(APIView):
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
     @swagger_auto_schema(
-        operation_description="Listar paquetes"
+        operation_description="Listar paquetes con destinos e imágenes"
     )
     def get(self, request):
         paqueteLista = Paquete.objects.all()
@@ -32,54 +326,73 @@ class PaqueteView(APIView):
         return Response(lista)
 
     @swagger_auto_schema(
-        operation_description="Guardar paquete",
-        request_body=PaqueteEntrada,
+        operation_description="Guardar paquete. Acepta imagen de portada, destino_ids e imagenes_destino.",
+        request_body=PaqueteRegistrarEntrada,
         responses={201: MensajeSalida}
     )
     def post(self, request):
-        nombre = request.data.get("nombre")
-        agencia_id = request.data.get("agencia_id")
-        descripcion = request.data.get("descripcion")
-        duracion_estimada = request.data.get("duracion_estimada")
-        estado = request.data.get("estado")
-        fecha_creacion = request.data.get("fecha_creacion")
-        precio = request.data.get("precio") or 0
+        try:
+            paquete = crear_o_actualizar_paquete(request)
+        except ValueError as error:
+            return Response({"mensaje": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        data = paquete_json(paquete)
+        data["mensaje"] = "Paquete almacenado correctamente"
+        return Response(data, status=status.HTTP_201_CREATED)
 
-        Paquete.objects.create(
-            nombre=nombre,
-            agencia_id=agencia_id,
-            descripcion=descripcion,
-            duracion_estimada=duracion_estimada,
-            estado=estado,
-            fecha_creacion=fecha_creacion,
-            precio=precio or 0
-        )
-        return Response({"mensaje": "Paquete almacenado correctamente"})
+
+class PaqueteRegistrarView(APIView):
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    @swagger_auto_schema(
+        operation_description=(
+            "Registra un paquete con su imagen de portada y destinos. "
+            "La imagen del destino se guarda en ImagenDestino (app destinos), no en el paquete. "
+            "Enviar multipart/form-data: imagen, destino_ids (ej: 1,2), "
+            "imagenes_destino (archivo, se puede repetir) y destinos_imagen (ej: 1,2) en el mismo orden."
+        ),
+        request_body=PaqueteRegistrarEntrada,
+    )
+    def post(self, request):
+        if not request.data.get("nombre"):
+            return Response({"mensaje": "El nombre es obligatorio"}, status=status.HTTP_400_BAD_REQUEST)
+        if not request.data.get("agencia_id"):
+            return Response({"mensaje": "La agencia es obligatoria"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            paquete = crear_o_actualizar_paquete(request)
+        except ValueError as error:
+            return Response({"mensaje": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        data = paquete_json(paquete)
+        data["mensaje"] = "Paquete registrado correctamente"
+        return Response(data, status=status.HTTP_201_CREATED)
 
 
 class PaqueteIdView(APIView):
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
     @swagger_auto_schema(
-        operation_description="Listar paquete por id"
+        operation_description="Listar paquete por id, con destinos e imágenes"
     )
     def get(self, request, id):
-        registroEncontrado = Paquete.objects.get(id=id)
+        registroEncontrado = Paquete.objects.filter(id=id).first()
+        if not registroEncontrado:
+            return Response({"mensaje": "Paquete no encontrado"}, status=status.HTTP_404_NOT_FOUND)
         return Response(paquete_json(registroEncontrado))
 
     @swagger_auto_schema(
-        operation_description="Actualizar paquete",
-        request_body=PaqueteEntrada
+        operation_description="Actualizar paquete, imagen y destinos",
+        request_body=PaqueteRegistrarEntrada
     )
     def put(self, request, id):
-        paqueteB = Paquete.objects.get(id=id)
-        paqueteB.nombre = request.data.get("nombre")
-        paqueteB.agencia_id = request.data.get("agencia_id")
-        paqueteB.descripcion = request.data.get("descripcion")
-        paqueteB.duracion_estimada = request.data.get("duracion_estimada")
-        paqueteB.estado = request.data.get("estado")
-        paqueteB.fecha_creacion = request.data.get("fecha_creacion")
-        paqueteB.precio = request.data.get("precio") or 0
-        paqueteB.save()
-        return Response({"mensaje": "Paquete actualizado"})
+        paqueteB = Paquete.objects.filter(id=id).first()
+        if not paqueteB:
+            return Response({"mensaje": "Paquete no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            paqueteB = crear_o_actualizar_paquete(request, paqueteB)
+        except ValueError as error:
+            return Response({"mensaje": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        data = paquete_json(paqueteB)
+        data["mensaje"] = "Paquete actualizado"
+        return Response(data)
 
     @swagger_auto_schema(
         operation_description="Eliminar paquete"
@@ -96,18 +409,7 @@ class PaqueteDescripcionView(APIView):
     )
     def get(self, request, descripcion):
         paqueteLista = Paquete.objects.filter(descripcion__icontains=descripcion)
-        lista = []
-        for paquete in paqueteLista:
-            lista.append({
-                "id": paquete.id,
-                "nombre": paquete.nombre,
-                "agencia_id": paquete.agencia_id,
-                "descripcion": paquete.descripcion,
-                "duracion_estimada": paquete.duracion_estimada,
-                "estado": paquete.estado,
-                "fecha_creacion": paquete.fecha_creacion,
-            })
-        return Response(lista)
+        return Response([paquete_json(paquete) for paquete in paqueteLista])
 
 
 class PaqueteNombreView(APIView):
@@ -116,18 +418,7 @@ class PaqueteNombreView(APIView):
     )
     def get(self, request, nombre):
         paqueteLista = Paquete.objects.filter(nombre__icontains=nombre)
-        lista = []
-        for paquete in paqueteLista:
-            lista.append({
-                "id": paquete.id,
-                "nombre": paquete.nombre,
-                "agencia_id": paquete.agencia_id,
-                "descripcion": paquete.descripcion,
-                "duracion_estimada": paquete.duracion_estimada,
-                "estado": paquete.estado,
-                "fecha_creacion": paquete.fecha_creacion,
-            })
-        return Response(lista)
+        return Response([paquete_json(paquete) for paquete in paqueteLista])
 
 
 ##################################################################################################
