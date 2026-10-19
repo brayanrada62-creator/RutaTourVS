@@ -1,3 +1,6 @@
+import json
+import re
+
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
@@ -6,7 +9,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
 
-from destinos.models import Destino, ImagenDestino
+from destinos.models import Departamento, Destino, ImagenDestino
 
 from .serializer import (
     PaqueteRegistrarEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida
@@ -35,10 +38,181 @@ def parse_ids(valor):
         piezas = texto.replace(";", ",").split(",")
     ids = []
     for pieza in piezas:
-        pieza = str(pieza).strip()
+        pieza = str(pieza).strip().strip('"').strip("'")
         if pieza.isdigit():
             ids.append(int(pieza))
     return ids
+
+
+def maybe_json(valor):
+    if isinstance(valor, (list, dict)):
+        return valor
+    if not isinstance(valor, str):
+        return valor
+    texto = valor.strip()
+    if not texto or texto[0] not in "[{":
+        return valor
+    try:
+        return json.loads(texto)
+    except json.JSONDecodeError:
+        return valor
+
+
+def valores_campo(data, *claves):
+    valores = []
+    for clave in claves:
+        if hasattr(data, "getlist"):
+            valores.extend([v for v in data.getlist(clave) if v not in (None, "")])
+            valores.extend([v for v in data.getlist(f"{clave}[]") if v not in (None, "")])
+        got = data.get(clave) if hasattr(data, "get") else None
+        if got not in (None, "", [], valores):
+            if got not in valores:
+                valores.append(got)
+    return valores
+
+
+def resolver_departamento(valor):
+    if valor in (None, ""):
+        depto = Departamento.objects.order_by("id").first()
+        if depto:
+            return depto
+        return Departamento.objects.create(nombre="Sin departamento")
+    if str(valor).isdigit():
+        depto = Departamento.objects.filter(id=int(valor)).first()
+        if depto:
+            return depto
+    nombre = str(valor).strip()
+    depto = Departamento.objects.filter(nombre__iexact=nombre).first()
+    if depto:
+        return depto
+    return Departamento.objects.create(nombre=nombre[:100])
+
+
+def guardar_imagen_destino(destino, archivo, descripcion=""):
+    if not archivo:
+        return
+    ImagenDestino.objects.create(
+        url_img=archivo,
+        destino=destino,
+        descripcion=descripcion or "",
+    )
+
+
+def resolver_destino(item, archivo=None):
+    if isinstance(item, Destino):
+        guardar_imagen_destino(item, archivo)
+        return item
+    if isinstance(item, int) or (isinstance(item, str) and str(item).strip().isdigit()):
+        destino = Destino.objects.filter(id=int(item)).first()
+        if not destino:
+            raise ValueError(f"El destino {item} no existe")
+        guardar_imagen_destino(destino, archivo)
+        return destino
+    if isinstance(item, str):
+        item = {"nombre": item.strip()}
+    if not isinstance(item, dict):
+        raise ValueError("Formato de destino no válido")
+
+    destino_id = item.get("id") or item.get("destino_id")
+    archivo = archivo or item.get("imagen") or item.get("url_img") or item.get("foto")
+    if destino_id:
+        destino = Destino.objects.filter(id=int(destino_id)).first()
+        if not destino:
+            raise ValueError(f"El destino {destino_id} no existe")
+        guardar_imagen_destino(destino, archivo, item.get("descripcion_imagen") or "")
+        return destino
+
+    nombre = (item.get("nombre") or item.get("destino") or "").strip()
+    if not nombre:
+        raise ValueError("Cada destino necesita id o nombre")
+    descripcion = item.get("descripcion") or ""
+    destino = Destino.objects.filter(nombre__iexact=nombre).first()
+    if destino is None:
+        destino = Destino.objects.create(
+            nombre=nombre[:150],
+            departamento=resolver_departamento(item.get("departamento") or item.get("departamento_id")),
+            descripcion=str(descripcion)[:300],
+        )
+    elif descripcion and not destino.descripcion:
+        destino.descripcion = str(descripcion)[:300]
+        destino.save(update_fields=["descripcion"])
+    guardar_imagen_destino(destino, archivo, item.get("descripcion_imagen") or "")
+    return destino
+
+
+def destinos_anidados(data, files):
+    por_indice = {}
+    patron = re.compile(r"^destinos\[(\d+)\]\[(\w+)\]$|^destinos\.(\d+)\.(\w+)$")
+    fuentes = []
+    if hasattr(data, "keys"):
+        fuentes.append(data)
+    if files is not None and hasattr(files, "keys"):
+        fuentes.append(files)
+    for fuente in fuentes:
+        for clave in fuente.keys():
+            match = patron.match(clave)
+            if not match:
+                continue
+            indice = int(match.group(1) or match.group(3))
+            campo = match.group(2) or match.group(4)
+            por_indice.setdefault(indice, {})
+            if hasattr(fuente, "getlist"):
+                valores = fuente.getlist(clave)
+                por_indice[indice][campo] = valores[0] if len(valores) == 1 else valores
+            else:
+                por_indice[indice][campo] = fuente.get(clave)
+    return [por_indice[i] for i in sorted(por_indice)]
+
+
+def extraer_items_destino(request):
+    data = request.data
+    items = destinos_anidados(data, request.FILES)
+    if items:
+        return items, True
+
+    enviados = False
+    for valor in valores_campo(
+        data,
+        "destinos",
+        "destino",
+        "destino_ids",
+        "destino_id",
+        "destinos_ids",
+        "ids_destino",
+    ):
+        enviados = True
+        valor = maybe_json(valor)
+        if isinstance(valor, list):
+            items.extend(valor)
+        elif isinstance(valor, str) and "," in valor and "{" not in valor:
+            items.extend([parte.strip() for parte in valor.split(",") if parte.strip()])
+        else:
+            items.append(valor)
+
+    if hasattr(data, "getlist"):
+        extras = data.getlist("destino_ids") + data.getlist("destino_id") + data.getlist("destinos[]")
+        if extras:
+            enviados = True
+            for extra in extras:
+                extra = maybe_json(extra)
+                if extra not in items:
+                    items.append(extra)
+    return items, enviados
+
+
+def archivos_destino(request, cantidad):
+    archivos = []
+    if hasattr(request.FILES, "getlist"):
+        archivos.extend(request.FILES.getlist("imagenes_destino"))
+        archivos.extend(request.FILES.getlist("imagen_destino"))
+        archivos.extend(request.FILES.getlist("imagenes_destinos"))
+    for i in range(cantidad):
+        archivo = request.FILES.get(f"imagen_destino_{i}") or request.FILES.get(f"destinos[{i}][imagen]")
+        if archivo:
+            while len(archivos) <= i:
+                archivos.append(None)
+            archivos[i] = archivo
+    return archivos
 
 
 def destinos_de_paquete(paquete):
@@ -84,42 +258,26 @@ def paquete_json(paquete):
     }
 
 
-def vincular_destinos(paquete, destino_ids):
-    if not destino_ids:
-        return
-    existentes = list(Destino.objects.filter(id__in=destino_ids))
-    if len(existentes) != len(set(destino_ids)):
-        raise ValueError("Uno o más destinos no existen")
-    for destino_id in set(destino_ids):
-        PaqueteDestino.objects.get_or_create(paquete=paquete, destino_id=destino_id)
-
-
-def guardar_imagenes_destino(request, destino_ids):
-    archivos = request.FILES.getlist("imagenes_destino")
-    if not archivos:
-        archivo = request.FILES.get("imagen_destino")
-        archivos = [archivo] if archivo else []
-    destinos_imagen = parse_ids(
-        request.data.get("destinos_imagen") or request.data.get("destino_ids_imagen")
-    )
-    if archivos and not destinos_imagen and len(destino_ids) == 1:
-        destinos_imagen = [destino_ids[0]] * len(archivos)
-    if archivos and len(destinos_imagen) != len(archivos):
-        raise ValueError("Cada imagen de destino debe indicar su destino_id en destinos_imagen")
-    for archivo, destino_id in zip(archivos, destinos_imagen):
-        if not Destino.objects.filter(id=destino_id).exists():
-            raise ValueError(f"El destino {destino_id} no existe")
-        ImagenDestino.objects.create(
-            url_img=archivo,
-            destino_id=destino_id,
-            descripcion=request.data.get("descripcion_imagen") or "",
-        )
+def vincular_destinos(paquete, destinos):
+    vistos = set()
+    for destino in destinos:
+        if destino.id in vistos:
+            continue
+        PaqueteDestino.objects.get_or_create(paquete=paquete, destino=destino)
+        vistos.add(destino.id)
 
 
 def crear_o_actualizar_paquete(request, paquete=None):
-    destino_ids = parse_ids(
-        request.data.get("destino_ids") or request.data.get("destino_id")
-    )
+    items, destinos_enviados = extraer_items_destino(request)
+    archivos = archivos_destino(request, len(items))
+    destinos = []
+    for indice, item in enumerate(items):
+        archivo = archivos[indice] if indice < len(archivos) else None
+        destinos.append(resolver_destino(item, archivo))
+
+    if destinos_enviados and not destinos:
+        raise ValueError("No se pudieron leer los destinos. Envíalos como destinos o destino_ids.")
+
     imagen = request.FILES.get("imagen")
     datos = {
         "nombre": request.data.get("nombre"),
@@ -137,7 +295,6 @@ def crear_o_actualizar_paquete(request, paquete=None):
                 fecha_creacion=fecha or timezone.now(),
                 imagen=imagen,
             )
-            vincular_destinos(paquete, destino_ids)
         else:
             paquete.nombre = datos["nombre"]
             paquete.agencia_id = datos["agencia_id"]
@@ -150,10 +307,9 @@ def crear_o_actualizar_paquete(request, paquete=None):
             if imagen:
                 paquete.imagen = imagen
             paquete.save()
-            if "destino_ids" in request.data or "destino_id" in request.data:
+            if destinos_enviados:
                 PaqueteDestino.objects.filter(paquete=paquete).delete()
-                vincular_destinos(paquete, destino_ids)
-        guardar_imagenes_destino(request, destino_ids)
+        vincular_destinos(paquete, destinos)
     return paquete
 
 class PaqueteView(APIView):

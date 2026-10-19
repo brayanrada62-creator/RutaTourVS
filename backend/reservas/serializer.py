@@ -10,11 +10,17 @@ class MensajeSalida(serializers.Serializer):
 
 
 class ReservaEntrada(serializers.Serializer):
-    fecha_reserva = serializers.DateField()
-    usuario_id = serializers.IntegerField()
+    fecha_reserva = serializers.DateField(required=False)
+    usuario_id = serializers.IntegerField(required=False)
     paquete_id = serializers.IntegerField()
     viaje_id = serializers.IntegerField(required=False, allow_null=True)
     estado = serializers.CharField(required=False, allow_blank=True)
+    asientos = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="IDs de asiento separados por coma, ej: 1,2,3",
+    )
+    asiento_ids = serializers.CharField(required=False, allow_blank=True)
 
 
 class AsientoReservaEntrada(serializers.Serializer):
