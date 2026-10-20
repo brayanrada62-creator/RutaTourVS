@@ -9,13 +9,6 @@ class MensajeSalida(serializers.Serializer):
         ref_name = "UsuariosMensajeSalida"
 
 
-class UsuarioCreadoSalida(serializers.Serializer):
-    message = serializers.CharField(max_length=255)
-    id = serializers.IntegerField()
-    usuario_id = serializers.IntegerField()
-
-
-
 class loginSerializer(serializers.Serializer):
     correo = serializers.EmailField()
     contrasena = serializers.CharField(max_length=100)
@@ -23,6 +16,7 @@ class loginSerializer(serializers.Serializer):
 
 class UsuarioEntrada(serializers.Serializer):
     nombre_completo = serializers.CharField(max_length=200)
+    agencia_id = serializers.IntegerField(required=False, allow_null=True)
     rol_id = serializers.IntegerField()
     tipo_documento = serializers.CharField(max_length=30)
     numero_documento = serializers.CharField(max_length=30)

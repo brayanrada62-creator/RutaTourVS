@@ -1,109 +1,12 @@
-import json
-from datetime import date as date_cls
-from datetime import datetime
-
-from django.db import transaction
-from django.utils import timezone
-from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import AllowAny
 from drf_yasg.utils import swagger_auto_schema
-
-from buses.models import Asiento
-from paquetes.models import Paquete
-from usuarios.models import Usuario
-from pagos.models import Pago
 
 from .serializer import ReservaEntrada, AsientoReservaEntrada, MensajeSalida
 from .models import Reserva, AsientoReserva, GpsPunto, Novedad, ChatMensaje
-
-
-def usuario_desde_request(request, data=None):
-    data = data if data is not None else request.data
-    user = getattr(request, "user", None)
-    if user and getattr(user, "is_authenticated", False):
-        email = (getattr(user, "email", None) or getattr(user, "username", None) or "").strip()
-        if email:
-            encontrado = Usuario.objects.filter(correo__iexact=email).first()
-            if encontrado:
-                return encontrado
-    uid = data.get("usuario_id") if hasattr(data, "get") else None
-    if uid:
-        return Usuario.objects.filter(id=uid).first()
-    return None
-
-
-def parse_ids(valor):
-    if valor in (None, ""):
-        return []
-    if isinstance(valor, int):
-        return [valor]
-    if isinstance(valor, (list, tuple)):
-        piezas = valor
-    else:
-        texto = str(valor).strip()
-        if texto.startswith("["):
-            try:
-                piezas = json.loads(texto)
-            except json.JSONDecodeError:
-                piezas = texto.strip("[]").replace(";", ",").split(",")
-        else:
-            piezas = texto.replace(";", ",").split(",")
-    ids = []
-    for pieza in piezas:
-        if isinstance(pieza, dict):
-            pieza = pieza.get("id") or pieza.get("asiento_id") or pieza.get("numero_asiento")
-        texto = str(pieza).strip().strip('"').strip("'")
-        if texto.isdigit():
-            ids.append(int(texto))
-    return ids
-
-
-def extraer_asiento_ids(data):
-    ids = []
-    for clave in ("asientos", "asiento_ids", "asiento_id", "asientos_ids"):
-        if hasattr(data, "getlist"):
-            for valor in data.getlist(clave) + data.getlist(f"{clave}[]"):
-                ids.extend(parse_ids(valor))
-        if hasattr(data, "get"):
-            ids.extend(parse_ids(data.get(clave)))
-    vistos = []
-    for asiento_id in ids:
-        if asiento_id not in vistos:
-            vistos.append(asiento_id)
-    return vistos
-
-
-def asientos_ocupados(paquete_id=None):
-    qs = AsientoReserva.objects.exclude(reserva__estado__iexact="cancelada")
-    if paquete_id:
-        qs = qs.filter(reserva__paquete_id=paquete_id)
-    return set(qs.values_list("asiento_id", flat=True))
-
-
-def con_zona(dt):
-    if timezone.is_naive(dt) and timezone.is_aware(timezone.now()):
-        return timezone.make_aware(dt)
-    return dt
-
-
-def parse_fecha_reserva(valor):
-    if not valor:
-        return timezone.now()
-    if isinstance(valor, datetime):
-        return con_zona(valor)
-    if isinstance(valor, date_cls):
-        return con_zona(datetime.combine(valor, datetime.min.time()))
-    texto = str(valor).strip()
-    dt = parse_datetime(texto)
-    if dt:
-        return con_zona(dt)
-    d = parse_date(texto)
-    if d:
-        return con_zona(datetime.combine(d, datetime.min.time()))
-    return timezone.now()
+from usuarios.models import Usuario
+from pagos.models import Pago
 
 
 def reserva_json(reserva):
@@ -122,126 +25,29 @@ def reserva_json(reserva):
         "estado": estado,
         "abordado": reserva.abordado,
         "asientos": ",".join(str(n) for n in asientos),
-        "asientos_ids": list(
-            AsientoReserva.objects.filter(reserva=reserva).values_list("asiento_id", flat=True)
-        ),
         "codigo": f"RT-{reserva.id}",
         "pago_estado": pago.estado if pago else "",
     }
 
 
-def crear_reserva_con_asientos(request):
-    paquete_id = request.data.get("paquete_id")
-    if not paquete_id:
-        raise ValueError("El paquete_id es obligatorio")
-    paquete = Paquete.objects.filter(id=paquete_id).first()
-    if not paquete:
-        raise ValueError("El paquete no existe")
-
-    usuario = usuario_desde_request(request)
-    if not usuario:
-        raise ValueError("Inicia sesión o envía usuario_id")
-
-    asiento_ids = extraer_asiento_ids(request.data)
-    fecha = parse_fecha_reserva(request.data.get("fecha_reserva"))
-
-    with transaction.atomic():
-        asientos = []
-        if asiento_ids:
-            asientos = list(Asiento.objects.select_for_update().filter(id__in=asiento_ids))
-            if len(asientos) != len(set(asiento_ids)):
-                raise ValueError("Uno o más asientos no existen")
-            ocupados = asientos_ocupados(paquete.id)
-            tomados = [a.numero_asiento for a in asientos if a.id in ocupados]
-            if tomados:
-                raise ValueError(
-                    "Estos asientos ya están ocupados: " + ", ".join(str(n) for n in tomados)
-                )
-
-        reserva = Reserva.objects.create(
-            fecha_reserva=fecha,
-            usuario=usuario,
-            paquete=paquete,
-            estado=request.data.get("estado") or "pendiente",
-        )
-        for asiento in asientos:
-            AsientoReserva.objects.get_or_create(reserva=reserva, asiento=asiento)
-    return reserva
-
-
 class ReservaView(APIView):
-    @swagger_auto_schema(operation_description="Listar reservas. Filtra con ?usuario_id=")
+    @swagger_auto_schema(operation_description="Listar reservas")
     def get(self, request):
-        lista = Reserva.objects.all().order_by("-id")
-        uid = request.query_params.get("usuario_id")
-        if uid:
-            lista = lista.filter(usuario_id=uid)
-        return Response([reserva_json(r) for r in lista])
+        return Response([reserva_json(r) for r in Reserva.objects.all()])
 
     @swagger_auto_schema(
-        operation_description="Guarda la reserva del usuario y marca los asientos como ocupados.",
+        operation_description="Guardar reserva",
         request_body=ReservaEntrada,
         responses={201: MensajeSalida}
     )
     def post(self, request):
-        try:
-            reserva = crear_reserva_con_asientos(request)
-        except ValueError as error:
-            return Response({"mensaje": str(error), "message": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        reserva = Reserva.objects.create(
+            fecha_reserva=request.data.get("fecha_reserva"),
+            usuario_id=request.data.get("usuario_id"),
+            paquete_id=request.data.get("paquete_id"),
+            estado=request.data.get("estado") or "pendiente",
+        )
         return Response(reserva_json(reserva), status=status.HTTP_201_CREATED)
-
-
-class ReservaCrearView(APIView):
-    @swagger_auto_schema(
-        operation_description=(
-            "Crea la reserva y bloquea asientos en un solo paso. "
-            "Body: paquete_id, usuario_id (o token), asientos (ids: 1,2,3)."
-        ),
-        request_body=ReservaEntrada,
-    )
-    def post(self, request):
-        try:
-            reserva = crear_reserva_con_asientos(request)
-        except ValueError as error:
-            return Response({"mensaje": str(error), "message": str(error)}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(reserva_json(reserva), status=status.HTTP_201_CREATED)
-
-
-class ReservaMiasView(APIView):
-    @swagger_auto_schema(operation_description="Reservas del usuario autenticado o de usuario_id")
-    def get(self, request):
-        yo = usuario_desde_request(request, request.query_params)
-        if not yo:
-            return Response(
-                {"mensaje": "Inicia sesión o envía usuario_id"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        return Response([reserva_json(r) for r in Reserva.objects.filter(usuario=yo).order_by("-id")])
-
-
-class PaqueteAsientosView(APIView):
-    permission_classes = [AllowAny]
-
-    @swagger_auto_schema(operation_description="Mapa de asientos del paquete, con ocupado=true si ya hay reserva")
-    def get(self, request, paquete_id):
-        paquete = Paquete.objects.filter(id=paquete_id).first()
-        if not paquete:
-            return Response({"mensaje": "Paquete no encontrado"}, status=status.HTTP_404_NOT_FOUND)
-        ocupados = asientos_ocupados(paquete.id)
-        tipo = request.query_params.get("tipo_bus_id")
-        asientos = Asiento.objects.all()
-        if tipo:
-            asientos = asientos.filter(tipo_bus_id=tipo)
-        return Response([
-            {
-                "id": asiento.id,
-                "tipo_bus_id": asiento.tipo_bus_id,
-                "numero_asiento": asiento.numero_asiento,
-                "ocupado": asiento.id in ocupados,
-                "paquete_id": paquete.id,
-            }
-            for asiento in asientos
-        ])
 
 
 class ReservaIdView(APIView):
@@ -281,27 +87,10 @@ class AsientoReservaView(APIView):
         ])
 
     def post(self, request):
-        reserva_id = request.data.get("reserva_id")
         asiento_id = request.data.get("asiento_id")
-        reserva = Reserva.objects.filter(id=reserva_id).first()
-        if not reserva:
-            return Response({"mensaje": "La reserva no existe"}, status=status.HTTP_400_BAD_REQUEST)
-        asiento = Asiento.objects.filter(id=asiento_id).first()
-        if not asiento:
-            return Response({"mensaje": "El asiento no existe"}, status=status.HTTP_400_BAD_REQUEST)
-        ya_mio = AsientoReserva.objects.filter(reserva=reserva, asiento=asiento).exists()
-        if asiento.id in asientos_ocupados(reserva.paquete_id) and not ya_mio:
-            return Response(
-                {"mensaje": f"El asiento {asiento.numero_asiento} ya está ocupado"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        asiento_reserva, _ = AsientoReserva.objects.get_or_create(reserva=reserva, asiento=asiento)
-        return Response({
-            "id": asiento_reserva.id,
-            "reserva_id": asiento_reserva.reserva_id,
-            "asiento_id": asiento_reserva.asiento_id,
-            "mensaje": "Asiento reservado correctamente",
-        }, status=status.HTTP_201_CREATED)
+        reserva_id = request.data.get("reserva_id")
+        AsientoReserva.objects.create(asiento_id=asiento_id, reserva_id=reserva_id)
+        return Response({"mensaje": "Asiento reservado correctamente", "id": reserva_id})
 
 
 class AsientoReservaIdView(APIView):
