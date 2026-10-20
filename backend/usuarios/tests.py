@@ -33,12 +33,29 @@ class UsuarioViewTests(TestCase):
     def test_post_creates_usuario_without_agency_field(self):
         response = self.post_usuario(self.payload)
 
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data['usuario_id'], response.data['id'])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['message'], 'Usuario creado exitosamente')
         self.assertTrue(Usuario.objects.filter(
             numero_documento=self.payload['numero_documento']
         ).exists())
         self.assertFalse(UsuarioAgencia.objects.exists())
+
+    def test_post_with_agencia_id_creates_association(self):
+        payload = dict(self.payload)
+        payload['agencia_id'] = self.agencia.id
+        response = self.post_usuario(payload)
+
+        self.assertEqual(response.status_code, 200)
+        usuario = Usuario.objects.get(numero_documento=self.payload['numero_documento'])
+        self.assertTrue(UsuarioAgencia.objects.filter(
+            usuario=usuario,
+            agencia=self.agencia,
+        ).exists())
+
+        request = self.factory.get('/usuario/')
+        lista = UsuarioView.as_view()(request)
+        self.assertEqual(lista.data[0]['agencia_id'], self.agencia.id)
+        self.assertEqual(lista.data[0]['agencia_ids'], [self.agencia.id])
 
     def test_association_endpoint_links_existing_user_and_agency(self):
         self.post_usuario(self.payload)

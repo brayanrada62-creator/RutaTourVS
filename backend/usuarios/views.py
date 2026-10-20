@@ -19,16 +19,32 @@ from django.contrib.auth.hashers import make_password
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
 from .serializer import (
-    UsuarioEntrada, UsuarioCreadoSalida, loginSerializer, AgenciaEntrada, MensajeSalida,
+    UsuarioEntrada, loginSerializer, AgenciaEntrada, MensajeSalida,
     UsuarioAgenciaEntrada, RecuperarContrasenaEntrada,
     ConfirmarContrasenaEntrada, LoginGoogleEntrada,
 )
 from .models import Usuario, Agencia, Rol, UsuarioAgencia, RecuperarContrasena
 
+
+def agencia_ids_de(usuario):
+    return list(
+        UsuarioAgencia.objects.filter(usuario=usuario).order_by("id").values_list("agencia_id", flat=True)
+    )
+
+
+def asociar_agencia(usuario, agencia_id):
+    if agencia_id in (None, ""):
+        return
+    UsuarioAgencia.objects.get_or_create(usuario=usuario, agencia_id=agencia_id)
+
+
 def usuario_json(usuario):
+    ids = agencia_ids_de(usuario)
     return {
         'id': usuario.id,
         'nombre_completo': usuario.nombre_completo,
+        'agencia_id': ids[0] if ids else None,
+        'agencia_ids': ids,
         'rol_id': usuario.rol_id,
         'tipo_documento': usuario.tipo_documento,
         'numero_documento': usuario.numero_documento,
@@ -57,6 +73,7 @@ def emitir_sesion(usuario_negocio):
         'token': token.key,
         'id': usuario_negocio.id,
         'usuario_id': usuario_negocio.id,
+        'agencia_id': data.get('agencia_id'),
         'rol_id': usuario_negocio.rol_id,
         'nombre_completo': usuario_negocio.nombre_completo,
         'correo': usuario_negocio.correo,
@@ -292,22 +309,30 @@ class UsuarioView(APIView):
     @swagger_auto_schema(
         operation_description="Crea un nuevo usuario",
         request_body=UsuarioEntrada,
-        responses={201: UsuarioCreadoSalida}
+        responses={201: MensajeSalida}
     )
     def post(self, request):
-        serializer = UsuarioEntrada(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        usuario = Usuario.objects.create(**serializer.validated_data)
-        return Response(
-            {
-                'message': 'Usuario creado exitosamente',
-                'id': usuario.id,
-                'usuario_id': usuario.id,
-            },
-            status=status.HTTP_201_CREATED,
+        nombre_completo = request.data.get('nombre_completo')
+        agencia_id = request.data.get('agencia_id')
+        rol_id = request.data.get('rol_id')
+        tipo_documento = request.data.get('tipo_documento')
+        numero_documento = request.data.get('numero_documento')
+        correo = request.data.get('correo')
+        telefono = request.data.get('telefono')
+        contrasena = request.data.get('contrasena')
+        licencia = request.data.get('licencia', '')
+        usuario = Usuario.objects.create(
+            nombre_completo=nombre_completo,
+            rol_id=rol_id,
+            tipo_documento=tipo_documento,
+            numero_documento=numero_documento,
+            correo=correo,
+            telefono=telefono,
+            contrasena=contrasena,
+            licencia=licencia
         )
+        asociar_agencia(usuario, agencia_id)
+        return Response({'message': 'Usuario creado exitosamente'})
 
     @swagger_auto_schema(
         operation_description="Obtiene todos los usuarios",
@@ -317,16 +342,7 @@ class UsuarioView(APIView):
         usuariolista = Usuario.objects.all()
         lista_usuarios = []
         for usuario in usuariolista:
-            lista_usuarios.append({
-                'id': usuario.id,
-                'nombre_completo': usuario.nombre_completo,
-                'rol_id': usuario.rol_id,
-                'tipo_documento': usuario.tipo_documento,
-                'numero_documento': usuario.numero_documento,
-                'correo': usuario.correo,
-                'telefono': usuario.telefono,
-                'licencia': usuario.licencia,
-            })
+            lista_usuarios.append(usuario_json(usuario))
         return Response(lista_usuarios)
 
 
@@ -337,16 +353,7 @@ class UsuarioIdView(APIView):
     )
     def get(self, request, id):
         usuario = Usuario.objects.get(id=id)
-        return Response({
-            'id': usuario.id,
-            'nombre_completo': usuario.nombre_completo,
-            'rol_id': usuario.rol_id,
-            'tipo_documento': usuario.tipo_documento,
-            'numero_documento': usuario.numero_documento,
-            'correo': usuario.correo,
-            'telefono': usuario.telefono,
-            'licencia': usuario.licencia,
-        })
+        return Response(usuario_json(usuario))
 
     @swagger_auto_schema(
         operation_description="Actualiza un usuario por su ID",
@@ -366,6 +373,7 @@ class UsuarioIdView(APIView):
         if request.data.get('licencia') is not None:
             usuario.licencia = request.data.get('licencia')
         usuario.save()
+        asociar_agencia(usuario, request.data.get('agencia_id'))
         return Response({'message': 'Usuario actualizado exitosamente'})
 
     @swagger_auto_schema(
@@ -386,16 +394,7 @@ class UsuarioDocumentoView(APIView):
         usuario = Usuario.objects.filter(numero_documento=numero_documento).first()
         if not usuario:
             return Response({'message': 'Usuario no encontrado'})
-        return Response({
-            'id': usuario.id,
-            'nombre_completo': usuario.nombre_completo,
-            'rol_id': usuario.rol_id,
-            'tipo_documento': usuario.tipo_documento,
-            'numero_documento': usuario.numero_documento,
-            'correo': usuario.correo,
-            'telefono': usuario.telefono,
-            'licencia': usuario.licencia,
-        })
+        return Response(usuario_json(usuario))
 
 
 ##################################################################################################
