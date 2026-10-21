@@ -15,6 +15,13 @@ from .serializer import (
     PaqueteRegistrarEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida
 )
 from .models import Paquete, PaqueteDestino, Itinerario
+from usuarios.permisos import LecturaPublica
+
+
+class VistaCatalogo(APIView):
+    """Lectura pública; crear, editar y borrar solo administrador o superadministrador."""
+    permission_classes = [LecturaPublica]
+
 
 
 def imagen_url(campo):
@@ -312,7 +319,7 @@ def crear_o_actualizar_paquete(request, paquete=None):
         vincular_destinos(paquete, destinos)
     return paquete
 
-class PaqueteView(APIView):
+class PaqueteView(VistaCatalogo):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     @swagger_auto_schema(
@@ -340,7 +347,7 @@ class PaqueteView(APIView):
         return Response(data, status=status.HTTP_201_CREATED)
 
 
-class PaqueteRegistrarView(APIView):
+class PaqueteRegistrarView(VistaCatalogo):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     @swagger_auto_schema(
@@ -366,7 +373,7 @@ class PaqueteRegistrarView(APIView):
         return Response(data, status=status.HTTP_201_CREATED)
 
 
-class PaqueteIdView(APIView):
+class PaqueteIdView(VistaCatalogo):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     @swagger_auto_schema(
@@ -403,7 +410,7 @@ class PaqueteIdView(APIView):
         return Response({"mensaje": "Paquete eliminado"})
 
 
-class PaqueteDescripcionView(APIView):
+class PaqueteDescripcionView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Busca paquetes por descripción"
     )
@@ -412,7 +419,7 @@ class PaqueteDescripcionView(APIView):
         return Response([paquete_json(paquete) for paquete in paqueteLista])
 
 
-class PaqueteNombreView(APIView):
+class PaqueteNombreView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Busca paquetes por nombre"
     )
@@ -422,7 +429,7 @@ class PaqueteNombreView(APIView):
 
 
 ##################################################################################################
-class PaqueteDestinoView(APIView):
+class PaqueteDestinoView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Listar relaciones paquete-destino"
     )
@@ -453,7 +460,7 @@ class PaqueteDestinoView(APIView):
         return Response({"mensaje": "Relacion paquete-destino almacenada correctamente"})
 
 
-class PaqueteDestinoIdView(APIView):
+class PaqueteDestinoIdView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Listar relacion paquete-destino por id"
     )
@@ -486,7 +493,7 @@ class PaqueteDestinoIdView(APIView):
 
 
 ##################################################################################################
-class ItinerarioView(APIView):
+class ItinerarioView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Listar itinerarios"
     )
@@ -529,7 +536,7 @@ class ItinerarioView(APIView):
         return Response({"mensaje": "Itinerario almacenado correctamente"})
 
 
-class ItinerarioIdView(APIView):
+class ItinerarioIdView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Listar itinerario por id"
     )
@@ -569,7 +576,7 @@ class ItinerarioIdView(APIView):
         return Response({"mensaje": "Itinerario eliminado"})
 
 
-class ItinerarioTituloView(APIView):
+class ItinerarioTituloView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Busca itinerarios por título"
     )
@@ -590,7 +597,7 @@ class ItinerarioTituloView(APIView):
 
 
 
-class ItinerarioLugarView(APIView):
+class ItinerarioLugarView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Busca itinerarios por lugar"
     )

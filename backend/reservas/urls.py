@@ -2,7 +2,7 @@ from django.urls import path
 from .views import (
     GpsView, ReservaView, ReservaIdView, ReservaFechaView, ReservaUsuarioView,
     AsientoReservaView, AsientoReservaIdView, NovedadView, ChatView,
-    PaquetePasajerosView, PaqueteAbordarView,
+    PaquetePasajerosView, PaqueteAbordarView, ViajePasajerosView, ViajeAbordarView,
 )
 
 urlpatterns = [
@@ -14,6 +14,8 @@ urlpatterns = [
     path('asientoreserva/<int:id>/', AsientoReservaIdView.as_view(), name='asientoreserva-id'),
     path('paquete/<int:paquete_id>/pasajeros/', PaquetePasajerosView.as_view(), name='paquete-pasajeros'),
     path('paquete/<int:paquete_id>/abordar/', PaqueteAbordarView.as_view(), name='paquete-abordar'),
+    path('viaje/<int:id>/pasajeros/', ViajePasajerosView.as_view(), name='viaje-pasajeros'),
+    path('viaje/<int:id>/abordar/', ViajeAbordarView.as_view(), name='viaje-abordar'),
     path('gps/', GpsView.as_view(), name='gps'),
     path('gps/<int:paquete_id>/', GpsView.as_view(), name='gps-paquete'),
     path('novedad/', NovedadView.as_view(), name='novedad'),

@@ -55,7 +55,13 @@ INSTALLED_APPS = [
     'buses',
     'destinos',
 ]
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS: en Render definir CORS_ALLOWED_ORIGINS con el dominio del panel Angular,
+# separado por comas (ej. https://rutatour-admin.onrender.com). Sin la variable se permite todo.
+_origenes = [o.strip() for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',') if o.strip()]
+if _origenes:
+    CORS_ALLOWED_ORIGINS = _origenes
+else:
+    CORS_ALLOW_ALL_ORIGINS = True
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
@@ -73,8 +79,9 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.TokenAuthentication',
     ],
+    # Por defecto todo endpoint exige token válido. Las vistas públicas lo indican.
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.AllowAny',
+        'usuarios.permisos.Autenticado',
     ],
 }
 
