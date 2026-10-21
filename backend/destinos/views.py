@@ -6,8 +6,15 @@ from .serializer import (
     DestinoEntrada, HopedajeEntrada, SitioTuristicoEntrada, ImagenEntrada, MensajeSalida, DepartamentoSerializer
 )
 from .models import Destino, Hospedaje, SitioTuristico, ImagenDestino, Departamento
+from usuarios.permisos import LecturaPublica
 
-class DepartamentoView(APIView):
+
+class VistaCatalogo(APIView):
+    """Lectura pública; crear, editar y borrar solo administrador o superadministrador."""
+    permission_classes = [LecturaPublica]
+
+
+class DepartamentoView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Listar departamentos"
     )
@@ -23,7 +30,7 @@ class DepartamentoView(APIView):
     
 ##########################################################################################3
 
-class DestinoView(APIView):
+class DestinoView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Listar destinos"
     )
@@ -57,7 +64,7 @@ class DestinoView(APIView):
         return Response({"mensaje": "Destino almacenado correctamente"})
 
 
-class DestinoIdView(APIView):
+class DestinoIdView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Listar destino por id"
     )
@@ -91,7 +98,7 @@ class DestinoIdView(APIView):
         return Response({"mensaje": "Destino eliminado"})
 
 
-class DestinoDepartamentoView(APIView):
+class DestinoDepartamentoView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Busca destinos por departamento"
     )
@@ -108,7 +115,7 @@ class DestinoDepartamentoView(APIView):
         return Response(lista)
 
 
-class DestinoNombreView(APIView):
+class DestinoNombreView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Busca destinos por nombre"
     )
@@ -126,7 +133,7 @@ class DestinoNombreView(APIView):
 
 
 ##################################################################################################
-class HospedajeView(APIView):
+class HospedajeView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Listar hospedajes"
     )
@@ -166,7 +173,7 @@ class HospedajeView(APIView):
         return Response({"mensaje": "Hospedaje almacenado correctamente"})
 
 
-class HospedajeIdView(APIView):
+class HospedajeIdView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Listar hospedaje por id"
     )
@@ -204,7 +211,7 @@ class HospedajeIdView(APIView):
         return Response({"mensaje": "Hospedaje eliminado"})
 
 
-class HospedajeNombreView(APIView):
+class HospedajeNombreView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Busca hospedajes por nombre"
     )
@@ -224,7 +231,7 @@ class HospedajeNombreView(APIView):
 
 
 ##################################################################################################
-class SitioTuristicoView(APIView):
+class SitioTuristicoView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Listar sitios turisticos"
     )
@@ -261,7 +268,7 @@ class SitioTuristicoView(APIView):
         return Response({"mensaje": "Sitio turistico almacenado correctamente"})
 
 
-class SitioTuristicoIdView(APIView):
+class SitioTuristicoIdView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Listar sitio turistico por id"
     )
@@ -297,7 +304,7 @@ class SitioTuristicoIdView(APIView):
         return Response({"mensaje": "Sitio turistico eliminado"})
 
 
-class SitioTuristicoNombreView(APIView):
+class SitioTuristicoNombreView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Busca sitios turísticos por nombre"
     )
@@ -316,7 +323,7 @@ class SitioTuristicoNombreView(APIView):
 
 
 ##################################################################################################
-class ImagenView(APIView):
+class ImagenView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Listar imagenes"
     )
@@ -350,7 +357,7 @@ class ImagenView(APIView):
         return Response({"mensaje": "Imagen almacenada correctamente"})
 
 
-class ImagenIdView(APIView):
+class ImagenIdView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Listar imagen por id"
     )
@@ -385,7 +392,7 @@ class ImagenIdView(APIView):
         return Response({"mensaje": "Imagen eliminada"})
 
 
-class ImagenUrlView(APIView):
+class ImagenUrlView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description="Busca una imagen por su URL"
     )

@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     LoginView,
     LoginGoogleView,
+    LogoutView,
     UsuarioPerfilView,
     PasswordResetView,
     PasswordResetConfirmarView,
@@ -14,6 +15,7 @@ urlpatterns = [
     # Login
     path('login/', LoginView.as_view(), name='login'),
     path('login/google/', LoginGoogleView.as_view(), name='login-google'),
+    path('logout/', LogoutView.as_view(), name='logout'),
     path('password/reset/', PasswordResetView.as_view(), name='password-reset'),
     path('password/reset/confirmar/', PasswordResetConfirmarView.as_view(), name='password-reset-confirmar'),
     path('recuperar-contrasena/', PasswordResetView.as_view(), name='recuperar-contrasena'),

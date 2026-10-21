@@ -34,6 +34,8 @@ class Usuario(models.Model):
     telefono = models.CharField(max_length=20)
     contrasena = models.CharField(max_length=255)
     licencia = models.CharField(max_length=30, blank=True, default="")
+    # Suspensión: un usuario inactivo no puede iniciar sesión ni usar su token.
+    activo = models.BooleanField(default=True)
 
     def __str__(self):
         return self.nombre_completo

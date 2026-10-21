@@ -15,7 +15,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework.authtoken.models import Token
-from django.contrib.auth.hashers import make_password
+from django.contrib.auth.hashers import check_password, identify_hasher, make_password
+from django.shortcuts import get_object_or_404
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
 from .serializer import (
@@ -24,6 +25,10 @@ from .serializer import (
     ConfirmarContrasenaEntrada, LoginGoogleEntrada,
 )
 from .models import Usuario, Agencia, Rol, UsuarioAgencia, RecuperarContrasena
+from .permisos import (
+    ROL_ADMIN, ROL_CLIENTE, ROL_CONDUCTOR, ROL_SUPER, LecturaPublica, SoloPersonal,
+    agencias_de, es_admin, es_super, gestiona_agencia, prohibido, usuario_de,
+)
 
 
 def agencia_ids_de(usuario):
@@ -51,7 +56,53 @@ def usuario_json(usuario):
         'correo': usuario.correo,
         'telefono': usuario.telefono,
         'licencia': usuario.licencia,
+        'activo': usuario.activo,
     }
+
+
+def es_hash(valor):
+    try:
+        identify_hasher(valor)
+        return True
+    except ValueError:
+        return False
+
+
+def clave_correcta(usuario, clave):
+    """Compara con el hash de Django. Una clave vieja en texto plano se acepta
+    una sola vez y se guarda ya cifrada."""
+    guardada = usuario.contrasena or ""
+    if not guardada or not clave:
+        return False
+    if es_hash(guardada):
+        return check_password(clave, guardada)
+    if secrets.compare_digest(guardada, clave):
+        usuario.contrasena = make_password(clave)
+        usuario.save(update_fields=["contrasena"])
+        return True
+    return False
+
+
+def sincronizar_auth_user(correo_anterior, usuario):
+    """El token pertenece al auth.User con username = correo; si cambia el correo, se actualiza."""
+    auth_user = User.objects.filter(username=correo_anterior).first()
+    if auth_user and correo_anterior != usuario.correo:
+        auth_user.username = usuario.correo
+        auth_user.email = usuario.correo
+        auth_user.save(update_fields=["username", "email"])
+
+
+def puede_ver_usuario(yo, objetivo):
+    """El mismo usuario, el superadmin, o el admin de una agencia común (solo conductores y clientes)."""
+    if yo is None:
+        return False
+    if yo.id == objetivo.id or es_super(yo):
+        return True
+    return (
+        es_admin(yo)
+        and objetivo.rol_id in (ROL_CONDUCTOR, ROL_CLIENTE)
+        and bool(agencias_de(yo) & agencias_de(objetivo))
+    )
 
 
 def hash_valor(valor):
@@ -115,10 +166,22 @@ class LoginView(APIView):
     def post(self, request):
         email = request.data.get('correo')
         password = request.data.get('contrasena')
-        logeo = Usuario.objects.filter(correo=email, contrasena=password).first()
-        if logeo:
+        logeo = Usuario.objects.filter(correo__iexact=(email or "").strip()).first()
+        if logeo and clave_correcta(logeo, password or ""):
+            if not logeo.activo:
+                return Response({'message': 'Usuario suspendido. Comunícate con tu agencia'},
+                                status=status.HTTP_403_FORBIDDEN)
             return Response(emitir_sesion(logeo))
-        return Response({'message': 'Credenciales inválidas'})
+        return Response({'message': 'Credenciales inválidas'}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+class LogoutView(APIView):
+    """Invalida el token en el servidor (el cliente además lo borra de su almacenamiento)."""
+
+    @swagger_auto_schema(operation_description="Cerrar sesión: elimina el token del usuario")
+    def post(self, request):
+        Token.objects.filter(user=request.user).delete()
+        return Response({'message': 'Sesión cerrada'})
 
 
 class UsuarioPerfilView(APIView):
@@ -150,11 +213,20 @@ class PasswordResetView(APIView):
     )
     def post(self, request):
         correo = (request.data.get("correo") or "").strip()
-        if not correo:
+        telefono = "".join(ch for ch in str(request.data.get("telefono") or "") if ch.isdigit())
+        if not correo and not telefono:
             return Response({"message": "Escribe el correo"}, status=status.HTTP_400_BAD_REQUEST)
 
         respuesta = {"message": MENSAJE_RECUPERAR}
-        usuario = Usuario.objects.filter(correo__iexact=correo).first()
+        if correo:
+            usuario = Usuario.objects.filter(correo__iexact=correo).first()
+        else:
+            # Búsqueda por teléfono en el servidor: la lista de usuarios ya no es pública.
+            usuario = next(
+                (u for u in Usuario.objects.exclude(telefono="")
+                 if "".join(ch for ch in u.telefono if ch.isdigit()).endswith(telefono[-10:])),
+                None,
+            ) if len(telefono) >= 7 else None
         if not usuario:
             return Response(respuesta)
 
@@ -246,7 +318,7 @@ class PasswordResetConfirmarView(APIView):
             )
 
         usuario = registro.usuario
-        usuario.contrasena = contrasena
+        usuario.contrasena = make_password(contrasena)
         usuario.save(update_fields=["contrasena"])
         registro.usado = True
         registro.save(update_fields=["usado"])
@@ -302,12 +374,21 @@ class LoginGoogleView(APIView):
                 telefono="",
                 contrasena="",
             )
+        if not usuario.activo:
+            return Response({'message': 'Usuario suspendido. Comunícate con tu agencia'},
+                            status=status.HTTP_403_FORBIDDEN)
         return Response(emitir_sesion(usuario))
 
 ##################################################################################################
 class UsuarioView(APIView):
+    # El registro desde la app es público (queda como cliente); el resto se revisa por rol.
+    permission_classes = [AllowAny]
+
     @swagger_auto_schema(
-        operation_description="Crea un nuevo usuario",
+        operation_description=(
+            "Crea un usuario. Sin sesión: registro de cliente (rol 4, sin agencia). "
+            "Administrador: conductores o clientes de su agencia. Superadministrador: cualquiera."
+        ),
         request_body=UsuarioEntrada,
         responses={201: MensajeSalida}
     )
@@ -321,6 +402,25 @@ class UsuarioView(APIView):
         telefono = request.data.get('telefono')
         contrasena = request.data.get('contrasena')
         licencia = request.data.get('licencia', '')
+
+        yo = usuario_de(request)
+        if yo is None:
+            rol_id, agencia_id = ROL_CLIENTE, None
+        elif es_admin(yo):
+            if str(rol_id) not in (str(ROL_CONDUCTOR), str(ROL_CLIENTE)):
+                return prohibido("Un administrador solo crea conductores o clientes")
+            if not gestiona_agencia(yo, agencia_id):
+                return prohibido("Solo puedes crear usuarios de tu agencia")
+        elif not es_super(yo):
+            return prohibido()
+
+        if not correo or not numero_documento or not contrasena:
+            return Response({'message': 'Correo, documento y contraseña son obligatorios'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if Usuario.objects.filter(correo__iexact=correo).exists() or \
+                Usuario.objects.filter(numero_documento=numero_documento).exists():
+            return Response({'message': 'Ya existe un usuario con ese correo o documento'},
+                            status=status.HTTP_400_BAD_REQUEST)
         usuario = Usuario.objects.create(
             nombre_completo=nombre_completo,
             rol_id=rol_id,
@@ -328,7 +428,7 @@ class UsuarioView(APIView):
             numero_documento=numero_documento,
             correo=correo,
             telefono=telefono,
-            contrasena=contrasena,
+            contrasena=make_password(contrasena),
             licencia=licencia
         )
         asociar_agencia(usuario, agencia_id)
@@ -339,7 +439,14 @@ class UsuarioView(APIView):
         responses={200: UsuarioEntrada()}
     )
     def get(self, request):
-        usuariolista = Usuario.objects.all()
+        yo = usuario_de(request)
+        if es_super(yo):
+            usuariolista = Usuario.objects.all()
+        elif es_admin(yo):
+            ids = UsuarioAgencia.objects.filter(agencia_id__in=agencias_de(yo)).values_list("usuario_id", flat=True)
+            usuariolista = Usuario.objects.filter(id__in=set(ids) | {yo.id})
+        else:
+            return prohibido()
         lista_usuarios = []
         for usuario in usuariolista:
             lista_usuarios.append(usuario_json(usuario))
@@ -352,7 +459,9 @@ class UsuarioIdView(APIView):
         responses={200: UsuarioEntrada()}
     )
     def get(self, request, id):
-        usuario = Usuario.objects.get(id=id)
+        usuario = get_object_or_404(Usuario, id=id)
+        if not puede_ver_usuario(usuario_de(request), usuario):
+            return prohibido()
         return Response(usuario_json(usuario))
 
     @swagger_auto_schema(
@@ -361,19 +470,43 @@ class UsuarioIdView(APIView):
         responses={200: MensajeSalida}
     )
     def put(self, request, id):
-        usuario = Usuario.objects.get(id=id)
-        usuario.nombre_completo = request.data.get('nombre_completo')
-        usuario.rol_id = request.data.get('rol_id')
-        usuario.tipo_documento = request.data.get('tipo_documento')
-        usuario.numero_documento = request.data.get('numero_documento')
-        usuario.correo = request.data.get('correo')
-        usuario.telefono = request.data.get('telefono')
-        if request.data.get('contrasena'):
-            usuario.contrasena = request.data.get('contrasena')
-        if request.data.get('licencia') is not None:
-            usuario.licencia = request.data.get('licencia')
+        usuario = get_object_or_404(Usuario, id=id)
+        yo = usuario_de(request)
+        if not puede_ver_usuario(yo, usuario):
+            return prohibido()
+        datos = request.data
+        mismo = yo.id == usuario.id
+        rol_nuevo = datos.get('rol_id', usuario.rol_id)
+        agencia_nueva = datos.get('agencia_id')
+        if not es_super(yo):
+            # Nadie cambia su propio rol, y un admin no puede crear administradores.
+            if str(rol_nuevo) != str(usuario.rol_id) and (mismo or str(rol_nuevo) not in (str(ROL_CONDUCTOR), str(ROL_CLIENTE))):
+                return prohibido("No puedes cambiar ese rol")
+            if agencia_nueva not in (None, "") and (mismo or not gestiona_agencia(yo, agencia_nueva)):
+                return prohibido("No puedes asignar esa agencia")
+        correo_anterior = usuario.correo
+        usuario.nombre_completo = datos.get('nombre_completo', usuario.nombre_completo)
+        usuario.rol_id = rol_nuevo
+        usuario.tipo_documento = datos.get('tipo_documento', usuario.tipo_documento)
+        usuario.numero_documento = datos.get('numero_documento', usuario.numero_documento)
+        usuario.correo = datos.get('correo', usuario.correo)
+        usuario.telefono = datos.get('telefono', usuario.telefono)
+        if datos.get('contrasena'):
+            usuario.contrasena = make_password(datos.get('contrasena'))
+        if datos.get('licencia') is not None:
+            usuario.licencia = datos.get('licencia')
+        if 'activo' in datos:
+            nuevo_activo = str(datos.get('activo')).lower() in ("true", "1")
+            if mismo and nuevo_activo != usuario.activo:
+                return prohibido("No puedes suspenderte a ti mismo")
+            usuario.activo = nuevo_activo
         usuario.save()
-        asociar_agencia(usuario, request.data.get('agencia_id'))
+        if not usuario.activo:
+            # La suspensión corta las sesiones abiertas (app y web).
+            Token.objects.filter(user__username=usuario.correo).delete()
+        sincronizar_auth_user(correo_anterior, usuario)
+        if not mismo:
+            asociar_agencia(usuario, agencia_nueva)
         return Response({'message': 'Usuario actualizado exitosamente'})
 
     @swagger_auto_schema(
@@ -381,30 +514,39 @@ class UsuarioIdView(APIView):
         responses={200: MensajeSalida}
     )
     def delete(self, request, id):
-        usuario = Usuario.objects.get(id=id)
+        usuario = get_object_or_404(Usuario, id=id)
+        yo = usuario_de(request)
+        if yo.id == usuario.id or not (es_super(yo) or (es_admin(yo) and puede_ver_usuario(yo, usuario))):
+            return prohibido()
         usuario.delete()
         return Response({'message': 'Usuario eliminado exitosamente'})
 
 
 class UsuarioDocumentoView(APIView):
+    permission_classes = [SoloPersonal]
+
     @swagger_auto_schema(
         operation_description="Busca un usuario por su número de documento"
     )
     def get(self, request, numero_documento):
         usuario = Usuario.objects.filter(numero_documento=numero_documento).first()
-        if not usuario:
+        if not usuario or not puede_ver_usuario(usuario_de(request), usuario):
             return Response({'message': 'Usuario no encontrado'})
         return Response(usuario_json(usuario))
 
 
 ##################################################################################################
 class AgenciaView(APIView):
+    permission_classes = [LecturaPublica]
+
     @swagger_auto_schema(
         operation_description="Crea una nueva agencia",
         request_body=AgenciaEntrada,
         responses={201: MensajeSalida}
     )
     def post(self, request):
+        if not es_super(usuario_de(request)):
+            return prohibido("Solo el superadministrador crea agencias")
         nombre = request.data.get('nombre')
         nit = request.data.get('nit')
         direccion = request.data.get('direccion')
@@ -439,12 +581,16 @@ class AgenciaView(APIView):
 
 
 class AgenciaIdView(APIView):
+    permission_classes = [LecturaPublica]
+
     @swagger_auto_schema(
         operation_description="Actualizar Agencia",
         request_body=AgenciaEntrada
     )
     def put(self, request, id):
-        agenciaB = Agencia.objects.get(id=id)
+        agenciaB = get_object_or_404(Agencia, id=id)
+        if not gestiona_agencia(usuario_de(request), agenciaB.id):
+            return prohibido()
         agenciaB.nombre = request.data.get("nombre")
         agenciaB.nit = request.data.get("nit")
         agenciaB.direccion = request.data.get("direccion")
@@ -457,7 +603,9 @@ class AgenciaIdView(APIView):
         operation_description="Eliminar agencia"
     )
     def delete(self, request, id):
-        agenciaEliminar = Agencia.objects.get(id=id)
+        agenciaEliminar = get_object_or_404(Agencia, id=id)
+        if not es_super(usuario_de(request)):
+            return prohibido("Solo el superadministrador elimina agencias")
         agenciaEliminar.delete()
         return Response({"mensaje": "Agencia eliminada"})
 
@@ -465,7 +613,7 @@ class AgenciaIdView(APIView):
         operation_description="Listar Agencia"
     )
     def get(self, request, id):
-        registroEncontrado = Agencia.objects.get(id=id)
+        registroEncontrado = get_object_or_404(Agencia, id=id)
         return Response({
             "id": registroEncontrado.id,
             "nombre": registroEncontrado.nombre,
@@ -477,6 +625,7 @@ class AgenciaIdView(APIView):
 
 
 class AgenciaNitView(APIView):
+    permission_classes = [AllowAny]
     @swagger_auto_schema(
         operation_description="Busca una agencia por su NIT"
     )
@@ -495,6 +644,7 @@ class AgenciaNitView(APIView):
 
 
 class AgenciaDireccionView(APIView):
+    permission_classes = [AllowAny]
     @swagger_auto_schema(
         operation_description="Busca agencias por dirección"
     )
@@ -525,7 +675,17 @@ class UsuarioAgenciaView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        asociacion = UsuarioAgencia.objects.create(**serializer.validated_data)
+        datos = serializer.validated_data
+        yo = usuario_de(request)
+        objetivo = datos.get("usuario")
+        objetivo = objetivo if isinstance(objetivo, Usuario) else Usuario.objects.filter(id=request.data.get("usuario_id")).first()
+        agencia = datos.get("agencia")
+        agencia_id = agencia.id if isinstance(agencia, Agencia) else request.data.get("agencia_id")
+        if not gestiona_agencia(yo, agencia_id) or (
+            not es_super(yo) and objetivo is not None and objetivo.rol_id not in (ROL_CONDUCTOR, ROL_CLIENTE)
+        ):
+            return prohibido()
+        asociacion = UsuarioAgencia.objects.create(**datos)
         return Response(
             {
                 'id': asociacion.id,
@@ -540,7 +700,13 @@ class UsuarioAgenciaView(APIView):
         responses={200: UsuarioAgenciaEntrada()}
     )   
     def get(self, request):
-        asociaciones = UsuarioAgencia.objects.all()
+        yo = usuario_de(request)
+        if es_super(yo):
+            asociaciones = UsuarioAgencia.objects.all()
+        elif es_admin(yo):
+            asociaciones = UsuarioAgencia.objects.filter(agencia_id__in=agencias_de(yo))
+        else:
+            asociaciones = UsuarioAgencia.objects.filter(usuario=yo)
         lista_asociaciones = []
         for asociacion in asociaciones:
             lista_asociaciones.append({
@@ -555,6 +721,8 @@ class UsuarioAgenciaView(APIView):
         responses={200: MensajeSalida}
     )
     def delete(self, request, id):
-        asociacion = UsuarioAgencia.objects.get(id=id)
+        asociacion = get_object_or_404(UsuarioAgencia, id=id)
+        if not gestiona_agencia(usuario_de(request), asociacion.agencia_id):
+            return prohibido()
         asociacion.delete()
         return Response({'message': 'Asociación de usuario y agencia eliminada exitosamente'})
