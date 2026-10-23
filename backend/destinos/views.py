@@ -1,3 +1,5 @@
+from rest_framework import status
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
@@ -6,6 +8,9 @@ from .serializer import (
     DestinoEntrada, HopedajeEntrada, SitioTuristicoEntrada, ImagenEntrada, MensajeSalida, DepartamentoSerializer
 )
 from .models import Destino, Hospedaje, SitioTuristico, ImagenDestino, Departamento
+from .imagenes import (
+    archivo_imagen, destino_json, guardar_imagen_destino, imagen_url, resolver_departamento,
+)
 from usuarios.permisos import LecturaPublica
 
 
@@ -31,63 +36,65 @@ class DepartamentoView(VistaCatalogo):
 ##########################################################################################3
 
 class DestinoView(VistaCatalogo):
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
     @swagger_auto_schema(
         operation_description="Listar destinos"
     )
     def get(self, request):
-        destinoLista = Destino.objects.all()
-        lista = []
-        for destino in destinoLista:
-            lista.append({
-                "id": destino.id,
-                "nombre": destino.nombre,
-                "departamento": destino.departamento.nombre,
-                "descripcion": destino.descripcion,
-            })
-        return Response(lista)
+        return Response([destino_json(destino, request) for destino in Destino.objects.all()])
 
     @swagger_auto_schema(
-        operation_description="Guardar destino",
+        operation_description="Guardar destino con foto opcional",
         request_body=DestinoEntrada,
         responses={201: MensajeSalida}
     )
     def post(self, request):
         nombre = request.data.get("nombre")
-        departamento = request.data.get("departamento")
-        descripcion = request.data.get("descripcion")
-
-        Destino.objects.create(
+        descripcion = request.data.get("descripcion") or ""
+        destino = Destino.objects.create(
             nombre=nombre,
-            departamento=departamento,
-            descripcion=descripcion
+            departamento=resolver_departamento(request.data.get("departamento")),
+            descripcion=descripcion,
         )
-        return Response({"mensaje": "Destino almacenado correctamente"})
+        guardar_imagen_destino(destino, archivo_imagen(request), descripcion)
+        data = destino_json(destino, request)
+        data["mensaje"] = "Destino almacenado correctamente"
+        return Response(data, status=status.HTTP_201_CREATED)
 
 
 class DestinoIdView(VistaCatalogo):
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
     @swagger_auto_schema(
         operation_description="Listar destino por id"
     )
     def get(self, request, id):
         registroEncontrado = Destino.objects.get(id=id)
-        return Response({
-            "id": registroEncontrado.id,
-            "nombre": registroEncontrado.nombre,
-            "departamento": registroEncontrado.departamento.nombre,
-            "descripcion": registroEncontrado.descripcion,
-        })
+        return Response(destino_json(registroEncontrado, request))
+
+    def _guardar(self, request, destino):
+        if request.data.get("nombre") is not None:
+            destino.nombre = request.data.get("nombre")
+        if request.data.get("departamento") is not None:
+            destino.departamento = resolver_departamento(request.data.get("departamento"))
+        if request.data.get("descripcion") is not None:
+            destino.descripcion = request.data.get("descripcion")
+        destino.save()
+        guardar_imagen_destino(destino, archivo_imagen(request), request.data.get("descripcion") or "")
+        data = destino_json(destino, request)
+        data["mensaje"] = "Destino actualizado"
+        return Response(data)
 
     @swagger_auto_schema(
-        operation_description="Actualizar destino",
+        operation_description="Actualizar destino e imagen",
         request_body=DestinoEntrada
     )
     def put(self, request, id):
-        destinoB = Destino.objects.get(id=id)
-        destinoB.nombre = request.data.get("nombre")
-        destinoB.departamento = request.data.get("departamento")
-        destinoB.descripcion = request.data.get("descripcion")
-        destinoB.save()
-        return Response({"mensaje": "Destino actualizado"})
+        return self._guardar(request, Destino.objects.get(id=id))
+
+    def patch(self, request, id):
+        return self._guardar(request, Destino.objects.get(id=id))
 
     @swagger_auto_schema(
         operation_description="Eliminar destino"
@@ -106,12 +113,7 @@ class DestinoDepartamentoView(VistaCatalogo):
         destinoLista = Destino.objects.filter(departamento__nombre__icontains=departamento)
         lista = []
         for destino in destinoLista:
-            lista.append({
-                "id": destino.id,
-                "nombre": destino.nombre,
-                "departamento": destino.departamento.nombre,
-                "descripcion": destino.descripcion,
-            })
+            lista.append(destino_json(destino, request))
         return Response(lista)
 
 
@@ -123,12 +125,7 @@ class DestinoNombreView(VistaCatalogo):
         destinoLista = Destino.objects.filter(nombre__icontains=nombre)
         lista = []
         for destino in destinoLista:
-            lista.append({
-                "id": destino.id,
-                "nombre": destino.nombre,
-                "departamento": destino.departamento.nombre,
-                "descripcion": destino.descripcion,
-            })
+            lista.append(destino_json(destino, request))
         return Response(lista)
 
 
@@ -324,6 +321,8 @@ class SitioTuristicoNombreView(VistaCatalogo):
 
 ##################################################################################################
 class ImagenView(VistaCatalogo):
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
     @swagger_auto_schema(
         operation_description="Listar imagenes"
     )
@@ -333,7 +332,7 @@ class ImagenView(VistaCatalogo):
         for imagen in imagenLista:
             lista.append({
                 "id": imagen.id,
-                "url_img": imagen.url_img.url if imagen.url_img else None,
+                "url_img": imagen_url(imagen.url_img, request),
                 "destino_id": imagen.destino_id,
                 "descripcion": imagen.descripcion,
             })
@@ -345,16 +344,21 @@ class ImagenView(VistaCatalogo):
         responses={201: MensajeSalida}
     )
     def post(self, request):
-        url_img = request.data.get("url_img")
         destino_id = request.data.get("destino_id")
         descripcion = request.data.get("descripcion")
-
-        ImagenDestino.objects.create(
-            url_img=url_img,
+        archivo = archivo_imagen(request) or request.data.get("url_img")
+        imagen = ImagenDestino.objects.create(
+            url_img=archivo,
             destino_id=destino_id,
-            descripcion=descripcion
+            descripcion=descripcion or "",
         )
-        return Response({"mensaje": "Imagen almacenada correctamente"})
+        return Response({
+            "id": imagen.id,
+            "url_img": imagen_url(imagen.url_img, request),
+            "destino_id": imagen.destino_id,
+            "descripcion": imagen.descripcion,
+            "mensaje": "Imagen almacenada correctamente",
+        }, status=status.HTTP_201_CREATED)
 
 
 class ImagenIdView(VistaCatalogo):
@@ -365,7 +369,7 @@ class ImagenIdView(VistaCatalogo):
         registroEncontrado = ImagenDestino.objects.get(id=id)
         return Response({
             "id": registroEncontrado.id,
-            "url_img": registroEncontrado.url_img.url if registroEncontrado.url_img else None,
+            "url_img": imagen_url(registroEncontrado.url_img, request),
             "destino_id": registroEncontrado.destino_id,
             "descripcion": registroEncontrado.descripcion,
         })

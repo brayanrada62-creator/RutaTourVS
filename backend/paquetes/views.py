@@ -9,7 +9,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
 
-from destinos.models import Departamento, Destino, ImagenDestino
+from destinos.imagenes import destino_json, guardar_imagen_destino, imagen_url, resolver_departamento
+from destinos.models import Destino
 
 from .serializer import (
     PaqueteRegistrarEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida
@@ -22,15 +23,6 @@ class VistaCatalogo(APIView):
     """Lectura pública; crear, editar y borrar solo administrador o superadministrador."""
     permission_classes = [LecturaPublica]
 
-
-
-def imagen_url(campo):
-    if not campo:
-        return None
-    try:
-        return campo.url
-    except ValueError:
-        return None
 
 
 def parse_ids(valor):
@@ -76,33 +68,6 @@ def valores_campo(data, *claves):
             if got not in valores:
                 valores.append(got)
     return valores
-
-
-def resolver_departamento(valor):
-    if valor in (None, ""):
-        depto = Departamento.objects.order_by("id").first()
-        if depto:
-            return depto
-        return Departamento.objects.create(nombre="Sin departamento")
-    if str(valor).isdigit():
-        depto = Departamento.objects.filter(id=int(valor)).first()
-        if depto:
-            return depto
-    nombre = str(valor).strip()
-    depto = Departamento.objects.filter(nombre__iexact=nombre).first()
-    if depto:
-        return depto
-    return Departamento.objects.create(nombre=nombre[:100])
-
-
-def guardar_imagen_destino(destino, archivo, descripcion=""):
-    if not archivo:
-        return
-    ImagenDestino.objects.create(
-        url_img=archivo,
-        destino=destino,
-        descripcion=descripcion or "",
-    )
 
 
 def resolver_destino(item, archivo=None):
@@ -222,35 +187,16 @@ def archivos_destino(request, cantidad):
     return archivos
 
 
-def destinos_de_paquete(paquete):
+def destinos_de_paquete(paquete, request=None):
     relaciones = (
         PaqueteDestino.objects
         .filter(paquete=paquete)
         .select_related("destino", "destino__departamento")
     )
-    destinos = []
-    for rel in relaciones:
-        destino = rel.destino
-        imagenes = [
-            {
-                "id": img.id,
-                "url_img": imagen_url(img.url_img),
-                "descripcion": img.descripcion,
-            }
-            for img in ImagenDestino.objects.filter(destino=destino)
-        ]
-        destinos.append({
-            "id": destino.id,
-            "nombre": destino.nombre,
-            "departamento": destino.departamento.nombre if destino.departamento_id else None,
-            "descripcion": destino.descripcion,
-            "imagen": imagenes[0]["url_img"] if imagenes else None,
-            "imagenes": imagenes,
-        })
-    return destinos
+    return [destino_json(rel.destino, request) for rel in relaciones]
 
 
-def paquete_json(paquete):
+def paquete_json(paquete, request=None):
     return {
         "id": paquete.id,
         "nombre": paquete.nombre,
@@ -260,8 +206,8 @@ def paquete_json(paquete):
         "estado": paquete.estado,
         "fecha_creacion": paquete.fecha_creacion,
         "precio": str(paquete.precio),
-        "imagen": imagen_url(getattr(paquete, "imagen", None)),
-        "destinos": destinos_de_paquete(paquete),
+        "imagen": imagen_url(getattr(paquete, "imagen", None), request),
+        "destinos": destinos_de_paquete(paquete, request),
     }
 
 
@@ -329,7 +275,7 @@ class PaqueteView(VistaCatalogo):
         paqueteLista = Paquete.objects.all()
         lista = []
         for paquete in paqueteLista:
-            lista.append(paquete_json(paquete))
+            lista.append(paquete_json(paquete, request))
         return Response(lista)
 
     @swagger_auto_schema(
@@ -342,7 +288,7 @@ class PaqueteView(VistaCatalogo):
             paquete = crear_o_actualizar_paquete(request)
         except ValueError as error:
             return Response({"mensaje": str(error)}, status=status.HTTP_400_BAD_REQUEST)
-        data = paquete_json(paquete)
+        data = paquete_json(paquete, request)
         data["mensaje"] = "Paquete almacenado correctamente"
         return Response(data, status=status.HTTP_201_CREATED)
 
@@ -368,7 +314,7 @@ class PaqueteRegistrarView(VistaCatalogo):
             paquete = crear_o_actualizar_paquete(request)
         except ValueError as error:
             return Response({"mensaje": str(error)}, status=status.HTTP_400_BAD_REQUEST)
-        data = paquete_json(paquete)
+        data = paquete_json(paquete, request)
         data["mensaje"] = "Paquete registrado correctamente"
         return Response(data, status=status.HTTP_201_CREATED)
 
@@ -383,7 +329,7 @@ class PaqueteIdView(VistaCatalogo):
         registroEncontrado = Paquete.objects.filter(id=id).first()
         if not registroEncontrado:
             return Response({"mensaje": "Paquete no encontrado"}, status=status.HTTP_404_NOT_FOUND)
-        return Response(paquete_json(registroEncontrado))
+        return Response(paquete_json(registroEncontrado, request))
 
     @swagger_auto_schema(
         operation_description="Actualizar paquete, imagen y destinos",
@@ -397,7 +343,7 @@ class PaqueteIdView(VistaCatalogo):
             paqueteB = crear_o_actualizar_paquete(request, paqueteB)
         except ValueError as error:
             return Response({"mensaje": str(error)}, status=status.HTTP_400_BAD_REQUEST)
-        data = paquete_json(paqueteB)
+        data = paquete_json(paqueteB, request)
         data["mensaje"] = "Paquete actualizado"
         return Response(data)
 
@@ -416,7 +362,7 @@ class PaqueteDescripcionView(VistaCatalogo):
     )
     def get(self, request, descripcion):
         paqueteLista = Paquete.objects.filter(descripcion__icontains=descripcion)
-        return Response([paquete_json(paquete) for paquete in paqueteLista])
+        return Response([paquete_json(paquete, request) for paquete in paqueteLista])
 
 
 class PaqueteNombreView(VistaCatalogo):
@@ -425,7 +371,7 @@ class PaqueteNombreView(VistaCatalogo):
     )
     def get(self, request, nombre):
         paqueteLista = Paquete.objects.filter(nombre__icontains=nombre)
-        return Response([paquete_json(paquete) for paquete in paqueteLista])
+        return Response([paquete_json(paquete, request) for paquete in paqueteLista])
 
 
 ##################################################################################################
