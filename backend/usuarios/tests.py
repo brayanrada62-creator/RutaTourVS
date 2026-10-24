@@ -20,7 +20,7 @@ class AutenticacionTest(TestCase):
         self.assertTrue(ok.json()["token"])
         malo = c.post("/api/login/", {"correo": self.e.cliente.correo, "contrasena": "mala"}, format="json")
         self.assertEqual(malo.status_code, 401)
-        self.assertEqual(malo.json()["message"], "Credenciales inválidas")
+        self.assertEqual(malo.json()["mensaje"], "Usuario o contraseña incorrectos")
 
     def test_clave_vieja_en_texto_plano_se_cifra_al_entrar(self):
         viejo = self.e.usuario("viejo@rt.co", 4, clave="plana1", cifrar=False)
@@ -34,8 +34,12 @@ class AutenticacionTest(TestCase):
         self.assertEqual(APIClient().get("/api/reserva/").status_code, 401)
         c = Escenario.cliente_http(self.e.cliente)
         self.assertEqual(c.get("/api/reserva/").status_code, 200)
-        self.assertEqual(c.post("/api/logout/").status_code, 200)
-        self.assertEqual(c.get("/api/reserva/").status_code, 401)
+        refresh = c.refresh_token
+        self.assertEqual(c.post("/api/logout/", {"refresh": refresh}, format="json").status_code, 200)
+        self.assertEqual(
+            c.post("/api/token/refresh/", {"refresh": refresh}, format="json").status_code,
+            401,
+        )
 
     def test_catalogo_publico_escritura_restringida(self):
         anonimo = APIClient()
@@ -56,7 +60,9 @@ class UsuariosTest(TestCase):
             "nombre_completo": "N", "rol_id": 1, "agencia_id": self.e.ag_a.id, "tipo_documento": "CC",
             "numero_documento": "999", "correo": "nuevo@rt.co", "telefono": "1", "contrasena": "abc123",
         }, format="json")
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.status_code, 201)
+        self.assertTrue(r.json()["token"])
+        self.assertTrue(r.json()["refresh"])
         nuevo = Usuario.objects.get(correo="nuevo@rt.co")
         self.assertEqual(nuevo.rol_id, 4)
         self.assertTrue(nuevo.contrasena.startswith("pbkdf2_sha256$"))

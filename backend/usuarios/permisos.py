@@ -16,6 +16,54 @@ ROL_CONDUCTOR = 3
 ROL_CLIENTE = 4
 
 
+class EsSuperadministrador(BasePermission):
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        correo = request.user.email or request.user.username
+        return Usuario.objects.filter(
+            correo__iexact=correo,
+            rol__rol__iexact="superadministrador",
+            activo=True,
+        ).exists()
+
+
+class EsAdministrador(BasePermission):
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        correo = request.user.email or request.user.username
+        return Usuario.objects.filter(
+            correo__iexact=correo,
+            rol__rol__iexact="administrador",
+            activo=True,
+        ).exists()
+
+
+class EsConductor(BasePermission):
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        correo = request.user.email or request.user.username
+        return Usuario.objects.filter(
+            correo__iexact=correo,
+            rol__rol__iexact="conductor",
+            activo=True,
+        ).exists()
+
+
+class EsCliente(BasePermission):
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        correo = request.user.email or request.user.username
+        return Usuario.objects.filter(
+            correo__iexact=correo,
+            rol__rol__iexact="cliente",
+            activo=True,
+        ).exists()
+
+
 def usuario_de(request):
     """Usuario de negocio del token, o None si no hay sesión válida."""
     if hasattr(request, "_usuario_rt"):

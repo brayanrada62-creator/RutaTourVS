@@ -1,4 +1,5 @@
 from django.urls import path
+from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     LoginView,
     LoginGoogleView,
@@ -8,10 +9,13 @@ from .views import (
     PasswordResetConfirmarView,
     UsuarioView, UsuarioIdView, UsuarioDocumentoView,
     UsuarioAgenciaView,
+    DashboardResumenView,
     AgenciaView, AgenciaIdView, AgenciaNitView, AgenciaDireccionView,
 )
 
 urlpatterns = [
+    path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
+
     # Login
     path('login/', LoginView.as_view(), name='login'),
     path('login/google/', LoginGoogleView.as_view(), name='login-google'),
@@ -28,6 +32,9 @@ urlpatterns = [
     path('usuarios/documento/<str:numero_documento>/', UsuarioDocumentoView.as_view(), name='usuario-documento'),
     path('usuario-agencia/', UsuarioAgenciaView.as_view(), name='usuario-agencia'),
     path('usuario-agencia/<int:id>/', UsuarioAgenciaView.as_view(), name='usuario-agencia-id'),
+
+    # Dashboard
+    path('dashboard/resumen/', DashboardResumenView.as_view(), name='dashboard-resumen'),
 
     # Agencia
     path('agencia/', AgenciaView.as_view(), name='agencia'),

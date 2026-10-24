@@ -4,20 +4,28 @@ import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import timedelta
+from datetime import datetime, time, timedelta
+from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.contrib.auth import authenticate
 from django.core.mail import send_mail
+from django.db.models import Sum
+from django.db.models.functions import TruncDate
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from drf_yasg.utils import swagger_auto_schema
-from rest_framework.authtoken.models import Token
 from django.contrib.auth.hashers import check_password, identify_hasher, make_password
 from django.shortcuts import get_object_or_404
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
+from drf_yasg import openapi
 
 from .serializer import (
     UsuarioEntrada, loginSerializer, AgenciaEntrada, MensajeSalida,
@@ -29,6 +37,10 @@ from .permisos import (
     ROL_ADMIN, ROL_CLIENTE, ROL_CONDUCTOR, ROL_SUPER, LecturaPublica, SoloPersonal,
     agencias_de, es_admin, es_super, gestiona_agencia, prohibido, usuario_de,
 )
+from buses.models import Bus
+from destinos.models import Hospedaje
+from pagos.models import Pago
+from paquetes.models import Paquete
 
 
 def agencia_ids_de(usuario):
@@ -117,19 +129,13 @@ def emitir_sesion(usuario_negocio):
     if not auth_user.email:
         auth_user.email = usuario_negocio.correo
         auth_user.save(update_fields=['email'])
-    token, _created = Token.objects.get_or_create(user=auth_user)
-    data = usuario_json(usuario_negocio)
+    refresh = RefreshToken.for_user(auth_user)
     return {
-        'message': 'Inicio de sesión exitoso',
-        'token': token.key,
-        'id': usuario_negocio.id,
-        'usuario_id': usuario_negocio.id,
-        'agencia_id': data.get('agencia_id'),
-        'rol_id': usuario_negocio.rol_id,
-        'nombre_completo': usuario_negocio.nombre_completo,
-        'correo': usuario_negocio.correo,
-        'telefono': usuario_negocio.telefono,
-        'usuario': data,
+        'mensaje': 'Login correcto',
+        'token': str(refresh.access_token),
+        'refresh': str(refresh),
+        'usuario': auth_user.username,
+        'rol': usuario_negocio.rol.rol,
     }
 
 
@@ -161,27 +167,92 @@ class LoginView(APIView):
     permission_classes = [AllowAny]
     @swagger_auto_schema(
         request_body=loginSerializer,
-        responses={200: MensajeSalida}
+        responses={200: openapi.Response(description="Tokens JWT y datos del usuario")}
         )
     def post(self, request):
-        email = request.data.get('correo')
+        email = (request.data.get('correo') or '').strip()
         password = request.data.get('contrasena')
-        logeo = Usuario.objects.filter(correo__iexact=(email or "").strip()).first()
-        if logeo and clave_correcta(logeo, password or ""):
-            if not logeo.activo:
-                return Response({'message': 'Usuario suspendido. Comunícate con tu agencia'},
-                                status=status.HTTP_403_FORBIDDEN)
-            return Response(emitir_sesion(logeo))
-        return Response({'message': 'Credenciales inválidas'}, status=status.HTTP_401_UNAUTHORIZED)
+        usuario_negocio = Usuario.objects.filter(correo__iexact=email).first()
+        if usuario_negocio is None:
+            return Response(
+                {"mensaje": "Usuario o contraseña incorrectos"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        auth_user = User.objects.filter(username__iexact=usuario_negocio.correo).first()
+        if auth_user is None:
+            auth_user = User.objects.create_user(
+                username=usuario_negocio.correo,
+                email=usuario_negocio.correo,
+            )
+
+        if not auth_user.has_usable_password():
+            if not clave_correcta(usuario_negocio, password or ""):
+                return Response(
+                    {"mensaje": "Usuario o contraseña incorrectos"},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            auth_user.set_password(password)
+            auth_user.save(update_fields=["password"])
+
+        usuario_autenticado = authenticate(
+            username=usuario_negocio.correo,
+            password=password,
+        )
+        if usuario_autenticado is None:
+            return Response(
+                {"mensaje": "Usuario o contraseña incorrectos"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if not usuario_negocio.activo:
+            return Response(
+                {"mensaje": "Usuario suspendido. Comunícate con tu agencia"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        refresh = RefreshToken.for_user(usuario_autenticado)
+        return Response({
+            "mensaje": "Login correcto",
+            "token": str(refresh.access_token),
+            "refresh": str(refresh),
+            "usuario": usuario_autenticado.username,
+            "rol": usuario_negocio.rol.rol,
+        })
 
 
 class LogoutView(APIView):
-    """Invalida el token en el servidor (el cliente además lo borra de su almacenamiento)."""
+    """Invalida el refresh token; el access token vence en pocos minutos."""
 
-    @swagger_auto_schema(operation_description="Cerrar sesión: elimina el token del usuario")
+    @swagger_auto_schema(
+        operation_description="Cierra sesión invalidando el refresh token.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={"refresh": openapi.Schema(type=openapi.TYPE_STRING)},
+            required=["refresh"],
+        ),
+    )
     def post(self, request):
-        Token.objects.filter(user=request.user).delete()
-        return Response({'message': 'Sesión cerrada'})
+        refresh = request.data.get("refresh")
+        if not refresh:
+            return Response(
+                {"mensaje": "Debes enviar el refresh token"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            refresh_token = RefreshToken(refresh)
+        except TokenError:
+            return Response(
+                {"mensaje": "El refresh token no es válido"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if str(refresh_token.get("user_id")) != str(request.user.id):
+            return Response(
+                {"mensaje": "Ese refresh token pertenece a otro usuario"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        refresh_token.blacklist()
+        return Response({"mensaje": "Sesión cerrada"})
 
 
 class UsuarioPerfilView(APIView):
@@ -327,7 +398,11 @@ class PasswordResetConfirmarView(APIView):
         if auth_user:
             auth_user.set_password(contrasena)
             auth_user.save()
-            Token.objects.filter(user=auth_user).delete()
+            for token_guardado in OutstandingToken.objects.filter(user=auth_user):
+                try:
+                    RefreshToken(token_guardado.token).blacklist()
+                except TokenError:
+                    pass
 
         return Response({"message": "Contraseña actualizada. Ya puedes iniciar sesión."})
 
@@ -390,7 +465,7 @@ class UsuarioView(APIView):
             "Administrador: conductores o clientes de su agencia. Superadministrador: cualquiera."
         ),
         request_body=UsuarioEntrada,
-        responses={201: MensajeSalida}
+        responses={201: openapi.Response(description="Registro exitoso con tokens JWT")}
     )
     def post(self, request):
         nombre_completo = request.data.get('nombre_completo')
@@ -404,8 +479,11 @@ class UsuarioView(APIView):
         licencia = request.data.get('licencia', '')
 
         yo = usuario_de(request)
-        if yo is None:
+        registro_publico = not request.user.is_authenticated
+        if registro_publico:
             rol_id, agencia_id = ROL_CLIENTE, None
+        elif yo is None:
+            return prohibido()
         elif es_admin(yo):
             if str(rol_id) not in (str(ROL_CONDUCTOR), str(ROL_CLIENTE)):
                 return prohibido("Un administrador solo crea conductores o clientes")
@@ -418,12 +496,21 @@ class UsuarioView(APIView):
             return Response({'message': 'Correo, documento y contraseña son obligatorios'},
                             status=status.HTTP_400_BAD_REQUEST)
         if Usuario.objects.filter(correo__iexact=correo).exists() or \
-                Usuario.objects.filter(numero_documento=numero_documento).exists():
+                Usuario.objects.filter(numero_documento=numero_documento).exists() or \
+                User.objects.filter(username__iexact=correo).exists():
             return Response({'message': 'Ya existe un usuario con ese correo o documento'},
                             status=status.HTTP_400_BAD_REQUEST)
+        try:
+            rol = Rol.objects.get(id=rol_id)
+        except Rol.DoesNotExist:
+            return Response(
+                {"mensaje": "El rol seleccionado no existe"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         usuario = Usuario.objects.create(
             nombre_completo=nombre_completo,
-            rol_id=rol_id,
+            rol=rol,
             tipo_documento=tipo_documento,
             numero_documento=numero_documento,
             correo=correo,
@@ -431,7 +518,21 @@ class UsuarioView(APIView):
             contrasena=make_password(contrasena),
             licencia=licencia
         )
+        auth_user = User.objects.create_user(
+            username=correo,
+            email=correo,
+            password=contrasena,
+        )
         asociar_agencia(usuario, agencia_id)
+        if registro_publico:
+            refresh = RefreshToken.for_user(auth_user)
+            return Response({
+                "mensaje": "Registro correcto",
+                "token": str(refresh.access_token),
+                "refresh": str(refresh),
+                "usuario": auth_user.username,
+                "rol": rol.rol,
+            }, status=status.HTTP_201_CREATED)
         return Response({'message': 'Usuario creado exitosamente'})
 
     @swagger_auto_schema(
@@ -501,10 +602,18 @@ class UsuarioIdView(APIView):
                 return prohibido("No puedes suspenderte a ti mismo")
             usuario.activo = nuevo_activo
         usuario.save()
-        if not usuario.activo:
-            # La suspensión corta las sesiones abiertas (app y web).
-            Token.objects.filter(user__username=usuario.correo).delete()
         sincronizar_auth_user(correo_anterior, usuario)
+        auth_user = User.objects.filter(username=usuario.correo).first()
+        if auth_user and not usuario.activo:
+            for token_guardado in OutstandingToken.objects.filter(user=auth_user):
+                try:
+                    RefreshToken(token_guardado.token).blacklist()
+                except TokenError:
+                    pass
+        if datos.get('contrasena'):
+            if auth_user:
+                auth_user.set_password(datos.get('contrasena'))
+                auth_user.save(update_fields=["password"])
         if not mismo:
             asociar_agencia(usuario, agencia_nueva)
         return Response({'message': 'Usuario actualizado exitosamente'})
@@ -533,6 +642,127 @@ class UsuarioDocumentoView(APIView):
         if not usuario or not puede_ver_usuario(usuario_de(request), usuario):
             return Response({'message': 'Usuario no encontrado'})
         return Response(usuario_json(usuario))
+
+
+class DashboardResumenView(APIView):
+    @swagger_auto_schema(
+        operation_description=(
+            "Obtiene las estadísticas de las agencias asociadas al administrador "
+            "autenticado y los últimos paquetes y pagos."
+        )
+    )
+    def get(self, request):
+        correo_usuario = request.user.email or request.user.username
+        try:
+            usuario = Usuario.objects.get(correo__iexact=correo_usuario)
+        except Usuario.DoesNotExist:
+            return Response(
+                {"mensaje": "No se encontró un usuario asociado al token"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if usuario.rol_id != ROL_ADMIN:
+            return Response(
+                {"mensaje": "Solo un administrador puede consultar el resumen"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        agencia_ids = agencias_de(usuario)
+        if not agencia_ids:
+            return Response(
+                {"mensaje": "El administrador no tiene una agencia vinculada"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        cantidad_usuarios = Usuario.objects.filter(
+            usuarioagencia__agencia_id__in=agencia_ids
+        ).distinct().count()
+        cantidad_paquetes = Paquete.objects.filter(agencia_id__in=agencia_ids).count()
+        cantidad_buses = Bus.objects.filter(agencia_id__in=agencia_ids).count()
+        cantidad_hospedajes = Hospedaje.objects.filter(
+            destino__paquetedestino__paquete__agencia_id__in=agencia_ids
+        ).distinct().count()
+
+        zona_horaria = ZoneInfo("America/Bogota")
+        fecha_actual = timezone.localtime(timezone.now(), zona_horaria).date()
+        fecha_inicio = fecha_actual - timedelta(days=6)
+        fecha_inicio_local = timezone.make_aware(
+            datetime.combine(fecha_inicio, time.min),
+            zona_horaria,
+        )
+        fecha_fin_local = timezone.make_aware(
+            datetime.combine(fecha_actual + timedelta(days=1), time.min),
+            zona_horaria,
+        )
+
+        pagos_aprobados = Pago.objects.filter(
+            estado="aprobado",
+            reserva__paquete__agencia_id__in=agencia_ids,
+        )
+        pagos_por_fecha = pagos_aprobados.filter(
+            fecha_pago__gte=fecha_inicio_local,
+            fecha_pago__lt=fecha_fin_local,
+        ).annotate(
+            fecha=TruncDate("fecha_pago", tzinfo=zona_horaria)
+        ).values(
+            "fecha"
+        ).annotate(
+            total=Sum("precio")
+        ).order_by("fecha")
+
+        pagos_ultimos_7_dias = []
+        for numero_dia in range(7):
+            fecha_dia = fecha_inicio + timedelta(days=numero_dia)
+            pagos_ultimos_7_dias.append({
+                "fecha": fecha_dia.isoformat(),
+                "total": Decimal("0.00"),
+            })
+
+        for pago_dia in pagos_por_fecha:
+            for dia in pagos_ultimos_7_dias:
+                if dia["fecha"] == pago_dia["fecha"].isoformat():
+                    dia["total"] = pago_dia["total"] or Decimal("0.00")
+
+        paquetes_recientes = Paquete.objects.filter(
+            agencia_id__in=agencia_ids
+        ).order_by("-fecha_creacion", "-id")[:3]
+        ultimos_paquetes = []
+        for paquete in paquetes_recientes:
+            ultimos_paquetes.append({
+                "id": paquete.id,
+                "nombre": paquete.nombre,
+                "fecha_creacion": timezone.localtime(
+                    paquete.fecha_creacion, zona_horaria
+                ).isoformat(),
+                "precio": paquete.precio,
+                "estado": paquete.estado,
+            })
+
+        pagos_recientes = pagos_aprobados.select_related(
+            "reserva__paquete"
+        ).order_by("-fecha_pago", "-id")[:3]
+        ultimos_pagos = []
+        for pago in pagos_recientes:
+            ultimos_pagos.append({
+                "id": pago.id,
+                "precio": pago.precio,
+                "fecha_pago": timezone.localtime(
+                    pago.fecha_pago, zona_horaria
+                ).isoformat(),
+                "estado": pago.estado,
+                "reserva_id": pago.reserva_id,
+                "paquete_nombre": pago.reserva.paquete.nombre,
+            })
+
+        return Response({
+            "total_usuarios": cantidad_usuarios,
+            "total_paquetes": cantidad_paquetes,
+            "total_buses": cantidad_buses,
+            "total_hospedajes": cantidad_hospedajes,
+            "pagos_ultimos_7_dias": pagos_ultimos_7_dias,
+            "ultimos_paquetes": ultimos_paquetes,
+            "ultimos_pagos": ultimos_pagos,
+        })
 
 
 ##################################################################################################

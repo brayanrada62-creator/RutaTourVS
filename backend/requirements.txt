@@ -2,6 +2,7 @@ asgiref==3.11.1
 Django==5.2.17
 django-cors-headers==4.9.0
 djangorestframework==3.17.1
+djangorestframework-simplejwt==5.5.1
 drf-yasg==1.21.15
 gunicorn==26.2.0
 inflection==0.5.1
