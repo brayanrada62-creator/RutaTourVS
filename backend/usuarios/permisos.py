@@ -1,7 +1,7 @@
 """Permisos de Ruta Tour.
 
 Roles (tabla roles): 1 superadministrador, 2 administrador, 3 conductor, 4 cliente.
-El token de DRF pertenece al usuario de Django (auth.User, username = correo);
+El token JWT pertenece al usuario de Django (auth.User, username = correo);
 aquí se busca el Usuario de negocio con ese correo.
 """
 from rest_framework import status
@@ -47,6 +47,19 @@ def es_conductor(usuario):
     return usuario is not None and usuario.rol_id == ROL_CONDUCTOR
 
 
+def es_personal(usuario):
+    """Superadministrador o administrador."""
+    return es_super(usuario) or es_admin(usuario)
+
+
+def usuario_activo(request):
+    """Usuario de negocio del token, solo si existe y no está suspendido."""
+    usuario = usuario_de(request)
+    if usuario is not None and usuario.activo:
+        return usuario
+    return None
+
+
 def gestiona_agencia(usuario, agencia_id):
     """Superadmin: todas. Administrador: solo las agencias a las que pertenece."""
     if es_super(usuario):
@@ -56,11 +69,9 @@ def gestiona_agencia(usuario, agencia_id):
 
 def trabaja_en_agencia(usuario, agencia_id):
     """Administrador o conductor de esa agencia (o superadmin)."""
-    if es_super(usuario):
+    if gestiona_agencia(usuario, agencia_id):
         return True
-    if usuario is None or usuario.rol_id not in (ROL_ADMIN, ROL_CONDUCTOR):
-        return False
-    return agencia_id is not None and int(agencia_id) in agencias_de(usuario)
+    return es_conductor(usuario) and agencia_id is not None and int(agencia_id) in agencias_de(usuario)
 
 
 def prohibido(mensaje="No tienes permiso para esta operación"):
@@ -68,12 +79,11 @@ def prohibido(mensaje="No tienes permiso para esta operación"):
 
 
 class Autenticado(BasePermission):
-    """Token válido y Usuario de negocio existente (permiso por defecto de la API)."""
+    """Token válido y Usuario de negocio existente y activo (permiso por defecto de la API)."""
     message = "Debes iniciar sesión"
 
     def has_permission(self, request, view):
-        usuario = usuario_de(request)
-        return usuario is not None and usuario.activo
+        return usuario_activo(request) is not None
 
 
 class LecturaPublica(BasePermission):
@@ -83,8 +93,7 @@ class LecturaPublica(BasePermission):
     def has_permission(self, request, view):
         if request.method in SAFE_METHODS:
             return True
-        usuario = usuario_de(request)
-        return usuario is not None and usuario.activo and usuario.rol_id in (ROL_SUPER, ROL_ADMIN)
+        return es_personal(usuario_activo(request))
 
 
 class SoloPersonal(BasePermission):
@@ -92,8 +101,7 @@ class SoloPersonal(BasePermission):
     message = "Solo un administrador puede hacer esta operación"
 
     def has_permission(self, request, view):
-        usuario = usuario_de(request)
-        return usuario is not None and usuario.activo and usuario.rol_id in (ROL_SUPER, ROL_ADMIN)
+        return es_personal(usuario_activo(request))
 
 
 def es_cliente_de_paquete(usuario, paquete_id):

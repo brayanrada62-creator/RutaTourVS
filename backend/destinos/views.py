@@ -1,12 +1,74 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from django.db.models import Prefetch, Q
 from drf_yasg.utils import swagger_auto_schema
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 
 from .serializer import (
     DestinoEntrada, HopedajeEntrada, SitioTuristicoEntrada, ImagenEntrada, MensajeSalida, DepartamentoSerializer
 )
 from .models import Destino, Hospedaje, SitioTuristico, ImagenDestino, Departamento
-from usuarios.permisos import LecturaPublica
+from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
+from usuarios.permisos import LecturaPublica, agencias_de, es_admin, prohibido, usuario_de
+
+
+def imagen_url(campo):
+    if not campo:
+        return None
+    try:
+        return campo.url
+    except ValueError:
+        return None
+
+
+def hospedajes_visibles(yo):
+    """Administrador: los de su agencia (y los que aún no tienen dueño). Los demás: el catálogo completo."""
+    if es_admin(yo):
+        return Hospedaje.objects.filter(Q(agencia_id__in=agencias_de(yo)) | Q(agencia__isnull=True))
+    return Hospedaje.objects.all()
+
+
+def hospedaje_json(hospedaje):
+    return {
+        "id": hospedaje.id,
+        "nombre": hospedaje.nombre,
+        "destino_id": hospedaje.destino_id,
+        "direccion": hospedaje.direccion,
+        "telefono": hospedaje.telefono,
+        "descripcion": hospedaje.descripcion,
+        "agencia_id": hospedaje.agencia_id,
+        "imagen": imagen_url(hospedaje.imagen),
+    }
+
+
+def destino_json(destino):
+    """Destino con su primera imagen y sus hoteles (se usa prefetch_related para no hacer una consulta por destino)."""
+    imagenes = list(destino.imagendestino_set.all())
+    return {
+        "id": destino.id,
+        "nombre": destino.nombre,
+        "departamento": destino.departamento.nombre,
+        "descripcion": destino.descripcion,
+        "imagen": imagen_url(imagenes[0].url_img) if imagenes else None,
+        "hoteles": [{"id": h.id, "nombre": h.nombre} for h in destino.hospedaje_set.all()],
+    }
+
+
+def agencia_para_hospedaje(yo, agencia_id):
+    """(agencia_id, error). El administrador solo crea hospedajes de su agencia; si no indica una, usa la suya."""
+    if not es_admin(yo):
+        return (agencia_id or None), None
+    propias = sorted(agencias_de(yo))
+    if agencia_id in (None, ""):
+        return (propias[0] if propias else None), None
+    if not str(agencia_id).isdigit() or int(agencia_id) not in propias:
+        return None, prohibido("Solo puedes usar hospedajes de tu agencia")
+    return int(agencia_id), None
+
+
+def hospedaje_ajeno(yo, hospedaje):
+    """True si un administrador intenta tocar un hospedaje que pertenece a otra agencia."""
+    return es_admin(yo) and hospedaje.agencia_id is not None and hospedaje.agencia_id not in agencias_de(yo)
 
 
 class VistaCatalogo(APIView):
@@ -32,19 +94,19 @@ class DepartamentoView(VistaCatalogo):
 
 class DestinoView(VistaCatalogo):
     @swagger_auto_schema(
-        operation_description="Listar destinos"
+        operation_description=(
+            "Listar destinos con su imagen y sus hoteles. Opcional: ?search=, ?page= y ?page_size=. "
+            "Un administrador solo ve los hoteles de su agencia."
+        ),
+        manual_parameters=PARAMETROS_LISTA,
     )
     def get(self, request):
-        destinoLista = Destino.objects.all()
-        lista = []
-        for destino in destinoLista:
-            lista.append({
-                "id": destino.id,
-                "nombre": destino.nombre,
-                "departamento": destino.departamento.nombre,
-                "descripcion": destino.descripcion,
-            })
-        return Response(lista)
+        hoteles = Prefetch("hospedaje_set", queryset=hospedajes_visibles(usuario_de(request)))
+        destinoLista = Destino.objects.select_related("departamento").prefetch_related("imagendestino_set", hoteles)
+        texto = texto_busqueda(request)
+        if texto:
+            destinoLista = destinoLista.filter(Q(nombre__icontains=texto) | Q(departamento__nombre__icontains=texto))
+        return Response(paginar(request, destinoLista.order_by("id"), destino_json))
 
     @swagger_auto_schema(
         operation_description="Guardar destino",
@@ -70,12 +132,7 @@ class DestinoIdView(VistaCatalogo):
     )
     def get(self, request, id):
         registroEncontrado = Destino.objects.get(id=id)
-        return Response({
-            "id": registroEncontrado.id,
-            "nombre": registroEncontrado.nombre,
-            "departamento": registroEncontrado.departamento.nombre,
-            "descripcion": registroEncontrado.descripcion,
-        })
+        return Response(destino_json(registroEncontrado))
 
     @swagger_auto_schema(
         operation_description="Actualizar destino",
@@ -104,15 +161,7 @@ class DestinoDepartamentoView(VistaCatalogo):
     )
     def get(self, request, departamento):
         destinoLista = Destino.objects.filter(departamento__nombre__icontains=departamento)
-        lista = []
-        for destino in destinoLista:
-            lista.append({
-                "id": destino.id,
-                "nombre": destino.nombre,
-                "departamento": destino.departamento.nombre,
-                "descripcion": destino.descripcion,
-            })
-        return Response(lista)
+        return Response([destino_json(d) for d in destinoLista])
 
 
 class DestinoNombreView(VistaCatalogo):
@@ -121,35 +170,26 @@ class DestinoNombreView(VistaCatalogo):
     )
     def get(self, request, nombre):
         destinoLista = Destino.objects.filter(nombre__icontains=nombre)
-        lista = []
-        for destino in destinoLista:
-            lista.append({
-                "id": destino.id,
-                "nombre": destino.nombre,
-                "departamento": destino.departamento.nombre,
-                "descripcion": destino.descripcion,
-            })
-        return Response(lista)
+        return Response([destino_json(d) for d in destinoLista])
 
 
 ##################################################################################################
 class HospedajeView(VistaCatalogo):
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
     @swagger_auto_schema(
-        operation_description="Listar hospedajes"
+        operation_description=(
+            "Listar hospedajes con agencia_id e imagen. Un administrador solo ve los de su agencia. "
+            "Opcional: ?search=, ?page= y ?page_size="
+        ),
+        manual_parameters=PARAMETROS_LISTA,
     )
     def get(self, request):
-        hospedajeLista = Hospedaje.objects.all()
-        lista = []
-        for hospedaje in hospedajeLista:
-            lista.append({
-                "id": hospedaje.id,
-                "nombre": hospedaje.nombre,
-                "destino_id": hospedaje.destino_id,
-                "direccion": hospedaje.direccion,
-                "telefono": hospedaje.telefono,
-                "descripcion": hospedaje.descripcion,
-            })
-        return Response(lista)
+        hospedajeLista = hospedajes_visibles(usuario_de(request))
+        texto = texto_busqueda(request)
+        if texto:
+            hospedajeLista = hospedajeLista.filter(Q(nombre__icontains=texto) | Q(direccion__icontains=texto))
+        return Response(paginar(request, hospedajeLista.order_by("id"), hospedaje_json))
 
     @swagger_auto_schema(
         operation_description="Guardar hospedaje",
@@ -163,30 +203,30 @@ class HospedajeView(VistaCatalogo):
         telefono = request.data.get("telefono")
         descripcion = request.data.get("descripcion")
 
+        agencia_id, error = agencia_para_hospedaje(usuario_de(request), request.data.get("agencia_id"))
+        if error:
+            return error
         Hospedaje.objects.create(
             nombre=nombre,
             destino_id=destino_id,
             direccion=direccion,
             telefono=telefono,
-            descripcion=descripcion
+            descripcion=descripcion,
+            agencia_id=agencia_id,
+            imagen=request.FILES.get("imagen"),
         )
         return Response({"mensaje": "Hospedaje almacenado correctamente"})
 
 
 class HospedajeIdView(VistaCatalogo):
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
     @swagger_auto_schema(
         operation_description="Listar hospedaje por id"
     )
     def get(self, request, id):
         registroEncontrado = Hospedaje.objects.get(id=id)
-        return Response({
-            "id": registroEncontrado.id,
-            "nombre": registroEncontrado.nombre,
-            "destino_id": registroEncontrado.destino_id,
-            "direccion": registroEncontrado.direccion,
-            "telefono": registroEncontrado.telefono,
-            "descripcion": registroEncontrado.descripcion,
-        })
+        return Response(hospedaje_json(registroEncontrado))
 
     @swagger_auto_schema(
         operation_description="Actualizar hospedaje",
@@ -194,6 +234,16 @@ class HospedajeIdView(VistaCatalogo):
     )
     def put(self, request, id):
         hospedajeB = Hospedaje.objects.get(id=id)
+        yo = usuario_de(request)
+        if hospedaje_ajeno(yo, hospedajeB):
+            return prohibido("Solo puedes editar hospedajes de tu agencia")
+        if request.data.get("agencia_id") not in (None, ""):
+            agencia_id, error = agencia_para_hospedaje(yo, request.data.get("agencia_id"))
+            if error:
+                return error
+            hospedajeB.agencia_id = agencia_id
+        if request.FILES.get("imagen"):
+            hospedajeB.imagen = request.FILES.get("imagen")
         hospedajeB.nombre = request.data.get("nombre")
         hospedajeB.destino_id = request.data.get("destino_id")
         hospedajeB.direccion = request.data.get("direccion")
@@ -207,6 +257,8 @@ class HospedajeIdView(VistaCatalogo):
     )
     def delete(self, request, id):
         hospedajeEliminar = Hospedaje.objects.get(id=id)
+        if hospedaje_ajeno(usuario_de(request), hospedajeEliminar):
+            return prohibido("Solo puedes eliminar hospedajes de tu agencia")
         hospedajeEliminar.delete()
         return Response({"mensaje": "Hospedaje eliminado"})
 
@@ -216,18 +268,8 @@ class HospedajeNombreView(VistaCatalogo):
         operation_description="Busca hospedajes por nombre"
     )
     def get(self, request, nombre):
-        hospedajeLista = Hospedaje.objects.filter(nombre__icontains=nombre)
-        lista = []
-        for hospedaje in hospedajeLista:
-            lista.append({
-                "id": hospedaje.id,
-                "nombre": hospedaje.nombre,
-                "destino_id": hospedaje.destino_id,
-                "direccion": hospedaje.direccion,
-                "telefono": hospedaje.telefono,
-                "descripcion": hospedaje.descripcion,
-            })
-        return Response(lista)
+        hospedajeLista = hospedajes_visibles(usuario_de(request)).filter(nombre__icontains=nombre)
+        return Response([hospedaje_json(h) for h in hospedajeLista])
 
 
 ##################################################################################################

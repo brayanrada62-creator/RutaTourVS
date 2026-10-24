@@ -7,6 +7,7 @@ from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from django.db.models import Q
 from drf_yasg.utils import swagger_auto_schema
 
 from destinos.models import Departamento, Destino, ImagenDestino
@@ -15,6 +16,7 @@ from .serializer import (
     PaqueteRegistrarEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida
 )
 from .models import Paquete, PaqueteDestino, Itinerario
+from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
 from usuarios.permisos import LecturaPublica
 
 
@@ -251,6 +253,7 @@ def destinos_de_paquete(paquete):
 
 
 def paquete_json(paquete):
+    destinos = destinos_de_paquete(paquete)
     return {
         "id": paquete.id,
         "nombre": paquete.nombre,
@@ -261,7 +264,8 @@ def paquete_json(paquete):
         "fecha_creacion": paquete.fecha_creacion,
         "precio": str(paquete.precio),
         "imagen": imagen_url(getattr(paquete, "imagen", None)),
-        "destinos": destinos_de_paquete(paquete),
+        "cantidad_destinos": len(destinos),
+        "destinos": destinos,
     }
 
 
@@ -285,13 +289,18 @@ def crear_o_actualizar_paquete(request, paquete=None):
     if destinos_enviados and not destinos:
         raise ValueError("No se pudieron leer los destinos. Envíalos como destinos o destino_ids.")
 
+    estado = str(request.data.get("estado") or "activo").strip().lower()
+    estados_validos = [valor for valor, _ in Paquete.ESTADOS]
+    if estado not in estados_validos:
+        raise ValueError(f"Estado no válido. Usa uno de: {', '.join(estados_validos)}")
+
     imagen = request.FILES.get("imagen")
     datos = {
         "nombre": request.data.get("nombre"),
         "agencia_id": request.data.get("agencia_id"),
         "descripcion": request.data.get("descripcion") or "",
         "duracion_estimada": request.data.get("duracion_estimada") or "",
-        "estado": request.data.get("estado") or "activo",
+        "estado": estado,
         "precio": request.data.get("precio") or 0,
     }
     fecha = request.data.get("fecha_creacion")
@@ -323,14 +332,18 @@ class PaqueteView(VistaCatalogo):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     @swagger_auto_schema(
-        operation_description="Listar paquetes con destinos e imágenes"
+        operation_description=(
+            "Listar paquetes con destinos, imágenes y cantidad_destinos. "
+            "Opcional: ?search=, ?page= y ?page_size="
+        ),
+        manual_parameters=PARAMETROS_LISTA,
     )
     def get(self, request):
         paqueteLista = Paquete.objects.all()
-        lista = []
-        for paquete in paqueteLista:
-            lista.append(paquete_json(paquete))
-        return Response(lista)
+        texto = texto_busqueda(request)
+        if texto:
+            paqueteLista = paqueteLista.filter(Q(nombre__icontains=texto) | Q(duracion_estimada__icontains=texto))
+        return Response(paginar(request, paqueteLista.order_by("id"), paquete_json))
 
     @swagger_auto_schema(
         operation_description="Guardar paquete. Acepta imagen de portada, destino_ids e imagenes_destino.",
