@@ -1,5 +1,6 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from django.db.models import Q
 from drf_yasg.utils import swagger_auto_schema
 
 from django.shortcuts import get_object_or_404
@@ -8,37 +9,58 @@ from rest_framework import status
 from .serializer import PagoEntrada, MensajeSalida
 from .models import Pago
 from reservas.models import Reserva
+from reservas.views import codigo_reserva
+from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
 from usuarios.permisos import SoloPersonal, agencias_de, es_admin, es_super, gestiona_agencia, prohibido, usuario_de
 
 
 def pagos_visibles(yo):
     """Superadmin: todos. Admin: los de su agencia. Cliente: los de sus reservas."""
     if es_super(yo):
-        return Pago.objects.all()
-    if es_admin(yo):
-        return Pago.objects.filter(reserva__paquete__agencia_id__in=agencias_de(yo))
-    return Pago.objects.filter(reserva__usuario=yo)
+        qs = Pago.objects.all()
+    elif es_admin(yo):
+        qs = Pago.objects.filter(reserva__paquete__agencia_id__in=agencias_de(yo))
+    else:
+        qs = Pago.objects.filter(reserva__usuario=yo)
+    # Una sola consulta: así el cliente y el paquete no se piden con otros endpoints.
+    return qs.select_related("reserva__usuario", "reserva__paquete")
+
+
+def pago_json(pago):
+    return {
+        "id": pago.id,
+        "precio": pago.precio,
+        "reserva_id": pago.reserva_id,
+        "fecha_pago": pago.fecha_pago,
+        "referencia": pago.referencia,
+        "comprobante": pago.comprobante.url if pago.comprobante else None,
+        "estado": pago.estado,
+        "motivo_rechazo": pago.motivo_rechazo,
+        "cliente": pago.reserva.usuario.nombre_completo,
+        "correo": pago.reserva.usuario.correo,
+        "paquete": pago.reserva.paquete.nombre,
+        "codigo": codigo_reserva(pago.reserva_id),
+    }
 
 
 class PagoView(APIView):
     @swagger_auto_schema(
-        operation_description="Listar pagos"
+        operation_description=(
+            "Listar pagos con cliente, correo, paquete y código de la reserva. "
+            "Opcional: ?search=, ?page= y ?page_size="
+        ),
+        manual_parameters=PARAMETROS_LISTA,
     )
     def get(self, request):
         pagoLista = pagos_visibles(usuario_de(request))
-        lista = []
-        for pago in pagoLista:
-            lista.append({
-                "id": pago.id,
-                "precio": pago.precio,
-                "reserva_id": pago.reserva_id,
-                "fecha_pago": pago.fecha_pago,
-                "referencia": pago.referencia,
-                "comprobante": pago.comprobante.url if pago.comprobante else None,
-                "estado": pago.estado,
-                "motivo_rechazo": pago.motivo_rechazo,
-            })
-        return Response(lista)
+        texto = texto_busqueda(request)
+        if texto:
+            pagoLista = pagoLista.filter(
+                Q(referencia__icontains=texto)
+                | Q(reserva__usuario__nombre_completo__icontains=texto)
+                | Q(reserva__paquete__nombre__icontains=texto)
+            )
+        return Response(paginar(request, pagoLista.order_by("id"), pago_json))
 
     @swagger_auto_schema(
         operation_description="Guardar pago",
@@ -82,21 +104,12 @@ class PagoIdView(APIView):
         operation_description="Listar pago por id"
     )
     def get(self, request, id):
-        registroEncontrado = get_object_or_404(Pago, id=id)
+        registroEncontrado = get_object_or_404(Pago.objects.select_related("reserva__usuario", "reserva__paquete"), id=id)
         yo = usuario_de(request)
         if not (registroEncontrado.reserva.usuario_id == yo.id
                 or gestiona_agencia(yo, registroEncontrado.reserva.paquete.agencia_id)):
             return prohibido()
-        return Response({
-            "id": registroEncontrado.id,
-            "precio": registroEncontrado.precio,
-            "reserva_id": registroEncontrado.reserva_id,
-            "fecha_pago": registroEncontrado.fecha_pago,
-            "referencia": registroEncontrado.referencia,
-            "comprobante": registroEncontrado.comprobante.url if registroEncontrado.comprobante else None,
-            "estado": registroEncontrado.estado,
-            "motivo_rechazo": registroEncontrado.motivo_rechazo,
-        })
+        return Response(pago_json(registroEncontrado))
 
     @swagger_auto_schema(
         operation_description="Actualizar pago",
@@ -143,16 +156,7 @@ class PagoPrecioView(APIView):
         pagoLista = pagos_visibles(usuario_de(request)).filter(precio=precio)
         lista = []
         for pago in pagoLista:
-            lista.append({
-                "id": pago.id,
-                "precio": pago.precio,
-                "reserva_id": pago.reserva_id,
-                "fecha_pago": pago.fecha_pago,
-                "referencia": pago.referencia,
-                "comprobante": pago.comprobante.url if pago.comprobante else None,
-                "estado": pago.estado,
-                "motivo_rechazo": pago.motivo_rechazo,
-            })
+            lista.append(pago_json(pago))
         return Response(lista)
 
 
@@ -166,13 +170,4 @@ class PagoReferenciaView(APIView):
         pago = pagos_visibles(usuario_de(request)).filter(referencia=referencia).first()
         if not pago:
             return Response({"mensaje": "Pago no encontrado"}, status=404)
-        return Response({
-            "id": pago.id,
-            "precio": pago.precio,
-            "reserva_id": pago.reserva_id,
-            "fecha_pago": pago.fecha_pago,
-            "referencia": pago.referencia,
-            "comprobante": pago.comprobante.url if pago.comprobante else None,
-            "estado": pago.estado,
-            "motivo_rechazo": pago.motivo_rechazo,
-        })
+        return Response(pago_json(pago))

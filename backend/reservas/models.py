@@ -46,6 +46,8 @@ class Novedad(models.Model):
     tipo = models.CharField(max_length=80, default="novedad")
     detalle = models.CharField(max_length=400, default="")
     fecha = models.DateTimeField(auto_now_add=True)
+    # La agencia la marca como atendida desde Reportes.
+    resuelta = models.BooleanField(default=False)
 
     class Meta:
         db_table = "novedades"

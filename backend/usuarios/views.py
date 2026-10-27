@@ -18,6 +18,7 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from django.contrib.auth.hashers import check_password, identify_hasher, make_password
 from django.shortcuts import get_object_or_404
@@ -33,8 +34,9 @@ from .serializer import (
     ConfirmarContrasenaEntrada, LoginGoogleEntrada,
 )
 from .models import Usuario, Agencia, Rol, UsuarioAgencia, RecuperarContrasena
+from .paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
 from .permisos import (
-    ROL_ADMIN, ROL_CLIENTE, ROL_CONDUCTOR, ROL_SUPER, LecturaPublica, SoloPersonal,
+    ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, SoloPersonal,
     agencias_de, es_admin, es_super, gestiona_agencia, prohibido, usuario_de,
 )
 from buses.models import Bus
@@ -119,6 +121,13 @@ def puede_ver_usuario(yo, objetivo):
 
 def hash_valor(valor):
     return hashlib.sha256(valor.encode("utf-8")).hexdigest()
+
+
+def revocar_sesiones(auth_user):
+    """Pone en la lista negra todos los refresh token del usuario: nadie puede renovar su sesión (app y web).
+    El access que ya se emitió sigue válido hasta que venza (1 hora), pero Autenticado exige que el usuario esté activo."""
+    for emitido in OutstandingToken.objects.filter(user=auth_user):
+        BlacklistedToken.objects.get_or_create(token=emitido)
 
 
 def emitir_sesion(usuario_negocio):
@@ -256,15 +265,13 @@ class LogoutView(APIView):
 
 
 class UsuarioPerfilView(APIView):
-    permission_classes = [IsAuthenticated]
+    # Permiso por defecto (Autenticado): token válido y usuario activo.
 
     @swagger_auto_schema(
         operation_description="Obtiene el perfil del usuario autenticado"
     )
     def get(self, request):
-        usuario = Usuario.objects.filter(correo=request.user.email).first()
-        if not usuario:
-            return Response({'name': '', 'role': ''})
+        usuario = usuario_de(request)
         data = usuario_json(usuario)
         data['name'] = usuario.nombre_completo
         data['role'] = usuario.rol.rol
@@ -455,6 +462,33 @@ class LoginGoogleView(APIView):
         return Response(emitir_sesion(usuario))
 
 ##################################################################################################
+def datos_conductores(usuarios):
+    """bus_id, placa y viajes_pendientes (programados o en curso) de cada conductor."""
+    from buses.models import Bus_Conductor, Viaje  # import local para evitar ciclos entre apps
+
+    ids = list(usuarios.values_list("id", flat=True))
+    datos = {i: {"bus_id": None, "placa": None, "viajes_pendientes": 0} for i in ids}
+    buses = {}
+    for asignacion in Bus_Conductor.objects.filter(conductor_id__in=ids).select_related("bus").order_by("id"):
+        buses[asignacion.conductor_id] = asignacion.bus
+    pendientes = {
+        fila["bus_id"]: fila["n"]
+        for fila in Viaje.objects.filter(bus_id__in=[b.id for b in buses.values()])
+        .exclude(estado=Viaje.COMPLETADO)
+        .values("bus_id")
+        .annotate(n=Count("id"))
+    }
+    for conductor_id, bus in buses.items():
+        datos[conductor_id] = {"bus_id": bus.id, "placa": bus.placa, "viajes_pendientes": pendientes.get(bus.id, 0)}
+    return datos
+
+
+class RolView(APIView):
+    @swagger_auto_schema(operation_description="Listar roles: [{id, nombre}]")
+    def get(self, request):
+        return Response([{"id": rol.id, "nombre": rol.rol} for rol in Rol.objects.order_by("id")])
+
+
 class UsuarioView(APIView):
     # El registro desde la app es público (queda como cliente); el resto se revisa por rol.
     permission_classes = [AllowAny]
@@ -536,7 +570,15 @@ class UsuarioView(APIView):
         return Response({'message': 'Usuario creado exitosamente'})
 
     @swagger_auto_schema(
-        operation_description="Obtiene todos los usuarios",
+        operation_description=(
+            "Obtiene los usuarios visibles para quien consulta. Filtros opcionales: "
+            "?rol_id= (3 conductores, 2 administradores; con 3 cada conductor trae bus_id, placa y viajes_pendientes), "
+            "?agencia_id=, ?search=, ?page= y ?page_size=."
+        ),
+        manual_parameters=[
+            openapi.Parameter("rol_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+            openapi.Parameter("agencia_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+        ] + PARAMETROS_LISTA,
         responses={200: UsuarioEntrada()}
     )
     def get(self, request):
@@ -548,10 +590,20 @@ class UsuarioView(APIView):
             usuariolista = Usuario.objects.filter(id__in=set(ids) | {yo.id})
         else:
             return prohibido()
-        lista_usuarios = []
-        for usuario in usuariolista:
-            lista_usuarios.append(usuario_json(usuario))
-        return Response(lista_usuarios)
+        params = request.query_params
+        if str(params.get("rol_id", "")).isdigit():
+            usuariolista = usuariolista.filter(rol_id=params["rol_id"])
+        if str(params.get("agencia_id", "")).isdigit():
+            de_la_agencia = UsuarioAgencia.objects.filter(agencia_id=params["agencia_id"]).values_list("usuario_id", flat=True)
+            usuariolista = usuariolista.filter(id__in=de_la_agencia)
+        texto = texto_busqueda(request)
+        if texto:
+            usuariolista = usuariolista.filter(
+                Q(nombre_completo__icontains=texto) | Q(correo__icontains=texto) | Q(numero_documento__icontains=texto)
+            )
+        usuariolista = usuariolista.order_by("id")
+        extras = datos_conductores(usuariolista) if str(params.get("rol_id")) == str(ROL_CONDUCTOR) else {}
+        return Response(paginar(request, usuariolista, lambda u: {**usuario_json(u), **extras.get(u.id, {})}))
 
 
 class UsuarioIdView(APIView):
@@ -836,7 +888,20 @@ class AgenciaIdView(APIView):
         agenciaEliminar = get_object_or_404(Agencia, id=id)
         if not es_super(usuario_de(request)):
             return prohibido("Solo el superadministrador elimina agencias")
-        agenciaEliminar.delete()
+        try:
+            agenciaEliminar.delete()
+        except ProtectedError:
+            from buses.models import Bus  # imports locales para evitar ciclos entre apps
+            from paquetes.models import Paquete
+
+            paquetes = Paquete.objects.filter(agencia=agenciaEliminar).count()
+            buses = Bus.objects.filter(agencia=agenciaEliminar).count()
+            usuarios = UsuarioAgencia.objects.filter(agencia=agenciaEliminar).count()
+            return Response(
+                {"message": f"La agencia tiene {paquetes} paquetes, {buses} buses y {usuarios} usuarios con datos asociados "
+                            "(por ejemplo reservas); elimínalos primero."},
+                status=status.HTTP_409_CONFLICT,
+            )
         return Response({"mensaje": "Agencia eliminada"})
 
     @swagger_auto_schema(

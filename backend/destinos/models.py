@@ -29,6 +29,9 @@ class Hospedaje(models.Model):
     direccion = models.CharField(max_length=255)
     telefono = models.CharField(max_length=20)
     descripcion = models.CharField(max_length=300)
+    # Agencia dueña del hospedaje (vacía = hospedaje anterior, sin dueño asignado).
+    agencia = models.ForeignKey("usuarios.Agencia", on_delete=models.SET_NULL, null=True, blank=True)
+    imagen = models.ImageField(upload_to="hospedajes/", max_length=255, blank=True, null=True)
 
     def __str__(self):
         return self.nombre

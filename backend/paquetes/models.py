@@ -5,6 +5,8 @@ class Paquete(models.Model):
     ESTADOS = [
         ("activo", "Activo"),
         ("inactivo", "Inactivo"),
+        ("borrador", "Borrador"),
+        ("suspendido", "Suspendido"),
         ("agotado", "Agotado"),
     ]
 

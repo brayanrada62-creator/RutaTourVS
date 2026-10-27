@@ -24,6 +24,8 @@ class HopedajeEntrada(serializers.Serializer):
     direccion = serializers.CharField(max_length=255)
     telefono = serializers.CharField(max_length=20)
     descripcion = serializers.CharField(max_length=300)
+    agencia_id = serializers.IntegerField(required=False)
+    imagen = serializers.ImageField(required=False)
 
 
 class SitioTuristicoEntrada(serializers.Serializer):

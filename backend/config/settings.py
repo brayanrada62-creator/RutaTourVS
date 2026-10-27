@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+from datetime import timedelta
 from pathlib import Path
 from datetime import timedelta
 import os
@@ -79,6 +80,7 @@ MIDDLEWARE = [
 ROOT_URLCONF = 'config.urls'
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ],
     # Por defecto todo endpoint exige token válido. Las vistas públicas lo indican.

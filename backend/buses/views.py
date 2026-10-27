@@ -5,11 +5,12 @@ from rest_framework.response import Response
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 
+from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
 from .serializer import TipoBusEntrada, BusEntrada, AsientoEntrada, MensajeSalida, BusConductorEntrada
 from datetime import date, time
 
 from django.db import transaction
-from django.db.models import ProtectedError
+from django.db.models import ProtectedError, Q
 from django.utils import timezone
 
 from .models import Bus_Conductor, TipoBus, Bus, Asiento, Viaje, ParadaCumplida
@@ -17,9 +18,9 @@ from paquetes.models import Itinerario, Paquete
 from reservas.models import AsientoReserva
 from usuarios.models import Usuario, UsuarioAgencia
 
-ROL_CONDUCTOR = 3
 from usuarios.permisos import (
-    LecturaPublica, agencias_de, es_conductor, es_super, gestiona_agencia, prohibido, usuario_de,
+    ROL_CONDUCTOR, LecturaPublica, agencias_de, es_admin, es_conductor, es_super, gestiona_agencia,
+    prohibido, usuario_de,
 )
 
 
@@ -102,25 +103,36 @@ class TipoBusIdView(VistaCatalogo):
 
 
 ##################################################################################################
+def bus_json(bus):
+    return {
+        "id": bus.id,
+        "placa": bus.placa,
+        "agencia_id": bus.agencia_id,
+        "tipo_bus_id": bus.tipo_bus_id,
+        "tipo_bus_nombre": bus.tipo_bus.nombre,
+        "capacidad": bus.tipo_bus.capacidad,
+        "marca": bus.marca,
+        "modelo": bus.modelo,
+        "estado": bus.estado,
+        "fecha_registro": bus.fecha_registro,
+    }
+
+
 class BusView(VistaCatalogo):
     @swagger_auto_schema(
-        operation_description="Listar Buses"
+        operation_description=(
+            "Listar Buses con tipo_bus_nombre y capacidad. Opcional: ?search=, ?page= y ?page_size="
+        ),
+        manual_parameters=PARAMETROS_LISTA,
     )
     def get(self, request):
-        busLista = Bus.objects.all()
-        lista = []
-        for bus in busLista:
-            lista.append({
-                "id": bus.id,
-                "placa": bus.placa,
-                "agencia_id": bus.agencia_id,
-                "tipo_bus_id": bus.tipo_bus_id,
-                "marca": bus.marca,
-                "modelo": bus.modelo,
-                "estado": bus.estado,
-                "fecha_registro": bus.fecha_registro,
-            })
-        return Response(lista)
+        busLista = Bus.objects.select_related("tipo_bus")
+        texto = texto_busqueda(request)
+        if texto:
+            busLista = busLista.filter(
+                Q(placa__icontains=texto) | Q(marca__icontains=texto) | Q(modelo__icontains=texto)
+            )
+        return Response(paginar(request, busLista.order_by("id"), bus_json))
 
     @swagger_auto_schema(
         operation_description="Guardar Bus",
@@ -155,17 +167,8 @@ class BusIdView(VistaCatalogo):
         operation_description="Listar bus por id"
     )
     def get(self, request, id):
-        registroEncontrado = get_object_or_404(Bus, id=id)
-        return Response({
-            "id": registroEncontrado.id,
-            "placa": registroEncontrado.placa,
-            "agencia_id": registroEncontrado.agencia_id,
-            "tipo_bus_id": registroEncontrado.tipo_bus_id,
-            "marca": registroEncontrado.marca,
-            "modelo": registroEncontrado.modelo,
-            "estado": registroEncontrado.estado,
-            "fecha_registro": registroEncontrado.fecha_registro,
-        })
+        registroEncontrado = get_object_or_404(Bus.objects.select_related("tipo_bus"), id=id)
+        return Response(bus_json(registroEncontrado))
 
     @swagger_auto_schema(
         operation_description="Actualizar bus",
@@ -479,7 +482,7 @@ def viajes_visibles(yo):
         return base
     if es_conductor(yo):
         return base.filter(bus_id__in=buses_del_conductor(yo), bus__agencia_id__in=agencias_de(yo))
-    if yo is not None and yo.rol_id == 2:
+    if es_admin(yo):
         return base.filter(bus__agencia_id__in=agencias_de(yo))
     return base.none()
 

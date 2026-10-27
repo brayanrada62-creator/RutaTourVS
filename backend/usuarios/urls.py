@@ -1,5 +1,6 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
+from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     LoginView,
     LoginGoogleView,
@@ -7,7 +8,7 @@ from .views import (
     UsuarioPerfilView,
     PasswordResetView,
     PasswordResetConfirmarView,
-    UsuarioView, UsuarioIdView, UsuarioDocumentoView,
+    UsuarioView, UsuarioIdView, UsuarioDocumentoView, RolView,
     UsuarioAgenciaView,
     DashboardResumenView,
     AgenciaView, AgenciaIdView, AgenciaNitView, AgenciaDireccionView,
@@ -20,6 +21,8 @@ urlpatterns = [
     path('login/', LoginView.as_view(), name='login'),
     path('login/google/', LoginGoogleView.as_view(), name='login-google'),
     path('logout/', LogoutView.as_view(), name='logout'),
+    # Renovar la sesión: POST {"refresh": "..."} devuelve {"access": "..."}
+    path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     path('password/reset/', PasswordResetView.as_view(), name='password-reset'),
     path('password/reset/confirmar/', PasswordResetConfirmarView.as_view(), name='password-reset-confirmar'),
     path('recuperar-contrasena/', PasswordResetView.as_view(), name='recuperar-contrasena'),

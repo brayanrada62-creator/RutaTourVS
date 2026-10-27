@@ -17,12 +17,13 @@ from django.utils import timezone
 
 from usuarios.models import Usuario
 from pagos.models import Pago
-from buses.models import Asiento
+from buses.models import Asiento, Bus_Conductor
 from paquetes.models import Paquete
 from buses.models import Viaje
 from buses.views import conductor_autorizado
+from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
 from usuarios.permisos import (
-    SoloPersonal, agencias_de, es_admin, es_cliente_de_paquete, es_super, gestiona_agencia,
+    SoloPersonal, agencias_de, es_admin, es_cliente_de_paquete, es_conductor, es_super, gestiona_agencia,
     prohibido, trabaja_en_agencia, usuario_de,
 )
 
@@ -103,12 +104,19 @@ def reserva_json(reserva):
 
 
 class ReservaView(APIView):
-    @swagger_auto_schema(operation_description="Listar reservas")
+    @swagger_auto_schema(
+        operation_description="Listar reservas. Opcional: ?search=, ?page= y ?page_size=",
+        manual_parameters=PARAMETROS_LISTA,
+    )
     def get(self, request):
         yo = usuario_de(request)
-        if yo.rol_id == 3:
+        if es_conductor(yo):
             return prohibido("El conductor consulta sus pasajeros desde su viaje")
-        return Response([reserva_json(r) for r in reservas_visibles(yo)])
+        lista = reservas_visibles(yo)
+        texto = texto_busqueda(request)
+        if texto:
+            lista = lista.filter(Q(paquete__nombre__icontains=texto) | Q(usuario__nombre_completo__icontains=texto))
+        return Response(paginar(request, lista.order_by("id"), reserva_json))
 
     @swagger_auto_schema(
         operation_description="Guardar reserva",
@@ -494,13 +502,39 @@ def viaje_operativo(yo, viaje_id):
     return viaje, None
 
 
-def novedad_json(n):
+def conductores_por_bus(bus_ids):
+    """{bus_id: nombre del conductor asignado} en una sola consulta."""
+    asignaciones = Bus_Conductor.objects.filter(bus_id__in=bus_ids).select_related("conductor").order_by("id")
+    return {a.bus_id: a.conductor.nombre_completo for a in asignaciones}
+
+
+def novedad_json(n, conductores=None):
+    viaje = n.viaje
+    paquete = n.paquete or (viaje.paquete if viaje else None)
+    bus_id = viaje.bus_id if viaje else None
+    if conductores is None:
+        conductores = conductores_por_bus([bus_id]) if bus_id else {}
     return {"id": n.id, "paquete_id": n.paquete_id, "viaje_id": n.viaje_id, "tipo": n.tipo,
-            "detalle": n.detalle, "fecha": n.fecha}
+            "detalle": n.detalle, "fecha": n.fecha, "resuelta": n.resuelta,
+            "paquete": paquete.nombre if paquete else None,
+            "placa": viaje.bus.placa if viaje else None,
+            "conductor": conductores.get(bus_id)}
+
+
+def agencia_de_novedad(n):
+    if n.paquete_id:
+        return n.paquete.agencia_id
+    return n.viaje.bus.agencia_id if n.viaje_id else None
 
 
 class NovedadView(APIView):
-    @swagger_auto_schema(operation_description="Novedades de la agencia (personal). Filtro ?viaje_id=")
+    @swagger_auto_schema(
+        operation_description=(
+            "Novedades de la agencia (personal), con paquete, placa y conductor. "
+            "Filtro ?viaje_id=. Opcional: ?search=, ?page= y ?page_size="
+        ),
+        manual_parameters=PARAMETROS_LISTA,
+    )
     def get(self, request):
         yo = usuario_de(request)
         if es_super(yo):
@@ -511,7 +545,12 @@ class NovedadView(APIView):
             return prohibido()
         if request.query_params.get("viaje_id"):
             lista = lista.filter(viaje_id=request.query_params.get("viaje_id"))
-        return Response([novedad_json(n) for n in lista.order_by("-fecha")])
+        texto = texto_busqueda(request)
+        if texto:
+            lista = lista.filter(Q(tipo__icontains=texto) | Q(detalle__icontains=texto))
+        lista = lista.select_related("paquete", "viaje__paquete", "viaje__bus").order_by("-fecha", "-id")
+        conductores = conductores_por_bus(lista.exclude(viaje__isnull=True).values("viaje__bus_id"))
+        return Response(paginar(request, lista, lambda n: novedad_json(n, conductores)))
 
     @swagger_auto_schema(operation_description="Reportar novedad: {viaje_id, tipo, detalle} (o paquete_id para el personal).")
     def post(self, request):
@@ -534,6 +573,28 @@ class NovedadView(APIView):
             return Response({"message": "Escribe el detalle de la novedad"}, status=status.HTTP_400_BAD_REQUEST)
         n = Novedad.objects.create(paquete_id=paquete_id, viaje=viaje, tipo=tipo, detalle=detalle)
         return Response(novedad_json(n), status=status.HTTP_201_CREATED)
+
+
+class NovedadIdView(APIView):
+    @swagger_auto_schema(operation_description="Marcar una novedad como resuelta o no: {resuelta: true|false}")
+    def put(self, request, id):
+        n = get_object_or_404(Novedad.objects.select_related("paquete", "viaje__bus", "viaje__paquete"), id=id)
+        if not gestiona_agencia(usuario_de(request), agencia_de_novedad(n)):
+            return prohibido("Solo la agencia de la novedad puede cambiarla")
+        if "resuelta" not in request.data:
+            return Response({"message": "Indica resuelta: true o false"}, status=status.HTTP_400_BAD_REQUEST)
+        valor = request.data.get("resuelta")
+        n.resuelta = valor is True or str(valor).lower() in ("true", "1", "si", "sí")
+        n.save()
+        return Response(novedad_json(n))
+
+    @swagger_auto_schema(operation_description="Eliminar una novedad")
+    def delete(self, request, id):
+        n = get_object_or_404(Novedad.objects.select_related("paquete", "viaje__bus"), id=id)
+        if not gestiona_agencia(usuario_de(request), agencia_de_novedad(n)):
+            return prohibido("Solo la agencia de la novedad puede eliminarla")
+        n.delete()
+        return Response({"mensaje": "Novedad eliminada"})
 
 
 def chat_json(m):
