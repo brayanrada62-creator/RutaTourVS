@@ -25,7 +25,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from drf_yasg import openapi
 
 from .serializer import (
@@ -125,7 +125,7 @@ def hash_valor(valor):
 
 def revocar_sesiones(auth_user):
     """Pone en la lista negra todos los refresh token del usuario: nadie puede renovar su sesión (app y web).
-    El access que ya se emitió sigue válido hasta que venza (1 hora), pero Autenticado exige que el usuario esté activo."""
+    El access que ya se emitió sigue válido hasta que venza (5 minutos), pero Autenticado exige que el usuario esté activo."""
     for emitido in OutstandingToken.objects.filter(user=auth_user):
         BlacklistedToken.objects.get_or_create(token=emitido)
 
@@ -231,7 +231,10 @@ class LoginView(APIView):
 
 
 class LogoutView(APIView):
-    """Invalida el refresh token; el access token vence en pocos minutos."""
+    """Invalida el refresh token; el access token vence en 5 minutos.
+    Basta con el refresh: no se revisa el access, que puede haber vencido ya."""
+    authentication_classes = []
+    permission_classes = [AllowAny]
 
     @swagger_auto_schema(
         operation_description="Cierra sesión invalidando el refresh token.",
@@ -254,11 +257,6 @@ class LogoutView(APIView):
             return Response(
                 {"mensaje": "El refresh token no es válido"},
                 status=status.HTTP_400_BAD_REQUEST,
-            )
-        if str(refresh_token.get("user_id")) != str(request.user.id):
-            return Response(
-                {"mensaje": "Ese refresh token pertenece a otro usuario"},
-                status=status.HTTP_403_FORBIDDEN,
             )
         refresh_token.blacklist()
         return Response({"mensaje": "Sesión cerrada"})

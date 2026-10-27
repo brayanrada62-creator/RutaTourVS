@@ -1,6 +1,11 @@
+from datetime import timedelta
+
 from django.contrib.auth.hashers import check_password
+from django.contrib.auth.models import User
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from buses.models import Bus_Conductor
 from pagos.models import Pago
@@ -38,6 +43,34 @@ class AutenticacionTest(TestCase):
         self.assertEqual(c.post("/api/logout/", {"refresh": refresh}, format="json").status_code, 200)
         self.assertEqual(
             c.post("/api/token/refresh/", {"refresh": refresh}, format="json").status_code,
+            401,
+        )
+
+    def test_refresh_valido_da_nuevo_access(self):
+        c = Escenario.cliente_http(self.e.cliente)
+        r = APIClient().post("/api/token/refresh/", {"refresh": c.refresh_token}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["access"])
+
+    def test_refresh_vencido_401(self):
+        auth_user, _ = User.objects.get_or_create(username=self.e.cliente.correo)
+        refresh = RefreshToken.for_user(auth_user)
+        refresh.set_exp(from_time=timezone.now() - timedelta(days=8))
+        r = APIClient().post("/api/token/refresh/", {"refresh": str(refresh)}, format="json")
+        self.assertEqual(r.status_code, 401)
+
+    def test_logout_sin_refresh_400(self):
+        c = Escenario.cliente_http(self.e.cliente)
+        self.assertEqual(c.post("/api/logout/", {}, format="json").status_code, 400)
+        self.assertEqual(APIClient().post("/api/logout/", {}, format="json").status_code, 400)
+
+    def test_logout_solo_con_refresh_aunque_el_access_vencio(self):
+        c = Escenario.cliente_http(self.e.cliente)
+        anonimo = APIClient()
+        anonimo.credentials(HTTP_AUTHORIZATION="Bearer vencido")
+        self.assertEqual(anonimo.post("/api/logout/", {"refresh": c.refresh_token}, format="json").status_code, 200)
+        self.assertEqual(
+            APIClient().post("/api/token/refresh/", {"refresh": c.refresh_token}, format="json").status_code,
             401,
         )
 
