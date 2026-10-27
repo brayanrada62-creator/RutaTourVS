@@ -8,7 +8,9 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.db.models import Q
+from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
+from decimal import Decimal, InvalidOperation
 
 from destinos.imagenes import destino_json, guardar_imagen_destino, imagen_url, resolver_departamento
 from destinos.models import Destino
@@ -17,7 +19,7 @@ from .serializer import (
     PaqueteRegistrarEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida
 )
 from .models import Paquete, PaqueteDestino, Itinerario
-from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
+from usuarios.paginacion import PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
 from usuarios.permisos import LecturaPublica
 
 
@@ -277,17 +279,44 @@ class PaqueteView(VistaCatalogo):
 
     @swagger_auto_schema(
         operation_description=(
-            "Listar paquetes con destinos, imágenes y cantidad_destinos. "
-            "Opcional: ?search=, ?page= y ?page_size="
+            "Listar paquetes con destinos e imagen. "
+            "Opcional: ?search=, ?destino_id=, ?estado=, ?agencia_id=, "
+            "?precio_min=, ?precio_max=, ?page= y ?page_size="
         ),
-        manual_parameters=PARAMETROS_LISTA,
+        manual_parameters=PARAMETROS_LISTA + [
+            openapi.Parameter("destino_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+            openapi.Parameter("estado", openapi.IN_QUERY, type=openapi.TYPE_STRING),
+            openapi.Parameter("agencia_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+            openapi.Parameter("precio_min", openapi.IN_QUERY, type=openapi.TYPE_NUMBER),
+            openapi.Parameter("precio_max", openapi.IN_QUERY, type=openapi.TYPE_NUMBER),
+        ],
     )
     def get(self, request):
         paqueteLista = Paquete.objects.all()
-        lista = []
-        for paquete in paqueteLista:
-            lista.append(paquete_json(paquete, request))
-        return Response(lista)
+        texto = texto_busqueda(request)
+        if texto:
+            paqueteLista = paqueteLista.filter(
+                Q(nombre__icontains=texto)
+                | Q(descripcion__icontains=texto)
+                | Q(paquetedestino__destino__nombre__icontains=texto)
+            ).distinct()
+        destino_id = entero_query(request, "destino_id")
+        if destino_id:
+            paqueteLista = paqueteLista.filter(paquetedestino__destino_id=destino_id).distinct()
+        estado = (request.query_params.get("estado") or "").strip()
+        if estado:
+            paqueteLista = paqueteLista.filter(estado__iexact=estado)
+        agencia_id = entero_query(request, "agencia_id")
+        if agencia_id:
+            paqueteLista = paqueteLista.filter(agencia_id=agencia_id)
+        for campo, lookup in (("precio_min", "precio__gte"), ("precio_max", "precio__lte")):
+            crudo = request.query_params.get(campo)
+            if crudo not in (None, ""):
+                try:
+                    paqueteLista = paqueteLista.filter(**{lookup: Decimal(str(crudo))})
+                except InvalidOperation:
+                    return Response({"mensaje": f"{campo} no es un número válido"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(paginar(request, paqueteLista.order_by("id"), lambda p: paquete_json(p, request)))
 
     @swagger_auto_schema(
         operation_description="Guardar paquete. Acepta imagen de portada, destino_ids e imagenes_destino.",
@@ -452,13 +481,24 @@ class PaqueteDestinoIdView(VistaCatalogo):
 ##################################################################################################
 class ItinerarioView(VistaCatalogo):
     @swagger_auto_schema(
-        operation_description="Listar itinerarios"
+        operation_description="Listar itinerarios. Opcional: ?paquete_id=, ?search=, ?page= y ?page_size=",
+        manual_parameters=PARAMETROS_LISTA + [
+            openapi.Parameter("paquete_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+        ],
     )
     def get(self, request):
         itinerarioLista = Itinerario.objects.all()
-        lista = []
-        for itinerario in itinerarioLista:
-            lista.append({
+        texto = texto_busqueda(request)
+        if texto:
+            itinerarioLista = itinerarioLista.filter(
+                Q(titulo__icontains=texto) | Q(lugar__icontains=texto) | Q(descripcion__icontains=texto)
+            )
+        paquete_id = entero_query(request, "paquete_id")
+        if paquete_id:
+            itinerarioLista = itinerarioLista.filter(paquete_id=paquete_id)
+
+        def itinerario_json(itinerario):
+            return {
                 "id": itinerario.id,
                 "titulo": itinerario.titulo,
                 "paquete_id": itinerario.paquete_id,
@@ -466,8 +506,9 @@ class ItinerarioView(VistaCatalogo):
                 "descripcion": itinerario.descripcion,
                 "hora": itinerario.hora,
                 "lugar": itinerario.lugar,
-            })
-        return Response(lista)
+            }
+
+        return Response(paginar(request, itinerarioLista.order_by("id"), itinerario_json))
 
     @swagger_auto_schema(
         operation_description="Guardar itinerario",

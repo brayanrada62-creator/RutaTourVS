@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 
-from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
+from usuarios.paginacion import PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
 from .serializer import TipoBusEntrada, BusEntrada, AsientoEntrada, MensajeSalida, BusConductorEntrada
 from datetime import date, time
 
@@ -365,7 +365,14 @@ class BusConductorIdView(APIView):
 ##################################################################################################
 class AsientoView(VistaCatalogo):
     @swagger_auto_schema(
-        operation_description="Listar asientos"
+        operation_description=(
+            "Listar asientos. Opcional: ?tipo_bus_id=, ?paquete_id= o ?viaje_id= para marcar ocupados."
+        ),
+        manual_parameters=[
+            openapi.Parameter("tipo_bus_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+            openapi.Parameter("paquete_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+            openapi.Parameter("viaje_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+        ],
     )
     def get(self, request):
         asientoLista = Asiento.objects.all()
@@ -373,6 +380,15 @@ class AsientoView(VistaCatalogo):
         if tipo:
             asientoLista = asientoLista.filter(tipo_bus_id=tipo)
         ocupados_qs = AsientoReserva.objects.exclude(reserva__estado__iexact="cancelada")
+        viaje_id = entero_query(request, "viaje_id")
+        if viaje_id:
+            viaje = Viaje.objects.filter(id=viaje_id).first()
+            if viaje:
+                ocupados_qs = ocupados_qs.filter(
+                    Q(reserva__viaje_id=viaje.id)
+                    | Q(reserva__viaje_id__isnull=True, reserva__paquete_id=viaje.paquete_id)
+                )
+                asientoLista = asientoLista.filter(tipo_bus_id=viaje.bus.tipo_bus_id)
         paquete_id = request.query_params.get("paquete_id")
         if paquete_id:
             ocupados_qs = ocupados_qs.filter(reserva__paquete_id=paquete_id)

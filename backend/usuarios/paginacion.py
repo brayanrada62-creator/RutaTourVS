@@ -16,6 +16,16 @@ def texto_busqueda(request):
     return (request.query_params.get("search") or "").strip()
 
 
+def entero_query(request, nombre):
+    valor = request.query_params.get(nombre)
+    if valor in (None, ""):
+        return None
+    try:
+        return int(valor)
+    except (TypeError, ValueError):
+        return None
+
+
 def paginar(request, registros, convertir):
     """registros: queryset (ya ordenado) o lista. convertir: función que arma el diccionario de cada uno."""
     if "page" not in request.query_params:
