@@ -1,4 +1,5 @@
 from django.contrib.auth.hashers import check_password
+from django.contrib.auth.models import User
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -51,6 +52,23 @@ class AutenticacionTest(TestCase):
         viejo.refresh_from_db()
         self.assertTrue(viejo.contrasena.startswith("pbkdf2_sha256$"))
         self.assertTrue(check_password("plana1", viejo.contrasena))
+
+    def test_login_sincroniza_contrasena_auth_desactualizada(self):
+        auth_user = User.objects.create_user(
+            username=self.e.cliente.correo,
+            email=self.e.cliente.correo,
+            password="clave-anterior",
+        )
+
+        respuesta = APIClient().post(
+            "/api/login/",
+            {"correo": self.e.cliente.correo, "contrasena": CLAVE},
+            format="json",
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        auth_user.refresh_from_db()
+        self.assertTrue(auth_user.check_password(CLAVE))
 
     def test_sin_token_401_y_logout_invalida_token(self):
         self.assertEqual(APIClient().get("/api/reserva/").status_code, 401)
