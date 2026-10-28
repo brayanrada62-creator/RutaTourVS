@@ -104,6 +104,35 @@ class SoloPersonal(BasePermission):
         return es_personal(usuario_activo(request))
 
 
+def agencias_de_catalogo(usuario):
+    """Agencias cuyo catálogo ve el usuario. Un cliente registrado por una agencia queda ligado a ella:
+    solo ve y reserva lo suyo. None = sin restricción (cliente independiente, anónimo o personal)."""
+    if usuario is None or usuario.rol_id != ROL_CLIENTE:
+        return None
+    return agencias_de(usuario) or None
+
+
+def filtrar_catalogo(usuario, lista, campo="agencia_id"):
+    """Aplica agencias_de_catalogo a un QuerySet (campo = ruta hasta el id de la agencia)."""
+    agencias = agencias_de_catalogo(usuario)
+    return lista if agencias is None else lista.filter(**{f"{campo}__in": agencias})
+
+
+def es_cliente_de_viaje(usuario, viaje):
+    """Cliente con una reserva no cancelada en esa salida (o antigua, sin salida, del mismo paquete)."""
+    from django.db.models import Q
+    from reservas.models import Reserva  # import local para evitar ciclos entre apps
+
+    if usuario is None or viaje is None:
+        return False
+    return (
+        Reserva.objects.filter(usuario=usuario, paquete_id=viaje.paquete_id)
+        .exclude(estado__iexact="cancelada")
+        .filter(Q(viaje=viaje) | Q(viaje__isnull=True))
+        .exists()
+    )
+
+
 def es_cliente_de_paquete(usuario, paquete_id):
     """Cliente con una reserva no cancelada en ese paquete."""
     from reservas.models import Reserva  # import local para evitar ciclos entre apps

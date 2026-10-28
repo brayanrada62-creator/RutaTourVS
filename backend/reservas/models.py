@@ -9,12 +9,24 @@ class Reserva(models.Model):
     abordado = models.CharField(max_length=20, default="PENDIENTE")
     # Salida elegida. Las reservas anteriores (sin salida) pertenecen al paquete.
     viaje = models.ForeignKey("buses.Viaje", null=True, blank=True, on_delete=models.SET_NULL)
+    # Quién viaja, si no es el titular de la cuenta (vacío = viaja el titular).
+    pasajero_nombre = models.CharField(max_length=120, blank=True, default="")
+    pasajero_documento = models.CharField(max_length=15, blank=True, default="")
 
     def __str__(self):
         return str(self.fecha_reserva)
 
     class Meta:
         db_table = "reserva"
+
+
+def reservas_que_ocupan(paquete_id, viaje_id=None):
+    """Reservas que ocupan sillas. Con salida: las de esa salida y las antiguas sin salida del mismo
+    paquete (no se sabe en cuál viajan, así que bloquean en todas). Sin salida: todas las del paquete."""
+    lista = Reserva.objects.filter(paquete_id=paquete_id).exclude(estado__iexact="cancelada")
+    if viaje_id:
+        lista = lista.filter(models.Q(viaje_id=viaje_id) | models.Q(viaje__isnull=True))
+    return lista
 
 
 class AsientoReserva(models.Model):

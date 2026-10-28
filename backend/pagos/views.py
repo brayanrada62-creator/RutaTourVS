@@ -4,14 +4,37 @@ from django.db.models import Q
 from drf_yasg.utils import swagger_auto_schema
 
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from PIL import Image
 from rest_framework import status
 
 from .serializer import PagoEntrada, MensajeSalida
 from .models import Pago
-from reservas.models import Reserva
-from reservas.views import codigo_reserva
+from reservas.models import AsientoReserva, Reserva
+from reservas.views import codigo_reserva, total_reserva
 from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
 from usuarios.permisos import SoloPersonal, agencias_de, es_admin, es_super, gestiona_agencia, prohibido, usuario_de
+
+
+COMPROBANTE_MAX_BYTES = 5 * 1024 * 1024
+FORMATOS_COMPROBANTE = {"JPEG", "PNG", "WEBP"}
+
+
+def error_comprobante(archivo):
+    """Mensaje de error si el archivo no es una imagen JPG, PNG o WEBP de máximo 5 MB; None si sirve.
+    Se revisa el contenido con Pillow: cambiarle la extensión a un PDF no basta."""
+    if archivo.size > COMPROBANTE_MAX_BYTES:
+        return "El comprobante supera 5 MB"
+    try:
+        with Image.open(archivo) as foto:
+            formato = foto.format
+            foto.verify()
+    except Exception:
+        formato = None
+    archivo.seek(0)
+    if formato not in FORMATOS_COMPROBANTE:
+        return "El comprobante debe ser una imagen JPG, PNG o WEBP"
+    return None
 
 
 def pagos_visibles(yo):
@@ -63,7 +86,11 @@ class PagoView(APIView):
         return Response(paginar(request, pagoLista.order_by("id"), pago_json))
 
     @swagger_auto_schema(
-        operation_description="Guardar pago",
+        operation_description=(
+            "Guardar pago (multipart/form-data). Cliente: 'comprobante' obligatorio (JPG, PNG o WEBP, máx. 5 MB); "
+            "el precio lo calcula el servidor (precio del paquete × sillas), la fecha es la del servidor y el pago "
+            "queda pendiente. 409 si la reserva ya tiene un pago pendiente o aprobado; 400 si está cancelada."
+        ),
         request_body=PagoEntrada,
         responses={201: MensajeSalida}
     )
@@ -83,11 +110,31 @@ class PagoView(APIView):
         personal = gestiona_agencia(yo, reserva.paquete.agencia_id)
         if not personal and reserva.usuario_id != yo.id:
             return prohibido("Esa reserva no es tuya")
+        if comprobante:
+            error = error_comprobante(comprobante)
+            if error:
+                return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
         if not personal:
+            if reserva.estado.lower() == "cancelada":
+                return Response({"message": "La reserva está cancelada"}, status=status.HTTP_400_BAD_REQUEST)
+            previo = Pago.objects.filter(reserva=reserva, estado__in=["pendiente", "aprobado"]).order_by("-id").first()
+            if previo:
+                texto = "Esta reserva ya está pagada" if previo.estado == "aprobado" \
+                    else "Ya hay un pago en revisión para esta reserva"
+                return Response({"message": texto}, status=status.HTTP_409_CONFLICT)
+            if not comprobante:
+                return Response({"message": "Adjunta la foto del comprobante"}, status=status.HTTP_400_BAD_REQUEST)
+            sillas = AsientoReserva.objects.filter(reserva=reserva).count()
+            if sillas == 0:
+                return Response({"message": "La reserva no tiene sillas reservadas"},
+                                status=status.HTTP_400_BAD_REQUEST)
+            precio = total_reserva(reserva, sillas)
             # Solo la agencia aprueba o rechaza: el pago del cliente siempre entra pendiente.
             estado, motivo_rechazo = "pendiente", ""
+            fecha_pago = timezone.now()
+            referencia = (referencia or "")[:255]
 
-        Pago.objects.create(
+        pago = Pago.objects.create(
             precio=precio,
             reserva_id=reserva_id,
             fecha_pago=fecha_pago,
@@ -96,7 +143,7 @@ class PagoView(APIView):
             estado=estado,
             motivo_rechazo=motivo_rechazo
         )
-        return Response({"mensaje": "Pago almacenado correctamente"})
+        return Response({"mensaje": "Pago almacenado correctamente", "id": pago.id, "estado": pago.estado})
 
 
 class PagoIdView(APIView):

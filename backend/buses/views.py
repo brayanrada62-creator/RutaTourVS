@@ -8,6 +8,7 @@ from drf_yasg.utils import swagger_auto_schema
 from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
 from .serializer import TipoBusEntrada, BusEntrada, AsientoEntrada, MensajeSalida, BusConductorEntrada
 from datetime import date, time
+from zoneinfo import ZoneInfo
 
 from django.db import transaction
 from django.db.models import ProtectedError, Q
@@ -15,13 +16,18 @@ from django.utils import timezone
 
 from .models import Bus_Conductor, TipoBus, Bus, Asiento, Viaje, ParadaCumplida
 from paquetes.models import Itinerario, Paquete
-from reservas.models import AsientoReserva
+from reservas.models import AsientoReserva, Reserva, reservas_que_ocupan
 from usuarios.models import Usuario, UsuarioAgencia
 
 from usuarios.permisos import (
-    ROL_CONDUCTOR, LecturaPublica, agencias_de, es_admin, es_conductor, es_super, gestiona_agencia,
+    ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, agencias_de, filtrar_catalogo, es_admin, es_conductor, es_super, gestiona_agencia,
     prohibido, usuario_de,
 )
+
+
+def hoy_colombia():
+    """Fecha de hoy en Colombia. TIME_ZONE es UTC (para guardar fechas); las salidas se programan en hora local."""
+    return timezone.localtime(timezone.now(), ZoneInfo("America/Bogota")).date()
 
 
 class VistaCatalogo(APIView):
@@ -365,17 +371,33 @@ class BusConductorIdView(APIView):
 ##################################################################################################
 class AsientoView(VistaCatalogo):
     @swagger_auto_schema(
-        operation_description="Listar asientos"
+        operation_description=(
+            "Listar asientos. ?viaje_id= devuelve las sillas del bus de esa salida con 'ocupado' calculado "
+            "para esa salida (recomendado para la app). ?tipo_bus_id= y ?paquete_id= se mantienen."
+        ),
+        manual_parameters=[
+            openapi.Parameter("viaje_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+            openapi.Parameter("tipo_bus_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+            openapi.Parameter("paquete_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+        ],
     )
     def get(self, request):
         asientoLista = Asiento.objects.all()
         tipo = request.query_params.get("tipo_bus_id")
-        if tipo:
-            asientoLista = asientoLista.filter(tipo_bus_id=tipo)
         ocupados_qs = AsientoReserva.objects.exclude(reserva__estado__iexact="cancelada")
         paquete_id = request.query_params.get("paquete_id")
-        if paquete_id:
+        if request.query_params.get("viaje_id") is not None:
+            viaje = Viaje.objects.select_related("bus").filter(
+                id=entero_o_none(request.query_params.get("viaje_id"))).first()
+            if viaje is None:
+                return Response({"message": "La salida no existe"}, status=status.HTTP_404_NOT_FOUND)
+            # El mapa es el del bus de ESA salida y la ocupación es solo de esa salida.
+            tipo = viaje.bus.tipo_bus_id
+            ocupados_qs = AsientoReserva.objects.filter(reserva__in=reservas_que_ocupan(viaje.paquete_id, viaje.id))
+        elif paquete_id:
             ocupados_qs = ocupados_qs.filter(reserva__paquete_id=paquete_id)
+        if tipo:
+            asientoLista = asientoLista.filter(tipo_bus_id=tipo)
         ocupados = set(ocupados_qs.values_list("asiento_id", flat=True))
         lista = []
         for asiento in asientoLista:
@@ -476,7 +498,8 @@ def buses_del_conductor(conductor):
 
 
 def viajes_visibles(yo):
-    """Superadmin: todos. Admin: los de buses de su agencia. Conductor: los de su bus asignado."""
+    """Superadmin: todos. Admin: los de buses de su agencia. Conductor: los de su bus asignado.
+    Cliente: las salidas programadas desde hoy (para reservar) y las de sus propias reservas."""
     base = Viaje.objects.select_related("bus", "paquete")
     if es_super(yo):
         return base
@@ -484,6 +507,11 @@ def viajes_visibles(yo):
         return base.filter(bus_id__in=buses_del_conductor(yo), bus__agencia_id__in=agencias_de(yo))
     if es_admin(yo):
         return base.filter(bus__agencia_id__in=agencias_de(yo))
+    if yo is not None and yo.rol_id == ROL_CLIENTE:
+        propias = Reserva.objects.filter(usuario=yo, viaje__isnull=False).values_list("viaje_id", flat=True)
+        para_reservar = filtrar_catalogo(
+            yo, base.filter(estado=Viaje.PROGRAMADO, fecha__gte=hoy_colombia()), "paquete__agencia_id")
+        return base.filter(Q(id__in=para_reservar.values("id")) | Q(id__in=propias))
     return base.none()
 
 
@@ -521,6 +549,7 @@ class ViajeView(APIView):
     @swagger_auto_schema(
         operation_description=(
             "Listar viajes. Conductor: los del bus que tiene asignado. Admin: los de su agencia. "
+            "Cliente: salidas PROGRAMADAS desde hoy y las de sus reservas. "
             "Filtros: ?estado=, ?bus_id=, ?paquete_id="
         ),
         manual_parameters=[

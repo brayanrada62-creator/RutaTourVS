@@ -58,5 +58,5 @@ class Escenario:
         if usuario is not None:
             r = c.post("/api/login/", {"correo": usuario.correo, "contrasena": clave}, format="json")
             assert r.status_code == 200, r.content
-            c.credentials(HTTP_AUTHORIZATION="Token " + r.json()["token"])
+            c.credentials(HTTP_AUTHORIZATION="Bearer " + r.json()["token"])
         return c

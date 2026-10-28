@@ -8,7 +8,9 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
+from django.core.validators import validate_email
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -145,6 +147,28 @@ def emitir_sesion(usuario_negocio):
         'telefono': usuario_negocio.telefono,
         'usuario': data,
     }
+
+
+CLAVE_MINIMA = 8
+
+
+def error_registro(nombre, correo, documento, telefono, clave):
+    """Reglas del registro público (las mismas que valida la app). Devuelve el mensaje o None."""
+    if not str(nombre or "").strip():
+        return "Escribe tu nombre completo"
+    try:
+        validate_email(str(correo or ""))
+    except ValidationError:
+        return "Escribe un correo válido"
+    documento = str(documento or "")
+    if not (documento.isdigit() and 5 <= len(documento) <= 15):
+        return "El documento debe tener de 5 a 15 dígitos"
+    telefono = str(telefono or "")
+    if telefono and not (telefono.isdigit() and 7 <= len(telefono) <= 15):
+        return "El teléfono debe tener de 7 a 15 dígitos"
+    if len(str(clave or "")) < CLAVE_MINIMA:
+        return f"La contraseña debe tener al menos {CLAVE_MINIMA} caracteres"
+    return None
 
 
 def rol_cliente():
@@ -299,9 +323,9 @@ class PasswordResetConfirmarView(APIView):
         contrasena = request.data.get("contrasena") or ""
         confirmar = request.data.get("confirmar") or contrasena
 
-        if len(contrasena) < 6:
+        if len(contrasena) < CLAVE_MINIMA:
             return Response(
-                {"message": "La contraseña debe tener al menos 6 caracteres"},
+                {"message": f"La contraseña debe tener al menos {CLAVE_MINIMA} caracteres"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if contrasena != confirmar:
@@ -425,7 +449,8 @@ class UsuarioView(APIView):
 
     @swagger_auto_schema(
         operation_description=(
-            "Crea un usuario. Sin sesión: registro de cliente (rol 4, sin agencia). "
+            "Crea un usuario. Sin sesión: registro de cliente (rol 4, sin agencia) con nombre, correo válido, "
+            "documento de 5 a 15 dígitos, contraseña de 8 o más y teléfono de 7 a 15 dígitos si se envía (400 si no). "
             "Administrador: conductores o clientes de su agencia. Superadministrador: cualquiera."
         ),
         request_body=UsuarioEntrada,
@@ -445,6 +470,10 @@ class UsuarioView(APIView):
         yo = usuario_de(request)
         if yo is None:
             rol_id, agencia_id = ROL_CLIENTE, None
+            error = error_registro(nombre_completo, correo, numero_documento, telefono, contrasena)
+            if error:
+                return Response({'message': error}, status=status.HTTP_400_BAD_REQUEST)
+            tipo_documento = tipo_documento or "CC"
         elif es_admin(yo):
             if str(rol_id) not in (str(ROL_CONDUCTOR), str(ROL_CLIENTE)):
                 return prohibido("Un administrador solo crea conductores o clientes")

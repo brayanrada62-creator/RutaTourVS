@@ -17,7 +17,7 @@ from .serializer import (
 )
 from .models import Paquete, PaqueteDestino, Itinerario
 from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
-from usuarios.permisos import LecturaPublica
+from usuarios.permisos import LecturaPublica, filtrar_catalogo, usuario_de
 
 
 class VistaCatalogo(APIView):
@@ -333,13 +333,13 @@ class PaqueteView(VistaCatalogo):
 
     @swagger_auto_schema(
         operation_description=(
-            "Listar paquetes con destinos, imágenes y cantidad_destinos. "
-            "Opcional: ?search=, ?page= y ?page_size="
+            "Listar paquetes con destinos, imágenes y cantidad_destinos. Un cliente registrado por una "
+            "agencia solo ve los de esa agencia. Opcional: ?search=, ?page= y ?page_size="
         ),
         manual_parameters=PARAMETROS_LISTA,
     )
     def get(self, request):
-        paqueteLista = Paquete.objects.all()
+        paqueteLista = filtrar_catalogo(usuario_de(request), Paquete.objects.all())
         texto = texto_busqueda(request)
         if texto:
             paqueteLista = paqueteLista.filter(Q(nombre__icontains=texto) | Q(duracion_estimada__icontains=texto))
@@ -393,7 +393,7 @@ class PaqueteIdView(VistaCatalogo):
         operation_description="Listar paquete por id, con destinos e imágenes"
     )
     def get(self, request, id):
-        registroEncontrado = Paquete.objects.filter(id=id).first()
+        registroEncontrado = filtrar_catalogo(usuario_de(request), Paquete.objects.filter(id=id)).first()
         if not registroEncontrado:
             return Response({"mensaje": "Paquete no encontrado"}, status=status.HTTP_404_NOT_FOUND)
         return Response(paquete_json(registroEncontrado))
@@ -428,7 +428,7 @@ class PaqueteDescripcionView(VistaCatalogo):
         operation_description="Busca paquetes por descripción"
     )
     def get(self, request, descripcion):
-        paqueteLista = Paquete.objects.filter(descripcion__icontains=descripcion)
+        paqueteLista = filtrar_catalogo(usuario_de(request), Paquete.objects.filter(descripcion__icontains=descripcion))
         return Response([paquete_json(paquete) for paquete in paqueteLista])
 
 
@@ -437,7 +437,7 @@ class PaqueteNombreView(VistaCatalogo):
         operation_description="Busca paquetes por nombre"
     )
     def get(self, request, nombre):
-        paqueteLista = Paquete.objects.filter(nombre__icontains=nombre)
+        paqueteLista = filtrar_catalogo(usuario_de(request), Paquete.objects.filter(nombre__icontains=nombre))
         return Response([paquete_json(paquete) for paquete in paqueteLista])
 
 

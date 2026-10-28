@@ -15,6 +15,10 @@ class ReservaEntrada(serializers.Serializer):
     paquete_id = serializers.IntegerField()
     viaje_id = serializers.IntegerField(required=False, allow_null=True)
     estado = serializers.CharField(required=False, allow_blank=True)
+    pasajero_nombre = serializers.CharField(required=False, allow_blank=True, max_length=120,
+                                            help_text="Vacío = viaja el titular")
+    pasajero_documento = serializers.CharField(required=False, allow_blank=True, max_length=15,
+                                               help_text="Solo dígitos, 5 a 15")
 
 
 class AsientoReservaEntrada(serializers.Serializer):

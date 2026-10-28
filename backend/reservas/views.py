@@ -4,7 +4,7 @@ from rest_framework import status
 from drf_yasg.utils import swagger_auto_schema
 
 from .serializer import ReservaEntrada, AsientoReservaEntrada, MensajeSalida
-from .models import Reserva, AsientoReserva, GpsPunto, Novedad, ChatMensaje
+from .models import Reserva, AsientoReserva, GpsPunto, Novedad, ChatMensaje, reservas_que_ocupan
 import hashlib
 import hmac
 import re
@@ -20,11 +20,11 @@ from pagos.models import Pago
 from buses.models import Asiento, Bus_Conductor
 from paquetes.models import Paquete
 from buses.models import Viaje
-from buses.views import conductor_autorizado
+from buses.views import conductor_autorizado, entero_o_none, hoy_colombia
 from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
 from usuarios.permisos import (
-    SoloPersonal, agencias_de, es_admin, es_cliente_de_paquete, es_conductor, es_super, gestiona_agencia,
-    prohibido, trabaja_en_agencia, usuario_de,
+    ROL_CLIENTE, SoloPersonal, agencias_de, agencias_de_catalogo, es_admin, es_cliente_de_paquete, es_cliente_de_viaje, es_conductor,
+    es_super, gestiona_agencia, prohibido, trabaja_en_agencia, usuario_de,
 )
 
 
@@ -81,6 +81,32 @@ def puede_ver_paquete_operativo(yo, paquete_id):
     return trabaja_en_agencia(yo, agencia_id) or es_cliente_de_paquete(yo, paquete_id)
 
 
+def error_pasajero(nombre, documento):
+    """Vacíos = viaja el titular. Si es otra persona: nombre de 3 a 120 letras y documento de 5 a 15 dígitos."""
+    if not nombre and not documento:
+        return None
+    if not (3 <= len(nombre) <= 120):
+        return "Escribe el nombre completo del pasajero"
+    if not (documento.isdigit() and 5 <= len(documento) <= 15):
+        return "El documento del pasajero debe tener de 5 a 15 dígitos"
+    return None
+
+
+def nombre_pasajero(reserva, usuario=None):
+    """Nombre de quien viaja: el pasajero indicado o, si no hay, el titular."""
+    if reserva.pasajero_nombre:
+        return reserva.pasajero_nombre
+    usuario = usuario or reserva.usuario
+    return usuario.nombre_completo if usuario else f"Pasajero {reserva.usuario_id}"
+
+
+def total_reserva(reserva, cantidad_sillas=None):
+    """Precio del paquete × sillas reservadas. Lo calcula el servidor, nunca la app."""
+    if cantidad_sillas is None:
+        cantidad_sillas = AsientoReserva.objects.filter(reserva=reserva).count()
+    return reserva.paquete.precio * cantidad_sillas
+
+
 def reserva_json(reserva):
     asientos = list(
         AsientoReserva.objects.filter(reserva=reserva).values_list("asiento__numero_asiento", flat=True)
@@ -89,6 +115,7 @@ def reserva_json(reserva):
     estado = reserva.estado
     if pago and pago.estado == "aprobado" and estado == "pendiente":
         estado = "pagada"
+    viaje = reserva.viaje
     return {
         "id": reserva.id,
         "fecha_reserva": reserva.fecha_reserva,
@@ -100,6 +127,16 @@ def reserva_json(reserva):
         "codigo": codigo_reserva(reserva.id),
         "pago_estado": pago.estado if pago else "",
         "viaje_id": reserva.viaje_id,
+        "pasajero_nombre": reserva.pasajero_nombre,
+        "pasajero_documento": reserva.pasajero_documento,
+        "paquete": reserva.paquete.nombre,
+        "agencia_id": reserva.paquete.agencia_id,
+        "total": str(total_reserva(reserva, len(asientos))),
+        # Salida elegida (null en reservas antiguas sin salida).
+        "viaje_fecha": viaje.fecha.isoformat() if viaje else None,
+        "viaje_hora": viaje.hora.strftime("%H:%M") if viaje else None,
+        "viaje_estado": viaje.estado if viaje else None,
+        "placa": viaje.bus.placa if viaje else None,
     }
 
 
@@ -119,7 +156,10 @@ class ReservaView(APIView):
         return Response(paginar(request, lista.order_by("id"), reserva_json))
 
     @swagger_auto_schema(
-        operation_description="Guardar reserva",
+        operation_description=(
+            "Guardar reserva. El cliente debe enviar viaje_id: una salida PROGRAMADA de ese paquete "
+            "desde hoy (400 si no). El personal puede omitirla."
+        ),
         request_body=ReservaEntrada,
         responses={201: MensajeSalida}
     )
@@ -130,6 +170,22 @@ class ReservaView(APIView):
         if agencia_id is None:
             return Response({"message": "El paquete no existe"}, status=status.HTTP_404_NOT_FOUND)
         personal = gestiona_agencia(yo, agencia_id)
+        catalogo = agencias_de_catalogo(yo)
+        if catalogo is not None and agencia_id not in catalogo:
+            return prohibido("Ese paquete no es de tu agencia")
+        viaje_id = entero_o_none(request.data.get("viaje_id"))
+        viaje = None
+        if viaje_id is not None or not personal:
+            viaje = Viaje.objects.filter(id=viaje_id, paquete_id=paquete_id).first() if viaje_id is not None else None
+            if viaje is None:
+                return Response({"message": "Elige una salida de este paquete"}, status=status.HTTP_400_BAD_REQUEST)
+            if not personal and (viaje.estado != Viaje.PROGRAMADO or viaje.fecha < hoy_colombia()):
+                return Response({"message": "Esa salida ya no recibe reservas"}, status=status.HTTP_400_BAD_REQUEST)
+        pasajero_nombre = str(request.data.get("pasajero_nombre") or "").strip()
+        pasajero_documento = str(request.data.get("pasajero_documento") or "").strip()
+        error = error_pasajero(pasajero_nombre, pasajero_documento)
+        if error:
+            return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
         # Un cliente solo reserva para sí mismo y siempre queda "pendiente".
         usuario_id = request.data.get("usuario_id") if personal else yo.id
         estado = (request.data.get("estado") or "pendiente") if personal else "pendiente"
@@ -138,6 +194,9 @@ class ReservaView(APIView):
             usuario_id=usuario_id,
             paquete_id=paquete_id,
             estado=estado,
+            viaje=viaje,
+            pasajero_nombre=pasajero_nombre,
+            pasajero_documento=pasajero_documento,
         )
         return Response(reserva_json(reserva), status=status.HTTP_201_CREATED)
 
@@ -205,8 +264,9 @@ class AsientoReservaView(APIView):
         ])
 
     @swagger_auto_schema(
-        operation_description="Reservar un asiento. Responde 409 si el asiento ya está reservado "
-                              "en otra reserva no cancelada del mismo paquete.",
+        operation_description="Reservar un asiento. Responde 409 si el asiento ya está reservado en la misma "
+                              "salida (o en una reserva antigua sin salida del paquete) y 400 si la silla no "
+                              "es del bus de la salida.",
         request_body=AsientoReservaEntrada,
     )
     def post(self, request):
@@ -221,12 +281,13 @@ class AsientoReservaView(APIView):
             yo = usuario_de(request)
             if not (reserva.usuario_id == yo.id or gestiona_agencia(yo, reserva.paquete.agencia_id)):
                 return prohibido("Esa reserva no es tuya")
-            ocupado = (
-                AsientoReserva.objects
-                .filter(asiento_id=asiento.id, reserva__paquete_id=reserva.paquete_id)
-                .exclude(reserva__estado__iexact="cancelada")
-                .exists()
-            )
+            if reserva.viaje_id and asiento.tipo_bus_id != reserva.viaje.bus.tipo_bus_id:
+                return Response({"message": "Esa silla no es del bus de la salida"},
+                                status=status.HTTP_400_BAD_REQUEST)
+            ocupado = AsientoReserva.objects.filter(
+                asiento_id=asiento.id,
+                reserva__in=reservas_que_ocupan(reserva.paquete_id, reserva.viaje_id),
+            ).exists()
             if ocupado:
                 return Response({"message": "El asiento ya está reservado"}, status=status.HTTP_409_CONFLICT)
             AsientoReserva.objects.create(asiento_id=asiento.id, reserva_id=reserva.id)
@@ -274,7 +335,7 @@ class PaquetePasajerosView(APIView):
             )
             lista.append({
                 "id": r.id,
-                "nombre": usuario.nombre_completo if usuario else f"Pasajero {r.usuario_id}",
+                "nombre": nombre_pasajero(r, usuario),
                 "detalle": r.paquete.nombre if r.paquete_id else "",
                 "codigo": codigo_reserva(r.id),
                 "asiento": ",".join(str(n) for n in asientos) or "-",
@@ -311,7 +372,7 @@ def pasajero_json(r):
     pago = estado_pago(r)
     return {
         "id": r.id,
-        "nombre": usuario.nombre_completo if usuario else f"Pasajero {r.usuario_id}",
+        "nombre": nombre_pasajero(r, usuario),
         "detalle": r.paquete.nombre if r.paquete_id else "",
         "codigo": codigo_reserva(r.id),
         "asiento": ",".join(str(n) for n in asientos) or "-",
@@ -404,10 +465,11 @@ def gps_json(g):
 
 
 def puede_ver_viaje_gps(yo, viaje):
+    """GPS, chat y novedades de una salida: su agencia, su conductor o un cliente de ESA salida."""
     return (
         gestiona_agencia(yo, viaje.bus.agencia_id)
         or conductor_autorizado(yo, viaje)
-        or es_cliente_de_paquete(yo, viaje.paquete_id)
+        or es_cliente_de_viaje(yo, viaje)
     )
 
 
@@ -598,12 +660,17 @@ class NovedadIdView(APIView):
 
 
 def chat_json(m):
+    autor = m.usuario
     return {"id": m.id, "paquete_id": m.paquete_id, "viaje_id": m.viaje_id, "usuario_id": m.usuario_id,
+            "autor": autor.nombre_completo if autor else "", "rol_id": autor.rol_id if autor else None,
             "texto": m.texto, "fecha": m.fecha}
 
 
 class ChatView(APIView):
-    @swagger_auto_schema(operation_description="Mensajes de un viaje (?viaje_id=) o de un paquete (?paquete_id=).")
+    @swagger_auto_schema(operation_description=(
+        "Mensajes de un viaje (?viaje_id=) o de un paquete (?paquete_id=), con autor y rol_id. "
+        "Un cliente solo ve sus mensajes y los del conductor o la agencia."
+    ))
     def get(self, request):
         yo = usuario_de(request)
         viaje_id = request.query_params.get("viaje_id")
@@ -619,7 +686,10 @@ class ChatView(APIView):
             lista = ChatMensaje.objects.filter(paquete_id=paquete_id)
         else:
             return Response({"message": "Indica viaje_id o paquete_id"}, status=status.HTTP_400_BAD_REQUEST)
-        return Response([chat_json(m) for m in lista.order_by("fecha", "id")])
+        if yo.rol_id == ROL_CLIENTE:
+            # Privacidad entre pasajeros: cada cliente ve lo suyo y lo que escriben conductor y agencia.
+            lista = lista.filter(Q(usuario=yo) | ~Q(usuario__rol_id=ROL_CLIENTE))
+        return Response([chat_json(m) for m in lista.select_related("usuario").order_by("fecha", "id")])
 
     @swagger_auto_schema(operation_description="Enviar mensaje: {viaje_id o paquete_id, texto}. El autor es quien tiene la sesión.")
     def post(self, request):
