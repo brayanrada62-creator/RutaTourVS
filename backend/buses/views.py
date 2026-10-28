@@ -7,7 +7,7 @@ from drf_yasg.utils import swagger_auto_schema
 
 from usuarios.paginacion import PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
 from .serializer import TipoBusEntrada, BusEntrada, AsientoEntrada, MensajeSalida, BusConductorEntrada, AsientosBusEntrada
-from datetime import date, time
+from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 from django.db import transaction
@@ -656,6 +656,11 @@ def conductor_autorizado(yo, viaje):
     )
 
 
+def ahora_colombia():
+    """Fecha y hora (sin segundos) de Colombia, para comparar con las salidas."""
+    return timezone.localtime(timezone.now(), ZoneInfo("America/Bogota")).replace(second=0, microsecond=0, tzinfo=None)
+
+
 def leer_fecha_hora(datos, viaje=None):
     """Devuelve (fecha, hora, error) aceptando 'YYYY-MM-DD' y 'HH:MM'."""
     try:
@@ -667,6 +672,12 @@ def leer_fecha_hora(datos, viaje=None):
                                     status=status.HTTP_400_BAD_REQUEST)
     if fecha is None or hora is None:
         return None, None, Response({"message": "Fecha y hora son obligatorias"}, status=status.HTTP_400_BAD_REQUEST)
+    # Solo se exige futuro al programar o al mover la salida: editar otro dato de un viaje que ya
+    # pasó no debe fallar (HU-W-21).
+    cambia = viaje is None or (fecha, hora) != (viaje.fecha, viaje.hora)
+    if cambia and datetime.combine(fecha, hora) < ahora_colombia():
+        return None, None, Response({"message": "La fecha y hora de salida no pueden estar en el pasado"},
+                                    status=status.HTTP_400_BAD_REQUEST)
     return fecha, hora, None
 
 
