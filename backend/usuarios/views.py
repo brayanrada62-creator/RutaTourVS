@@ -140,6 +140,12 @@ def emitir_sesion(usuario_negocio, auth_user=None):
     if not auth_user.email:
         auth_user.email = usuario_negocio.correo
         auth_user.save(update_fields=['email'])
+    return datos_sesion(usuario_negocio, auth_user)
+
+
+def datos_sesion(usuario_negocio, auth_user, mensaje='Login correcto'):
+    """Tokens + datos del usuario. La app (Android) lee "usuario" como objeto y el panel (Angular)
+    lee rol_id y agencia_id; "correo" conserva el valor que antes iba en "usuario"."""
     refresh = RefreshToken.for_user(auth_user)
     access = str(refresh.access_token)
     data = usuario_json(usuario_negocio)
@@ -554,14 +560,7 @@ class UsuarioView(APIView):
         )
         asociar_agencia(usuario, agencia_id)
         if registro_publico:
-            refresh = RefreshToken.for_user(auth_user)
-            return Response({
-                "mensaje": "Registro correcto",
-                "token": str(refresh.access_token),
-                "refresh": str(refresh),
-                "usuario": auth_user.username,
-                "rol": rol.rol,
-            }, status=status.HTTP_201_CREATED)
+            return Response(datos_sesion(usuario, auth_user, "Registro correcto"), status=status.HTTP_201_CREATED)
         return Response({'message': 'Usuario creado exitosamente'})
 
     @swagger_auto_schema(
