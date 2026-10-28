@@ -14,7 +14,6 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from datetime import timedelta
 from pathlib import Path
-from datetime import timedelta
 import os
 from dotenv import load_dotenv
 
@@ -83,18 +82,18 @@ ROOT_URLCONF = 'config.urls'
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
     ],
     # Por defecto todo endpoint exige token válido. Las vistas públicas lo indican.
     'DEFAULT_PERMISSION_CLASSES': [
         'usuarios.permisos.Autenticado',
     ],
 }
+
+# JWT: el access se manda en cada petición ("Authorization: Bearer <access>"); el refresh renueva la sesión.
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=5),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
-    'ROTATE_REFRESH_TOKENS': True,
-    'BLACKLIST_AFTER_ROTATION': True,
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'AUTH_HEADER_TYPES': ('Bearer',),
 }
 SWAGGER_SETTINGS = {
     'SECURITY_DEFINITIONS': {

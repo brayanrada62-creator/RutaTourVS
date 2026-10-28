@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.contrib.auth.models import User
-from django.contrib.auth import authenticate
 from django.core.mail import send_mail
 from django.db.models import Sum
 from django.db.models.functions import TruncDate
@@ -130,21 +129,35 @@ def revocar_sesiones(auth_user):
         BlacklistedToken.objects.get_or_create(token=emitido)
 
 
-def emitir_sesion(usuario_negocio):
-    auth_user, _created = User.objects.get_or_create(
-        username=usuario_negocio.correo,
-        defaults={'email': usuario_negocio.correo},
-    )
+def emitir_sesion(usuario_negocio, auth_user=None):
+    if auth_user is None:
+        auth_user = User.objects.filter(username__iexact=usuario_negocio.correo).first()
+        if auth_user is None:
+            auth_user = User.objects.create_user(
+                username=usuario_negocio.correo,
+                email=usuario_negocio.correo,
+            )
     if not auth_user.email:
         auth_user.email = usuario_negocio.correo
         auth_user.save(update_fields=['email'])
     refresh = RefreshToken.for_user(auth_user)
+    access = str(refresh.access_token)
+    data = usuario_json(usuario_negocio)
     return {
+        'message': 'Inicio de sesión exitoso',
         'mensaje': 'Login correcto',
-        'token': str(refresh.access_token),
+        'token': access,  # Angular y Android leen 'token'
+        'access': access,
         'refresh': str(refresh),
-        'usuario': auth_user.username,
+        'id': usuario_negocio.id,
+        'usuario_id': usuario_negocio.id,
+        'agencia_id': data.get('agencia_id'),
+        'rol_id': usuario_negocio.rol_id,
         'rol': usuario_negocio.rol.rol,
+        'nombre_completo': usuario_negocio.nombre_completo,
+        'correo': usuario_negocio.correo,
+        'telefono': usuario_negocio.telefono,
+        'usuario': data,
     }
 
 
@@ -179,7 +192,7 @@ class LoginView(APIView):
         responses={200: openapi.Response(description="Tokens JWT y datos del usuario")}
         )
     def post(self, request):
-        email = (request.data.get('correo') or '').strip()
+        email = str(request.data.get('correo') or '').strip()
         password = request.data.get('contrasena')
         usuario_negocio = Usuario.objects.filter(correo__iexact=email).first()
         if (
@@ -188,13 +201,13 @@ class LoginView(APIView):
             or not clave_correcta(usuario_negocio, password)
         ):
             return Response(
-                {"mensaje": "Usuario o contraseña incorrectos"},
+                {"message": "Credenciales inválidas", "mensaje": "Usuario o contraseña incorrectos"},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-
         if not usuario_negocio.activo:
             return Response(
-                {"mensaje": "Usuario suspendido. Comunícate con tu agencia"},
+                {"message": "Usuario suspendido. Comunícate con tu agencia",
+                 "mensaje": "Usuario suspendido. Comunícate con tu agencia"},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -209,24 +222,7 @@ class LoginView(APIView):
             auth_user.set_password(password)
             auth_user.save(update_fields=["password"])
 
-        usuario_autenticado = authenticate(
-            username=auth_user.username,
-            password=password,
-        )
-        if usuario_autenticado is None:
-            return Response(
-                {"mensaje": "Usuario o contraseña incorrectos"},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        refresh = RefreshToken.for_user(usuario_autenticado)
-        return Response({
-            "mensaje": "Login correcto",
-            "token": str(refresh.access_token),
-            "refresh": str(refresh),
-            "usuario": usuario_autenticado.username,
-            "rol": usuario_negocio.rol.rol,
-        })
+        return Response(emitir_sesion(usuario_negocio, auth_user))
 
 
 class LogoutView(APIView):
