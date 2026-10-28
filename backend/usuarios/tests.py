@@ -22,6 +22,28 @@ class AutenticacionTest(TestCase):
         self.assertEqual(malo.status_code, 401)
         self.assertEqual(malo.json()["mensaje"], "Usuario o contraseña incorrectos")
 
+    def test_login_trae_rol_agencia_y_usuario_como_objeto(self):
+        r = APIClient().post("/api/login/", {"correo": self.e.admin_a.correo, "contrasena": CLAVE}, format="json")
+        self.assertEqual(r.status_code, 200)
+        datos = r.json()
+        # Angular lee rol_id y agencia_id; Android lee "usuario" como objeto.
+        self.assertEqual(datos["id"], self.e.admin_a.id)
+        self.assertEqual(datos["rol_id"], 2)
+        self.assertEqual(datos["agencia_id"], self.e.ag_a.id)
+        self.assertEqual(datos["correo"], self.e.admin_a.correo)
+        self.assertEqual(datos["access"], datos["token"])
+        self.assertEqual(datos["usuario"]["id"], self.e.admin_a.id)
+        self.assertEqual(datos["usuario"]["rol_id"], 2)
+        self.assertEqual(datos["usuario"]["agencia_id"], self.e.ag_a.id)
+
+    def test_acepta_prefijo_bearer_y_token(self):
+        r = APIClient().post("/api/login/", {"correo": self.e.cliente.correo, "contrasena": CLAVE}, format="json")
+        access = r.json()["token"]
+        for prefijo in ("Bearer", "Token"):
+            c = APIClient()
+            c.credentials(HTTP_AUTHORIZATION=f"{prefijo} {access}")
+            self.assertEqual(c.get("/api/usuario/perfil/").status_code, 200, prefijo)
+
     def test_clave_vieja_en_texto_plano_se_cifra_al_entrar(self):
         viejo = self.e.usuario("viejo@rt.co", 4, clave="plana1", cifrar=False)
         r = APIClient().post("/api/login/", {"correo": "viejo@rt.co", "contrasena": "plana1"}, format="json")
@@ -63,6 +85,8 @@ class UsuariosTest(TestCase):
         self.assertEqual(r.status_code, 201)
         self.assertTrue(r.json()["token"])
         self.assertTrue(r.json()["refresh"])
+        self.assertEqual(r.json()["rol_id"], 4)
+        self.assertEqual(r.json()["usuario"]["correo"], "nuevo@rt.co")
         nuevo = Usuario.objects.get(correo="nuevo@rt.co")
         self.assertEqual(nuevo.rol_id, 4)
         self.assertTrue(nuevo.contrasena.startswith("pbkdf2_sha256$"))

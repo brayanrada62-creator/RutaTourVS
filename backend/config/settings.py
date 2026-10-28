@@ -93,6 +93,8 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
+    # La app manda "Bearer <jwt>"; el panel Angular todavía manda "Token <jwt>".
+    'AUTH_HEADER_TYPES': ('Bearer', 'Token'),
 }
 SWAGGER_SETTINGS = {
     'SECURITY_DEFINITIONS': {
