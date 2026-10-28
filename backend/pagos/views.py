@@ -3,15 +3,53 @@ from rest_framework.response import Response
 from django.db.models import Q
 from drf_yasg.utils import swagger_auto_schema
 
+from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from PIL import Image
 from rest_framework import status
 
 from .serializer import PagoEntrada, MensajeSalida
 from .models import Pago
-from reservas.models import Reserva
-from reservas.views import codigo_reserva
+from reservas.models import ESTADOS_QUE_LIBERAN, AsientoReserva, Reserva, marcar_vencidas, plazo_de_pago
+from reservas.views import codigo_reserva, total_reserva
 from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
 from usuarios.permisos import SoloPersonal, agencias_de, es_admin, es_super, gestiona_agencia, prohibido, usuario_de
+
+
+COMPROBANTE_MAX_BYTES = 5 * 1024 * 1024
+FORMATOS_COMPROBANTE = {"JPEG", "PNG", "WEBP"}
+
+
+def error_comprobante(archivo):
+    """Mensaje de error si el archivo no es una imagen JPG, PNG o WEBP de máximo 5 MB; None si sirve.
+    Se revisa el contenido con Pillow: cambiarle la extensión a un PDF no basta."""
+    if archivo.size > COMPROBANTE_MAX_BYTES:
+        return "El comprobante supera 5 MB"
+    try:
+        with Image.open(archivo) as foto:
+            formato = foto.format
+            foto.verify()
+    except Exception:
+        formato = None
+    archivo.seek(0)
+    if formato not in FORMATOS_COMPROBANTE:
+        return "El comprobante debe ser una imagen JPG, PNG o WEBP"
+    return None
+
+
+ESTADOS_PAGO = dict(Pago.ESTADOS)
+
+
+def ajustar_plazo(reserva):
+    """Reglas del plazo de 1 hora según el ÚLTIMO pago de la reserva:
+    pendiente (en revisión) o aprobado -> el plazo se detiene;
+    rechazado o sin pago -> el cliente tiene de nuevo RESERVA_MINUTOS_PAGO para enviar otro comprobante."""
+    if reserva.estado != "pendiente":
+        return
+    ultimo = Pago.objects.filter(reserva=reserva).order_by("-id").first()
+    reserva.vence_en = None if ultimo and ultimo.estado in ("pendiente", "aprobado") else plazo_de_pago()
+    reserva.save(update_fields=["vence_en"])
 
 
 def pagos_visibles(yo):
@@ -23,7 +61,7 @@ def pagos_visibles(yo):
     else:
         qs = Pago.objects.filter(reserva__usuario=yo)
     # Una sola consulta: así el cliente y el paquete no se piden con otros endpoints.
-    return qs.select_related("reserva__usuario", "reserva__paquete")
+    return qs.select_related("reserva__usuario", "reserva__paquete", "revisado_por")
 
 
 def pago_json(pago):
@@ -40,6 +78,10 @@ def pago_json(pago):
         "correo": pago.reserva.usuario.correo,
         "paquete": pago.reserva.paquete.nombre,
         "codigo": codigo_reserva(pago.reserva_id),
+        "revisado_por": pago.revisado_por.nombre_completo if pago.revisado_por else None,
+        "revisado_en": pago.revisado_en,
+        # Si el pago fue rechazado: hasta cuándo puede el cliente enviar otro comprobante.
+        "reserva_vence_en": pago.reserva.vence_en,
     }
 
 
@@ -63,7 +105,12 @@ class PagoView(APIView):
         return Response(paginar(request, pagoLista.order_by("id"), pago_json))
 
     @swagger_auto_schema(
-        operation_description="Guardar pago",
+        operation_description=(
+            "Guardar pago (multipart/form-data). Cliente: 'comprobante' obligatorio (JPG, PNG o WEBP, máx. 5 MB); "
+            "el precio lo calcula el servidor (precio del paquete × sillas), la fecha es la del servidor y el pago "
+            "queda pendiente, lo que DETIENE el plazo de 1 hora de la reserva. 409 si la reserva ya tiene un pago "
+            "pendiente o aprobado; 400 si está cancelada o vencida."
+        ),
         request_body=PagoEntrada,
         responses={201: MensajeSalida}
     )
@@ -83,20 +130,51 @@ class PagoView(APIView):
         personal = gestiona_agencia(yo, reserva.paquete.agencia_id)
         if not personal and reserva.usuario_id != yo.id:
             return prohibido("Esa reserva no es tuya")
-        if not personal:
-            # Solo la agencia aprueba o rechaza: el pago del cliente siempre entra pendiente.
-            estado, motivo_rechazo = "pendiente", ""
-
-        Pago.objects.create(
-            precio=precio,
-            reserva_id=reserva_id,
-            fecha_pago=fecha_pago,
-            referencia=referencia,
-            comprobante=comprobante,
-            estado=estado,
-            motivo_rechazo=motivo_rechazo
-        )
-        return Response({"mensaje": "Pago almacenado correctamente"})
+        if comprobante:
+            error = error_comprobante(comprobante)
+            if error:
+                return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
+        if estado not in (None, "") and estado not in ESTADOS_PAGO:
+            return Response({"message": "Estado de pago no válido"}, status=status.HTTP_400_BAD_REQUEST)
+        marcar_vencidas()
+        with transaction.atomic():
+            # Bloquea la reserva: dos envíos simultáneos no pueden dejar dos pagos en revisión.
+            reserva = Reserva.objects.select_for_update().select_related("paquete").get(id=reserva.id)
+            if reserva.estado in ESTADOS_QUE_LIBERAN or reserva.vencida:
+                return Response({"message": "La reserva está cancelada o venció; elige de nuevo tus sillas"},
+                                status=status.HTTP_400_BAD_REQUEST)
+            if not personal:
+                previo = Pago.objects.filter(reserva=reserva, estado__in=["pendiente", "aprobado"]).order_by("-id").first()
+                if previo:
+                    texto = "Esta reserva ya está pagada" if previo.estado == "aprobado" \
+                        else "Ya hay un pago en revisión para esta reserva"
+                    return Response({"message": texto}, status=status.HTTP_409_CONFLICT)
+                if not comprobante:
+                    return Response({"message": "Adjunta la foto del comprobante"}, status=status.HTTP_400_BAD_REQUEST)
+                sillas = AsientoReserva.objects.filter(reserva=reserva).count()
+                if sillas == 0:
+                    return Response({"message": "La reserva no tiene sillas reservadas"},
+                                    status=status.HTTP_400_BAD_REQUEST)
+                precio = total_reserva(reserva, sillas)
+                # Solo la agencia aprueba o rechaza: el pago del cliente siempre entra pendiente.
+                estado, motivo_rechazo = "pendiente", ""
+                fecha_pago = timezone.now()
+                referencia = (referencia or "")[:255]
+            estado = estado or "pendiente"
+            revisado = estado in ("aprobado", "rechazado")
+            pago = Pago.objects.create(
+                precio=precio,
+                reserva=reserva,
+                fecha_pago=fecha_pago or timezone.now(),
+                referencia=referencia or "",
+                comprobante=comprobante,
+                estado=estado,
+                motivo_rechazo=motivo_rechazo or "",
+                revisado_por=yo if revisado else None,
+                revisado_en=timezone.now() if revisado else None,
+            )
+            ajustar_plazo(reserva)
+        return Response({"mensaje": "Pago almacenado correctamente", "id": pago.id, "estado": pago.estado})
 
 
 class PagoIdView(APIView):
@@ -112,37 +190,58 @@ class PagoIdView(APIView):
         return Response(pago_json(registroEncontrado))
 
     @swagger_auto_schema(
-        operation_description="Actualizar pago",
+        operation_description=(
+            "Actualizar pago (solo la agencia). estado: pendiente | aprobado | rechazado. "
+            "Aprobado: vende las sillas. Rechazado: el cliente tiene 1 hora para enviar otro comprobante; "
+            "si no lo hace, la reserva vence y sus sillas quedan libres. Guarda quién y cuándo lo revisó. "
+            "409 si se intenta aprobar el pago de una reserva cancelada o vencida."
+        ),
         request_body=PagoEntrada
     )
     def put(self, request, id):
-        pagoB = get_object_or_404(Pago, id=id)
+        pagoB = get_object_or_404(Pago.objects.select_related("reserva__paquete"), id=id)
         yo = usuario_de(request)
         if not gestiona_agencia(yo, pagoB.reserva.paquete.agencia_id):
             return prohibido("Solo la agencia puede aprobar o rechazar pagos")
-        if request.data.get("reserva_id") not in (None, "", pagoB.reserva_id):
-            reserva_nueva = Reserva.objects.filter(id=request.data.get("reserva_id")).select_related("paquete").first()
-            if reserva_nueva is None or not gestiona_agencia(yo, reserva_nueva.paquete.agencia_id):
-                return prohibido()
-        pagoB.precio = request.data.get("precio", pagoB.precio)
-        pagoB.reserva_id = request.data.get("reserva_id", pagoB.reserva_id)
-        pagoB.fecha_pago = request.data.get("fecha_pago", pagoB.fecha_pago)
-        pagoB.referencia = request.data.get("referencia", pagoB.referencia)
-        if request.data.get("comprobante"):
-            pagoB.comprobante = request.data.get("comprobante")
-        pagoB.estado = request.data.get("estado", pagoB.estado)
-        pagoB.motivo_rechazo = request.data.get("motivo_rechazo", pagoB.motivo_rechazo)
-        pagoB.save()
-        return Response({"mensaje": "Pago actualizado"})
+        if request.data.get("reserva_id") not in (None, "") and str(request.data.get("reserva_id")) != str(pagoB.reserva_id):
+            return Response({"message": "Un pago no se cambia de reserva"}, status=status.HTTP_400_BAD_REQUEST)
+        estado = request.data.get("estado", pagoB.estado)
+        if estado not in ESTADOS_PAGO:
+            return Response({"message": "Estado de pago no válido"}, status=status.HTTP_400_BAD_REQUEST)
+        marcar_vencidas()
+        with transaction.atomic():
+            reserva = Reserva.objects.select_for_update().get(id=pagoB.reserva_id)
+            pagoB = Pago.objects.select_for_update().get(id=pagoB.id)
+            if estado == "aprobado" and estado != pagoB.estado and (reserva.estado in ESTADOS_QUE_LIBERAN or reserva.vencida):
+                # Sus sillas ya pudieron venderse a otra persona.
+                return Response({"message": "La reserva está cancelada o vencida; no se puede aprobar este pago"},
+                                status=status.HTTP_409_CONFLICT)
+            if estado != pagoB.estado and estado in ("aprobado", "rechazado"):
+                pagoB.revisado_por = yo
+                pagoB.revisado_en = timezone.now()
+            pagoB.precio = request.data.get("precio", pagoB.precio)
+            pagoB.fecha_pago = request.data.get("fecha_pago", pagoB.fecha_pago)
+            pagoB.referencia = request.data.get("referencia", pagoB.referencia)
+            if request.data.get("comprobante"):
+                pagoB.comprobante = request.data.get("comprobante")
+            pagoB.estado = estado
+            pagoB.motivo_rechazo = request.data.get("motivo_rechazo", pagoB.motivo_rechazo) or ""
+            pagoB.save()
+            ajustar_plazo(reserva)
+        return Response({"mensaje": "Pago actualizado", "estado": pagoB.estado, "reserva_vence_en": reserva.vence_en})
 
     @swagger_auto_schema(
-        operation_description="Eliminar pago"
+        operation_description="Eliminar pago (solo la agencia). Si la reserva queda sin pago en revisión, "
+                              "vuelve a correr su plazo de 1 hora."
     )
     def delete(self, request, id):
         pagoEliminar = get_object_or_404(Pago, id=id)
         if not gestiona_agencia(usuario_de(request), pagoEliminar.reserva.paquete.agencia_id):
             return prohibido()
-        pagoEliminar.delete()
+        with transaction.atomic():
+            reserva = Reserva.objects.select_for_update().get(id=pagoEliminar.reserva_id)
+            pagoEliminar.delete()
+            ajustar_plazo(reserva)
         return Response({"mensaje": "Pago eliminado"})
 
 
@@ -170,4 +269,4 @@ class PagoReferenciaView(APIView):
         pago = pagos_visibles(usuario_de(request)).filter(referencia=referencia).first()
         if not pago:
             return Response({"mensaje": "Pago no encontrado"}, status=404)
-        return Response(pago_json(pago))
+        return Response(pago_json(pago))

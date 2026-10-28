@@ -54,6 +54,12 @@ class BusConductorFase1Test(TestCase):
 
 class MigracionDuplicadosTest(TransactionTestCase):
     """La migración 0004 borra filas repetidas antes de crear la restricción única."""
+    def tearDown(self):
+        # Deja la base con TODAS las migraciones: las pruebas que vienen después necesitan las tablas nuevas.
+        ejecutor = MigrationExecutor(connection)
+        ejecutor.loader.build_graph()
+        ejecutor.migrate(ejecutor.loader.graph.leaf_nodes())
+
 
     def test_migracion_quita_duplicados(self):
         ejecutor = MigrationExecutor(connection)
@@ -223,3 +229,67 @@ class InicioSimultaneoTest(TransactionTestCase):
             h.join()
         self.assertEqual(sorted(codigos), [200, 409])
         self.assertEqual(Viaje.objects.get(id=v["id"]).estado, "EN_CURSO")
+
+
+class AsientosBusTest(TestCase):
+    """POST /bus/<id>/asientos/ genera las sillas del tipo de bus (plantilla compartida por tipo)."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.c = Escenario.cliente_http(self.e.admin_a)
+
+    def numeros(self, tipo):
+        from buses.models import Asiento
+        return sorted(Asiento.objects.filter(tipo_bus=tipo).values_list("numero_asiento", flat=True))
+
+    def test_genera_sillas_y_actualiza_capacidad(self):
+        r = self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 12}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["cantidad"], 12)
+        self.assertEqual(self.numeros(self.e.tipo_a), list(range(1, 13)))
+        self.e.tipo_a.refresh_from_db()
+        self.assertEqual(self.e.tipo_a.capacidad, 12)
+        consulta = self.c.get(f"/api/bus/{self.e.bus_a.id}/asientos/").json()
+        self.assertEqual(consulta["cantidad"], 12)
+        self.assertEqual(consulta["buses_mismo_tipo"], 2)
+
+    def test_reducir_borra_las_sobrantes_y_no_duplica(self):
+        self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 10}, format="json")
+        self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 10}, format="json")
+        self.assertEqual(self.numeros(self.e.tipo_a), list(range(1, 11)))
+        r = self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 4}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(self.numeros(self.e.tipo_a), [1, 2, 3, 4])
+
+    def test_no_borra_sillas_reservadas(self):
+        from buses.models import Asiento
+        from reservas.models import AsientoReserva, Reserva
+        self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 10}, format="json")
+        reserva = Reserva.objects.create(fecha_reserva=timezone.now(), usuario=self.e.cliente, paquete=self.e.paq_a)
+        AsientoReserva.objects.create(reserva=reserva, asiento=Asiento.objects.get(tipo_bus=self.e.tipo_a, numero_asiento=9))
+        r = self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 5}, format="json")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(len(self.numeros(self.e.tipo_a)), 10)
+
+    def test_valida_cantidad(self):
+        for malo in (0, -1, 101, "abc", None):
+            r = self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": malo}, format="json")
+            self.assertEqual(r.status_code, 400, malo)
+
+    def test_aislamiento_por_agencia(self):
+        r = self.c.post(f"/api/bus/{self.e.bus_b.id}/asientos/", {"cantidad": 5}, format="json")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(self.numeros(self.e.tipo_b), [])
+        conductor = Escenario.cliente_http(self.e.cond_a)
+        self.assertEqual(conductor.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 5}, format="json").status_code, 403)
+        anonimo = APIClient().post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 5}, format="json")
+        self.assertIn(anonimo.status_code, (401, 403))
+        self.assertEqual(self.c.post("/api/bus/999/asientos/", {"cantidad": 5}, format="json").status_code, 404)
+
+    def test_la_app_ve_las_sillas_de_la_salida(self):
+        from buses.models import Viaje
+        self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 8}, format="json")
+        viaje = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a, fecha=timezone.localdate(), hora="08:00")
+        sillas = APIClient().get(f"/api/asiento/?viaje_id={viaje.id}").json()
+        self.assertEqual(len(sillas), 8)
+        self.assertFalse(any(s["ocupado"] for s in sillas))

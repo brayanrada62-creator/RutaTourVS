@@ -1,7 +1,6 @@
 import json
 import re
-from datetime import date, datetime
-from zoneinfo import ZoneInfo
+from datetime import date
 
 from django.db import transaction
 from django.utils import timezone
@@ -17,13 +16,14 @@ from decimal import Decimal, InvalidOperation
 from destinos.imagenes import destino_json, guardar_imagen_destino, imagen_url, resolver_departamento
 from destinos.models import Destino
 from buses.models import Viaje
+from buses.views import hoy_colombia
 
 from .serializer import (
     PaqueteRegistrarEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida
 )
 from .models import Paquete, PaqueteDestino, Itinerario
 from usuarios.paginacion import PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
-from usuarios.permisos import LecturaPublica
+from usuarios.permisos import LecturaPublica, filtrar_catalogo, usuario_de
 
 
 class VistaCatalogo(APIView):
@@ -203,11 +203,6 @@ def destinos_de_paquete(paquete, request=None):
     return [destino_json(rel.destino, request) for rel in relaciones]
 
 
-def hoy_colombia():
-    """El servidor corre en UTC; "hoy" para el cliente es la fecha de Colombia."""
-    return datetime.now(ZoneInfo("America/Bogota")).date()
-
-
 def salidas_de_paquete(paquete):
     """Fechas (AAAA-MM-DD) de las salidas programadas desde hoy, sin repetir y en orden."""
     fechas = (
@@ -300,8 +295,8 @@ class PaqueteView(VistaCatalogo):
 
     @swagger_auto_schema(
         operation_description=(
-            "Listar paquetes con destinos e imagen. "
-            "Opcional: ?search=, ?destino_id=, ?estado=, ?agencia_id=, "
+            "Listar paquetes con destinos e imagen. Un cliente registrado por una agencia "
+            "solo ve los de esa agencia. Opcional: ?search=, ?destino_id=, ?estado=, ?agencia_id=, "
             "?precio_min=, ?precio_max=, ?fecha= (AAAA-MM-DD, desde hoy), ?page= y ?page_size="
         ),
         manual_parameters=PARAMETROS_LISTA + [
@@ -314,7 +309,7 @@ class PaqueteView(VistaCatalogo):
         ],
     )
     def get(self, request):
-        paqueteLista = Paquete.objects.all()
+        paqueteLista = filtrar_catalogo(usuario_de(request), Paquete.objects.all())
         texto = texto_busqueda(request)
         if texto:
             paqueteLista = paqueteLista.filter(
@@ -399,7 +394,7 @@ class PaqueteIdView(VistaCatalogo):
         operation_description="Listar paquete por id, con destinos e imágenes"
     )
     def get(self, request, id):
-        registroEncontrado = Paquete.objects.filter(id=id).first()
+        registroEncontrado = filtrar_catalogo(usuario_de(request), Paquete.objects.filter(id=id)).first()
         if not registroEncontrado:
             return Response({"mensaje": "Paquete no encontrado"}, status=status.HTTP_404_NOT_FOUND)
         return Response(paquete_json(registroEncontrado, request))
@@ -434,7 +429,7 @@ class PaqueteDescripcionView(VistaCatalogo):
         operation_description="Busca paquetes por descripción"
     )
     def get(self, request, descripcion):
-        paqueteLista = Paquete.objects.filter(descripcion__icontains=descripcion)
+        paqueteLista = filtrar_catalogo(usuario_de(request), Paquete.objects.filter(descripcion__icontains=descripcion))
         return Response([paquete_json(paquete, request) for paquete in paqueteLista])
 
 
@@ -443,7 +438,7 @@ class PaqueteNombreView(VistaCatalogo):
         operation_description="Busca paquetes por nombre"
     )
     def get(self, request, nombre):
-        paqueteLista = Paquete.objects.filter(nombre__icontains=nombre)
+        paqueteLista = filtrar_catalogo(usuario_de(request), Paquete.objects.filter(nombre__icontains=nombre))
         return Response([paquete_json(paquete, request) for paquete in paqueteLista])
 
 
@@ -645,4 +640,4 @@ class ItinerarioLugarView(VistaCatalogo):
                 "hora": itinerario.hora,
                 "lugar": itinerario.lugar,
             })
-        return Response(lista)
+        return Response(lista)

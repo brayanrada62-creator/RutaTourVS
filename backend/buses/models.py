@@ -55,6 +55,10 @@ class Asiento(models.Model):
 
     class Meta:
         db_table = "asientos"
+        # Un mapa no puede tener dos sillas con el mismo número.
+        constraints = [
+            models.UniqueConstraint(fields=["tipo_bus", "numero_asiento"], name="asiento_numero_unico"),
+        ]
 
 class Viaje(models.Model):
     """Salida programada de un paquete en un bus. El conductor no se asigna aquí:

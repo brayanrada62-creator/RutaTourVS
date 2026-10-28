@@ -10,9 +10,11 @@ from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
-from django.db.models import Sum
+from django.db.models import ProtectedError, Sum
 from django.db.models.functions import TruncDate
+from django.core.validators import validate_email
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -165,6 +167,28 @@ def datos_sesion(usuario_negocio, auth_user, mensaje='Login correcto'):
         'telefono': usuario_negocio.telefono,
         'usuario': data,
     }
+
+
+CLAVE_MINIMA = 8
+
+
+def error_registro(nombre, correo, documento, telefono, clave):
+    """Reglas del registro público (las mismas que valida la app). Devuelve el mensaje o None."""
+    if not str(nombre or "").strip():
+        return "Escribe tu nombre completo"
+    try:
+        validate_email(str(correo or ""))
+    except ValidationError:
+        return "Escribe un correo válido"
+    documento = str(documento or "")
+    if not (documento.isdigit() and 5 <= len(documento) <= 15):
+        return "El documento debe tener de 5 a 15 dígitos"
+    telefono = str(telefono or "")
+    if telefono and not (telefono.isdigit() and 7 <= len(telefono) <= 15):
+        return "El teléfono debe tener de 7 a 15 dígitos"
+    if len(str(clave or "")) < CLAVE_MINIMA:
+        return f"La contraseña debe tener al menos {CLAVE_MINIMA} caracteres"
+    return None
 
 
 def rol_cliente():
@@ -366,9 +390,9 @@ class PasswordResetConfirmarView(APIView):
         contrasena = request.data.get("contrasena") or ""
         confirmar = request.data.get("confirmar") or contrasena
 
-        if len(contrasena) < 6:
+        if len(contrasena) < CLAVE_MINIMA:
             return Response(
-                {"message": "La contraseña debe tener al menos 6 caracteres"},
+                {"message": f"La contraseña debe tener al menos {CLAVE_MINIMA} caracteres"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if contrasena != confirmar:
@@ -496,7 +520,8 @@ class UsuarioView(APIView):
 
     @swagger_auto_schema(
         operation_description=(
-            "Crea un usuario. Sin sesión: registro de cliente (rol 4, sin agencia). "
+            "Crea un usuario. Sin sesión: registro de cliente (rol 4, sin agencia) con nombre, correo válido, "
+            "documento de 5 a 15 dígitos, contraseña de 8 o más y teléfono de 7 a 15 dígitos si se envía (400 si no). "
             "Administrador: conductores o clientes de su agencia. Superadministrador: cualquiera."
         ),
         request_body=UsuarioEntrada,
@@ -517,6 +542,10 @@ class UsuarioView(APIView):
         registro_publico = not request.user.is_authenticated
         if registro_publico:
             rol_id, agencia_id = ROL_CLIENTE, None
+            error = error_registro(nombre_completo, correo, numero_documento, telefono, contrasena)
+            if error:
+                return Response({'message': error}, status=status.HTTP_400_BAD_REQUEST)
+            tipo_documento = tipo_documento or "CC"
         elif yo is None:
             return prohibido()
         elif es_admin(yo):
@@ -673,7 +702,12 @@ class UsuarioIdView(APIView):
         yo = usuario_de(request)
         if yo.id == usuario.id or not (es_super(yo) or (es_admin(yo) and puede_ver_usuario(yo, usuario))):
             return prohibido()
-        usuario.delete()
+        try:
+            usuario.delete()
+        except ProtectedError:
+            # Sus pagos se conservan para la auditoría: se suspende en lugar de borrarlo.
+            return Response({'message': 'El usuario tiene pagos registrados; suspéndelo en lugar de eliminarlo'},
+                            status=status.HTTP_409_CONFLICT)
         return Response({'message': 'Usuario eliminado exitosamente'})
 
 
@@ -1014,4 +1048,4 @@ class UsuarioAgenciaView(APIView):
         if not gestiona_agencia(usuario_de(request), asociacion.agencia_id):
             return prohibido()
         asociacion.delete()
-        return Response({'message': 'Asociación de usuario y agencia eliminada exitosamente'})
+        return Response({'message': 'Asociación de usuario y agencia eliminada exitosamente'})
