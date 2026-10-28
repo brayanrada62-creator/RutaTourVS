@@ -182,33 +182,11 @@ class LoginView(APIView):
         email = (request.data.get('correo') or '').strip()
         password = request.data.get('contrasena')
         usuario_negocio = Usuario.objects.filter(correo__iexact=email).first()
-        if usuario_negocio is None:
-            return Response(
-                {"mensaje": "Usuario o contraseña incorrectos"},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        auth_user = User.objects.filter(username__iexact=usuario_negocio.correo).first()
-        if auth_user is None:
-            auth_user = User.objects.create_user(
-                username=usuario_negocio.correo,
-                email=usuario_negocio.correo,
-            )
-
-        if not auth_user.has_usable_password():
-            if not clave_correcta(usuario_negocio, password or ""):
-                return Response(
-                    {"mensaje": "Usuario o contraseña incorrectos"},
-                    status=status.HTTP_401_UNAUTHORIZED,
-                )
-            auth_user.set_password(password)
-            auth_user.save(update_fields=["password"])
-
-        usuario_autenticado = authenticate(
-            username=usuario_negocio.correo,
-            password=password,
-        )
-        if usuario_autenticado is None:
+        if (
+            usuario_negocio is None
+            or not isinstance(password, str)
+            or not clave_correcta(usuario_negocio, password)
+        ):
             return Response(
                 {"mensaje": "Usuario o contraseña incorrectos"},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -218,6 +196,27 @@ class LoginView(APIView):
             return Response(
                 {"mensaje": "Usuario suspendido. Comunícate con tu agencia"},
                 status=status.HTTP_403_FORBIDDEN,
+            )
+
+        auth_user = User.objects.filter(username__iexact=usuario_negocio.correo).first()
+        if auth_user is None:
+            auth_user = User.objects.create_user(
+                username=usuario_negocio.correo,
+                email=usuario_negocio.correo,
+                password=password,
+            )
+        elif not auth_user.check_password(password):
+            auth_user.set_password(password)
+            auth_user.save(update_fields=["password"])
+
+        usuario_autenticado = authenticate(
+            username=auth_user.username,
+            password=password,
+        )
+        if usuario_autenticado is None:
+            return Response(
+                {"mensaje": "Usuario o contraseña incorrectos"},
+                status=status.HTTP_401_UNAUTHORIZED,
             )
 
         refresh = RefreshToken.for_user(usuario_autenticado)
