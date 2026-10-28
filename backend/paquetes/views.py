@@ -1,5 +1,7 @@
 import json
 import re
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from django.db import transaction
 from django.utils import timezone
@@ -14,6 +16,7 @@ from decimal import Decimal, InvalidOperation
 
 from destinos.imagenes import destino_json, guardar_imagen_destino, imagen_url, resolver_departamento
 from destinos.models import Destino
+from buses.models import Viaje
 
 from .serializer import (
     PaqueteRegistrarEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida
@@ -200,6 +203,23 @@ def destinos_de_paquete(paquete, request=None):
     return [destino_json(rel.destino, request) for rel in relaciones]
 
 
+def hoy_colombia():
+    """El servidor corre en UTC; "hoy" para el cliente es la fecha de Colombia."""
+    return datetime.now(ZoneInfo("America/Bogota")).date()
+
+
+def salidas_de_paquete(paquete):
+    """Fechas (AAAA-MM-DD) de las salidas programadas desde hoy, sin repetir y en orden."""
+    fechas = (
+        Viaje.objects
+        .filter(paquete=paquete, estado=Viaje.PROGRAMADO, fecha__gte=hoy_colombia())
+        .order_by("fecha")
+        .values_list("fecha", flat=True)
+        .distinct()
+    )
+    return [f.isoformat() for f in fechas]
+
+
 def paquete_json(paquete, request=None):
     return {
         "id": paquete.id,
@@ -212,6 +232,7 @@ def paquete_json(paquete, request=None):
         "precio": str(paquete.precio),
         "imagen": imagen_url(getattr(paquete, "imagen", None), request),
         "destinos": destinos_de_paquete(paquete, request),
+        "salidas": salidas_de_paquete(paquete),
     }
 
 
@@ -281,9 +302,10 @@ class PaqueteView(VistaCatalogo):
         operation_description=(
             "Listar paquetes con destinos e imagen. "
             "Opcional: ?search=, ?destino_id=, ?estado=, ?agencia_id=, "
-            "?precio_min=, ?precio_max=, ?page= y ?page_size="
+            "?precio_min=, ?precio_max=, ?fecha= (AAAA-MM-DD, desde hoy), ?page= y ?page_size="
         ),
         manual_parameters=PARAMETROS_LISTA + [
+            openapi.Parameter("fecha", openapi.IN_QUERY, type=openapi.TYPE_STRING, example="2026-11-02"),
             openapi.Parameter("destino_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
             openapi.Parameter("estado", openapi.IN_QUERY, type=openapi.TYPE_STRING),
             openapi.Parameter("agencia_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
@@ -316,6 +338,17 @@ class PaqueteView(VistaCatalogo):
                     paqueteLista = paqueteLista.filter(**{lookup: Decimal(str(crudo))})
                 except InvalidOperation:
                     return Response({"mensaje": f"{campo} no es un número válido"}, status=status.HTTP_400_BAD_REQUEST)
+        crudo = (request.query_params.get("fecha") or "").strip()
+        if crudo:
+            try:
+                fecha = date.fromisoformat(crudo)
+            except ValueError:
+                return Response({"mensaje": "fecha debe tener el formato AAAA-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
+            if fecha < hoy_colombia():
+                return Response({"mensaje": "La fecha no puede ser anterior a hoy"}, status=status.HTTP_400_BAD_REQUEST)
+            paqueteLista = paqueteLista.filter(
+                viaje__fecha=fecha, viaje__estado=Viaje.PROGRAMADO
+            ).distinct()
         return Response(paginar(request, paqueteLista.order_by("id"), lambda p: paquete_json(p, request)))
 
     @swagger_auto_schema(
