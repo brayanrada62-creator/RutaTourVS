@@ -5,6 +5,7 @@ from rest_framework.test import APIClient
 
 from buses.models import Viaje
 from buses.views import hoy_colombia
+from paquetes.models import Paquete
 from usuarios.pruebas import Escenario
 
 
@@ -84,3 +85,67 @@ class CatalogoPorAgenciaTest(TestCase):
         self.assertEqual(self.ids(APIClient().get("/api/paquete/")), todos)
         self.assertEqual(self.ids(Escenario.cliente_http(self.e.cliente).get("/api/viaje/")),
                          {self.salida_a.id, self.salida_b.id})
+
+
+class GuardarPaqueteTest(TestCase):
+    """HU-W-21: precio y duración válidos, paquete de la agencia del administrador y GET con lo guardado."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.admin = Escenario.cliente_http(self.e.admin_a)
+        self.antes = Paquete.objects.count()
+
+    def datos(self, **cambios):
+        base = {"nombre": "Guatapé", "agencia_id": self.e.ag_a.id, "descripcion": "Día de campo",
+                "duracion_estimada": "2 días", "precio": "150000"}
+        base.update(cambios)
+        return {k: v for k, v in base.items() if v is not None}
+
+    def test_guarda_y_el_get_devuelve_duracion_y_precio(self):
+        r = self.admin.post("/api/paquete/", self.datos(), format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        guardado = Paquete.objects.get(id=r.json()["id"])
+        self.assertEqual(guardado.agencia_id, self.e.ag_a.id)
+        listado = {p["id"]: p for p in self.admin.get("/api/paquete/").json()}
+        self.assertEqual(listado[guardado.id]["duracion_estimada"], "2 días")
+        self.assertEqual(listado[guardado.id]["precio"], "150000.00")
+
+    def test_precio_vacio_no_numerico_o_no_positivo_da_400(self):
+        for precio in ("", "abc", "-5", "0", "12.345", None):
+            r = self.admin.post("/api/paquete/", self.datos(precio=precio), format="json")
+            self.assertEqual(r.status_code, 400, precio)
+            self.assertIn("precio", r.json()["mensaje"].lower())
+        self.assertEqual(Paquete.objects.count(), self.antes)
+
+    def test_duracion_vacia_da_400(self):
+        for duracion in ("", "  ", None):
+            r = self.admin.post("/api/paquete/", self.datos(duracion_estimada=duracion), format="json")
+            self.assertEqual(r.status_code, 400, duracion)
+        self.assertEqual(Paquete.objects.count(), self.antes)
+
+    def test_admin_no_guarda_en_otra_agencia(self):
+        r = self.admin.post("/api/paquete/", self.datos(agencia_id=self.e.ag_b.id), format="json")
+        self.assertEqual(r.status_code, 403)
+        r = self.admin.put(f"/api/paquete/{self.e.paq_b.id}/", self.datos(), format="json")
+        self.assertEqual(r.status_code, 403)
+        r = self.admin.put(f"/api/paquete/{self.e.paq_a.id}/", self.datos(agencia_id=self.e.ag_b.id), format="json")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(Paquete.objects.count(), self.antes)
+
+    def test_superadmin_guarda_en_cualquier_agencia(self):
+        sup = Escenario.cliente_http(self.e.super)
+        r = sup.post("/api/paquete/", self.datos(agencia_id=self.e.ag_b.id), format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+
+    def test_put_actualiza_precio_valido(self):
+        r = self.admin.put(f"/api/paquete/{self.e.paq_a.id}/", self.datos(precio="99000.50"), format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["precio"], "99000.50")
+
+    def test_proxima_salida_en_el_paquete(self):
+        self.assertIsNone(self.admin.get(f"/api/paquete/{self.e.paq_a.id}/").json()["proxima_salida"])
+        dia = hoy_colombia() + timedelta(days=4)
+        Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a, fecha=dia, hora="08:00")
+        Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a2, fecha=dia, hora="06:30")
+        self.assertEqual(self.admin.get(f"/api/paquete/{self.e.paq_a.id}/").json()["proxima_salida"],
+                         {"fecha": dia.isoformat(), "hora": "06:30"})

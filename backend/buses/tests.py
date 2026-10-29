@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TestCase, TransactionTestCase
@@ -8,6 +10,12 @@ from usuarios.pruebas import Escenario
 
 from usuarios.models import Agencia, Rol, Usuario, UsuarioAgencia
 from buses.models import Bus, Bus_Conductor, TipoBus
+from buses.views import hoy_colombia
+
+# Fechas futuras relativas a hoy: la programación rechaza el pasado (HU-W-21).
+DIA_1 = (hoy_colombia() + timedelta(days=30)).isoformat()
+DIA_2 = (hoy_colombia() + timedelta(days=31)).isoformat()
+DIA_3 = (hoy_colombia() + timedelta(days=33)).isoformat()
 
 
 class BusConductorFase1Test(TestCase):
@@ -89,7 +97,7 @@ class ViajesPorBusTest(TestCase):
         self.e = Escenario()
         self.admin = Escenario.cliente_http(self.e.admin_a)
 
-    def programar(self, bus, fecha="2026-11-02", hora="06:30", paquete=None):
+    def programar(self, bus, fecha=DIA_1, hora="06:30", paquete=None):
         r = self.admin.post("/api/viaje/", {"paquete_id": (paquete or self.e.paq_a).id, "bus_id": bus.id,
                                             "fecha": fecha, "hora": hora}, format="json")
         return r
@@ -136,12 +144,35 @@ class ViajesPorBusTest(TestCase):
         self.assertEqual(self.programar(self.e.bus_a).status_code, 409)          # misma hora, mismo bus
         b = Escenario.cliente_http(self.e.admin_b)
         r = b.post("/api/viaje/", {"paquete_id": self.e.paq_a.id, "bus_id": self.e.bus_a.id,
-                                   "fecha": "2026-11-03", "hora": "06:30"}, format="json")
+                                   "fecha": DIA_2, "hora": "06:30"}, format="json")
         self.assertEqual(r.status_code, 403)
         self.assertEqual(b.get("/api/viaje/").json(), [])
         cond = Escenario.cliente_http(self.e.cond_a)
         self.assertEqual(cond.post("/api/viaje/", {"paquete_id": self.e.paq_a.id, "bus_id": self.e.bus_a.id,
-                                                   "fecha": "2026-11-05", "hora": "06:30"}, format="json").status_code, 403)
+                                                   "fecha": DIA_3, "hora": "06:30"}, format="json").status_code, 403)
+
+    def test_fecha_u_hora_invalida_no_programa_el_viaje(self):
+        ayer = (hoy_colombia() - timedelta(days=1)).isoformat()
+        for fecha, hora in ((ayer, "06:30"), (DIA_1, "25:99"), (DIA_1, "mañana"), ("2026-02-30", "06:30"), (DIA_1, "")):
+            r = self.programar(self.e.bus_a, fecha=fecha, hora=hora)
+            self.assertEqual(r.status_code, 400, (fecha, hora))
+        self.assertEqual(Viaje.objects.count(), 0)
+
+    def test_programar_guarda_fecha_y_hora_del_paquete_de_su_agencia(self):
+        r = self.programar(self.e.bus_a, fecha=DIA_1, hora="07:15")
+        self.assertEqual(r.status_code, 201)
+        guardado = Viaje.objects.get()
+        self.assertEqual((guardado.paquete_id, guardado.bus.agencia_id), (self.e.paq_a.id, self.e.ag_a.id))
+        self.assertEqual((r.json()["fecha"], r.json()["hora"]), (DIA_1, "07:15"))
+
+    def test_editar_un_viaje_ya_pasado_sin_cambiar_fecha_no_falla(self):
+        viaje = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a,
+                                     fecha=hoy_colombia() - timedelta(days=2), hora="06:30")
+        r = self.admin.put(f"/api/viaje/{viaje.id}/", {"bus_id": self.e.bus_a2.id}, format="json")
+        self.assertEqual(r.status_code, 200)
+        r = self.admin.put(f"/api/viaje/{viaje.id}/", {"fecha": (hoy_colombia() - timedelta(days=1)).isoformat()},
+                           format="json")
+        self.assertEqual(r.status_code, 400)
 
     def test_bus_con_viajes_no_se_borra(self):
         self.programar(self.e.bus_a)
@@ -155,11 +186,11 @@ class EstadosViajeTest(TestCase):
         self.e = Escenario()
         admin = Escenario.cliente_http(self.e.admin_a)
         self.v = admin.post("/api/viaje/", {"paquete_id": self.e.paq_a.id, "bus_id": self.e.bus_a.id,
-                                            "fecha": "2026-11-02", "hora": "06:30"}, format="json").json()
+                                            "fecha": DIA_1, "hora": "06:30"}, format="json").json()
         self.v2 = admin.post("/api/viaje/", {"paquete_id": self.e.paq_a.id, "bus_id": self.e.bus_a.id,
-                                             "fecha": "2026-11-03", "hora": "06:30"}, format="json").json()
+                                             "fecha": DIA_2, "hora": "06:30"}, format="json").json()
         self.otro = admin.post("/api/viaje/", {"paquete_id": self.e.paq_a.id, "bus_id": self.e.bus_a2.id,
-                                               "fecha": "2026-11-02", "hora": "06:30"}, format="json").json()
+                                               "fecha": DIA_1, "hora": "06:30"}, format="json").json()
         admin.post("/api/bus-conductor/", {"bus_id": self.e.bus_a.id, "conductor_id": self.e.cond_a.id}, format="json")
         self.c = Escenario.cliente_http(self.e.cond_a)
 
@@ -210,7 +241,7 @@ class InicioSimultaneoTest(TransactionTestCase):
         e = Escenario()
         admin = Escenario.cliente_http(e.admin_a)
         v = admin.post("/api/viaje/", {"paquete_id": e.paq_a.id, "bus_id": e.bus_a.id,
-                                       "fecha": "2026-11-02", "hora": "06:30"}, format="json").json()
+                                       "fecha": DIA_1, "hora": "06:30"}, format="json").json()
         segundo = e.usuario("cond.a2@rt.co", 3, e.ag_a)
         Bus_Conductor.objects.create(bus=e.bus_a, conductor=e.cond_a)
         Bus_Conductor.objects.create(bus=e.bus_a, conductor=segundo)
