@@ -726,7 +726,7 @@ class DashboardResumenView(APIView):
         cantidad_paquetes = Paquete.objects.filter(agencia_id__in=agencia_ids).count()
         cantidad_buses = Bus.objects.filter(agencia_id__in=agencia_ids).count()
         cantidad_hospedajes = Hospedaje.objects.filter(
-            destino__paquetedestino__paquete__agencia_id__in=agencia_ids
+            destinos__paquetedestino__paquete__agencia_id__in=agencia_ids
         ).distinct().count()
 
         zona_horaria = ZoneInfo("America/Bogota")

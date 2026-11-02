@@ -1,8 +1,7 @@
 from django.urls import path
 from .views import (
     DestinoView, DestinoIdView, DestinoNombreView, DestinoDepartamentoView,
-    HospedajeView, HospedajeIdView, HospedajeNombreView,
-    SitioTuristicoView, SitioTuristicoIdView, SitioTuristicoNombreView,
+    HospedajeView, HospedajeIdView, HospedajeNombreView, HospedajeDestinoView, HospedajeDestinoIdView,
     ImagenView, ImagenIdView, ImagenUrlView, DepartamentoView, BusquedaCatalogoView,
 )
 urlpatterns = [
@@ -19,11 +18,8 @@ urlpatterns = [
     path('hospedaje/', HospedajeView.as_view(), name='hospedaje'),
     path('hospedaje/<int:id>/', HospedajeIdView.as_view(), name='hospedaje-id'),
     path('hospedaje/nombre/<str:nombre>/', HospedajeNombreView.as_view(), name='hospedaje-nombre'),
-
-    # SitioTuristico
-    path('sitioturistico/', SitioTuristicoView.as_view(), name='sitioturistico'),
-    path('sitioturistico/<int:id>/', SitioTuristicoIdView.as_view(), name='sitioturistico-id'),
-    path('sitio-turistico/nombre/<str:nombre>/', SitioTuristicoNombreView.as_view(), name='sitio-turistico-nombre'),
+    path('hospedaje-destino/', HospedajeDestinoView.as_view(), name='hospedaje-destino'),
+    path('hospedaje-destino/<int:id>/', HospedajeDestinoIdView.as_view(), name='hospedaje-destino-id'),
 
     # Imagen
     path('imagen/', ImagenView.as_view(), name='imagen'),

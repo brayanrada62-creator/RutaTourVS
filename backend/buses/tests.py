@@ -52,6 +52,58 @@ class BusConductorFase1Test(TestCase):
         self.assertEqual(r.status_code, 404)
 
 
+class BusTipoBusCrudTest(TestCase):
+    def setUp(self):
+        self.e = Escenario()
+        self.c = Escenario.cliente_http(self.e.admin_a)
+        self.tipo_extra = TipoBus.objects.create(
+            nombre="Microbus", agencia=self.e.ag_a, capacidad=12, descripcion=""
+        )
+
+    def test_bus_puede_tener_varios_tipos_y_crud_de_relacion(self):
+        relacion = self.c.post(
+            "/api/bus-tipo-bus/",
+            {"bus_id": self.e.bus_a.id, "tipo_bus_id": self.tipo_extra.id},
+            format="json",
+        )
+        self.assertEqual(relacion.status_code, 201)
+        relacion_id = relacion.json()["id"]
+
+        bus = self.c.get(f"/api/bus/{self.e.bus_a.id}/").json()
+        self.assertEqual(set(bus["tipo_bus_ids"]), {self.e.tipo_a.id, self.tipo_extra.id})
+        self.assertEqual(len(bus["tipos_bus"]), 2)
+
+        self.assertEqual(self.c.get(f"/api/bus-tipo-bus/{relacion_id}/").status_code, 200)
+        self.assertEqual(
+            self.c.put(
+                f"/api/bus-tipo-bus/{relacion_id}/",
+                {"bus_id": self.e.bus_a2.id, "tipo_bus_id": self.tipo_extra.id},
+                format="json",
+            ).status_code,
+            200,
+        )
+        self.assertEqual(self.c.delete(f"/api/bus-tipo-bus/{relacion_id}/").status_code, 200)
+        self.assertEqual(self.c.get("/api/bus-tipo-bus/").json(), [])
+
+    def test_bus_acepta_el_campo_legacy_tipo_bus_id(self):
+        respuesta = self.c.post(
+            "/api/bus/",
+            {
+                "placa": "AAA333",
+                "agencia_id": self.e.ag_a.id,
+                "tipo_bus_id": self.tipo_extra.id,
+                "marca": "m",
+                "modelo": "m",
+                "estado": "activo",
+                "fecha_registro": "2026-11-02",
+            },
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        bus = Bus.objects.get(placa="AAA333")
+        self.assertEqual(list(bus.tipos_bus.values_list("id", flat=True)), [self.tipo_extra.id])
+
+
 class MigracionDuplicadosTest(TransactionTestCase):
     """La migración 0004 borra filas repetidas antes de crear la restricción única."""
 

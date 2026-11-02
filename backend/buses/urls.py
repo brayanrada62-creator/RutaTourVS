@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     TipoBusView, TipoBusIdView,
     BusView, BusIdView, BusPlacaView,
+    BusTipoBusView, BusTipoBusIdView,
     AsientoView, AsientoIdView, AsientoNumeroView, BusConductorView, BusConductorIdView,
     ViajeView, ViajeIdView, ViajeIniciarView, ViajeFinalizarView, ViajeParadasView, ViajeParadaCumplirView,
 )
@@ -15,6 +16,10 @@ urlpatterns = [
     path('bus/', BusView.as_view(), name='bus'),
     path('bus/<int:id>/', BusIdView.as_view(), name='bus-id'),
     path('bus/placa/<str:placa>/', BusPlacaView.as_view(), name='bus-placa'),
+
+    # Bus-TipoBus
+    path('bus-tipo-bus/', BusTipoBusView.as_view(), name='bus-tipo-bus'),
+    path('bus-tipo-bus/<int:id>/', BusTipoBusIdView.as_view(), name='bus-tipo-bus-id'),
     
     # Bus-Conductor
     path('bus-conductor/', BusConductorView.as_view(), name='bus-conductor'),

@@ -25,12 +25,10 @@ class Destino(models.Model):
 
 class Hospedaje(models.Model):
     nombre = models.CharField(max_length=150)
-    destino = models.ForeignKey(Destino, on_delete=models.CASCADE)
+    destinos = models.ManyToManyField(Destino, through="HospedajeDestino", related_name="hospedajes")
     direccion = models.CharField(max_length=255)
     telefono = models.CharField(max_length=20)
     descripcion = models.CharField(max_length=300)
-    # Agencia dueña del hospedaje (vacía = hospedaje anterior, sin dueño asignado).
-    agencia = models.ForeignKey("usuarios.Agencia", on_delete=models.SET_NULL, null=True, blank=True)
     imagen = models.ImageField(upload_to="hospedajes/", max_length=255, blank=True, null=True)
 
     def __str__(self):
@@ -40,17 +38,15 @@ class Hospedaje(models.Model):
         db_table = "hospedaje"
 
 
-class SitioTuristico(models.Model):
+class HospedajeDestino(models.Model):
+    hospedaje = models.ForeignKey(Hospedaje, on_delete=models.CASCADE)
     destino = models.ForeignKey(Destino, on_delete=models.CASCADE)
-    nombre = models.CharField(max_length=150)
-    descripcion = models.CharField(max_length=300)
-    recomendaciones = models.CharField(max_length=300)
-
-    def __str__(self):
-        return self.nombre
 
     class Meta:
-        db_table = "sitio_turistico"
+        db_table = "hospedaje_destino"
+        constraints = [
+            models.UniqueConstraint(fields=["hospedaje", "destino"], name="hospedaje_destino_unico"),
+        ]
 
 
 class ImagenDestino(models.Model):

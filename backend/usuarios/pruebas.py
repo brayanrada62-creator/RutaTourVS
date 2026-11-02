@@ -48,8 +48,10 @@ class Escenario:
 
     @staticmethod
     def bus(placa, agencia, tipo):
-        return Bus.objects.create(placa=placa, agencia=agencia, tipo_bus=tipo, marca="m", modelo="m",
-                                  fecha_registro=timezone.now())
+        bus = Bus.objects.create(placa=placa, agencia=agencia, marca="m", modelo="m",
+                                 fecha_registro=timezone.now())
+        bus.tipos_bus.add(tipo)
+        return bus
 
     @staticmethod
     def cliente_http(usuario=None, clave=CLAVE):

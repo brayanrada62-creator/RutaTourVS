@@ -20,19 +20,17 @@ class DestinoEntrada(serializers.Serializer):
 
 class HopedajeEntrada(serializers.Serializer):
     nombre = serializers.CharField(max_length=100)
-    destino_id = serializers.IntegerField()
+    destino_id = serializers.IntegerField(required=False)
+    destino_ids = serializers.ListField(child=serializers.IntegerField(), required=False)
     direccion = serializers.CharField(max_length=255)
     telefono = serializers.CharField(max_length=20)
     descripcion = serializers.CharField(max_length=300)
-    agencia_id = serializers.IntegerField(required=False)
     imagen = serializers.ImageField(required=False)
 
 
-class SitioTuristicoEntrada(serializers.Serializer):
-    nombre = serializers.CharField(max_length=100)
+class HospedajeDestinoEntrada(serializers.Serializer):
+    hospedaje_id = serializers.IntegerField()
     destino_id = serializers.IntegerField()
-    descripcion = serializers.CharField(max_length=300)
-    recomendaciones = serializers.CharField(max_length=300)
 
 
 class ImagenEntrada(serializers.Serializer):
