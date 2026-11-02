@@ -32,6 +32,12 @@ class BusConductorEntrada(serializers.Serializer):
     bus_id = serializers.IntegerField()
     conductor_id = serializers.IntegerField()
 
+
+class BusTipoBusEntrada(serializers.Serializer):
+    bus_id = serializers.IntegerField()
+    tipo_bus_id = serializers.IntegerField()
+
+
 class AsientoEntrada(serializers.Serializer):
     tipo_bus_id = serializers.IntegerField()
     numero_asiento = serializers.IntegerField()

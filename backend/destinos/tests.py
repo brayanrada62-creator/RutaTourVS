@@ -1,3 +1,65 @@
 from django.test import TestCase
 
-# Create your tests here.
+from destinos.models import Departamento, Destino, Hospedaje
+from usuarios.pruebas import Escenario
+
+
+class HospedajeDestinoCrudTest(TestCase):
+    def setUp(self):
+        self.e = Escenario()
+        self.c = Escenario.cliente_http(self.e.admin_a)
+        self.departamento = Departamento.objects.create(nombre="Caldas")
+        self.destino_a = Destino.objects.create(
+            nombre="Manizales", departamento=self.departamento, descripcion=""
+        )
+        self.destino_b = Destino.objects.create(
+            nombre="Villamaría", departamento=self.departamento, descripcion=""
+        )
+        self.destino_c = Destino.objects.create(
+            nombre="Neira", departamento=self.departamento, descripcion=""
+        )
+
+    def test_hospedaje_admite_varios_destinos_y_crud_de_relacion(self):
+        respuesta = self.c.post(
+            "/api/hospedaje/",
+            {
+                "nombre": "Hotel Central",
+                "destino_id": self.destino_a.id,
+                "direccion": "Centro",
+                "telefono": "123",
+                "descripcion": "Hotel",
+            },
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        hospedaje = Hospedaje.objects.get(nombre="Hotel Central")
+
+        relacion = self.c.post(
+            "/api/hospedaje-destino/",
+            {"hospedaje_id": hospedaje.id, "destino_id": self.destino_b.id},
+            format="json",
+        )
+        self.assertEqual(relacion.status_code, 201)
+        relacion_id = relacion.json()["id"]
+
+        detalle = self.c.get(f"/api/hospedaje/{hospedaje.id}/").json()
+        self.assertEqual(set(detalle["destino_ids"]), {self.destino_a.id, self.destino_b.id})
+        self.assertNotIn("agencia_id", detalle)
+
+        self.assertEqual(self.c.get(f"/api/hospedaje-destino/{relacion_id}/").status_code, 200)
+        self.assertEqual(
+            self.c.put(
+                f"/api/hospedaje-destino/{relacion_id}/",
+                {"hospedaje_id": hospedaje.id, "destino_id": self.destino_c.id},
+                format="json",
+            ).status_code,
+            200,
+        )
+        self.assertEqual(self.c.delete(f"/api/hospedaje-destino/{relacion_id}/").status_code, 200)
+        relaciones = self.c.get(f"/api/hospedaje-destino/?hospedaje_id={hospedaje.id}").json()
+        self.assertEqual(len(relaciones), 1)
+        self.assertEqual(relaciones[0]["destino_id"], self.destino_a.id)
+
+    def test_busqueda_no_incluye_sitios_turisticos(self):
+        respuesta = self.c.get("/api/buscar/?search=hotel").json()
+        self.assertEqual(set(respuesta), {"search", "destinos", "paquetes", "hospedajes"})

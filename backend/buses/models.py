@@ -23,7 +23,7 @@ class Bus(models.Model):
 
     placa = models.CharField(max_length=15)
     agencia = models.ForeignKey("usuarios.Agencia", on_delete=models.CASCADE)
-    tipo_bus = models.ForeignKey(TipoBus, on_delete=models.PROTECT)
+    tipos_bus = models.ManyToManyField(TipoBus, through="BusTipoBus", related_name="buses")
     marca = models.CharField(max_length=100)
     modelo = models.CharField(max_length=100)
     # Solo un bus "activo" se puede programar en un viaje nuevo.
@@ -35,7 +35,19 @@ class Bus(models.Model):
 
     class Meta:
         db_table = "buses"
-        
+
+
+class BusTipoBus(models.Model):
+    bus = models.ForeignKey(Bus, on_delete=models.CASCADE)
+    tipo_bus = models.ForeignKey(TipoBus, on_delete=models.PROTECT)
+
+    class Meta:
+        db_table = "bus_tipoBus"
+        constraints = [
+            models.UniqueConstraint(fields=["bus", "tipo_bus"], name="bus_tipoBus_unico"),
+        ]
+
+
 class Bus_Conductor(models.Model):
     bus = models.ForeignKey(Bus, on_delete=models.CASCADE)
     conductor = models.ForeignKey("usuarios.Usuario", on_delete=models.CASCADE)

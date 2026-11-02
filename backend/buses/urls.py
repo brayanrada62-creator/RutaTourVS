@@ -1,7 +1,8 @@
 from django.urls import path
 from .views import (
     TipoBusView, TipoBusIdView,
-    BusView, BusIdView, BusPlacaView, BusAsientosView,
+    BusView, BusIdView, BusPlacaView,
+    BusTipoBusView, BusTipoBusIdView,
     AsientoView, AsientoIdView, AsientoNumeroView, BusConductorView, BusConductorIdView,
     ViajeView, ViajeIdView, ViajeIniciarView, ViajeFinalizarView, ViajeParadasView, ViajeParadaCumplirView,
 )
@@ -15,7 +16,10 @@ urlpatterns = [
     path('bus/', BusView.as_view(), name='bus'),
     path('bus/<int:id>/', BusIdView.as_view(), name='bus-id'),
     path('bus/placa/<str:placa>/', BusPlacaView.as_view(), name='bus-placa'),
-    path('bus/<int:id>/asientos/', BusAsientosView.as_view(), name='bus-asientos'),
+
+    # Bus-TipoBus
+    path('bus-tipo-bus/', BusTipoBusView.as_view(), name='bus-tipo-bus'),
+    path('bus-tipo-bus/<int:id>/', BusTipoBusIdView.as_view(), name='bus-tipo-bus-id'),
     
     # Bus-Conductor
     path('bus-conductor/', BusConductorView.as_view(), name='bus-conductor'),
@@ -33,4 +37,4 @@ urlpatterns = [
     path('asiento/', AsientoView.as_view(), name='asiento'),
     path('asiento/<int:id>/', AsientoIdView.as_view(), name='asiento-id'),
     path('asiento/numero/<int:numero_asiento>/', AsientoNumeroView.as_view(), name='asiento-numero'),
-]
+]
