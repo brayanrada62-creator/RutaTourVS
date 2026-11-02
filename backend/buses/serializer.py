@@ -40,3 +40,9 @@ class BusTipoBusEntrada(serializers.Serializer):
 class AsientoEntrada(serializers.Serializer):
     tipo_bus_id = serializers.IntegerField()
     numero_asiento = serializers.IntegerField()
+
+class AsientosBusEntrada(serializers.Serializer):
+    cantidad = serializers.IntegerField(
+        min_value=1, max_value=100,
+        help_text="Número de sillas del bus (1 a 100). Se numeran de 1 a cantidad."
+    )

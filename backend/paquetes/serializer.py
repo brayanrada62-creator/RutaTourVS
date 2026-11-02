@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 
 
@@ -55,3 +57,30 @@ class ItinerarioEntrada(serializers.Serializer):
     descripcion = serializers.CharField(max_length=300)
     hora = serializers.TimeField()
     lugar = serializers.CharField(max_length=100)
+
+
+class PaqueteValidar(serializers.Serializer):
+    """HU-W-21: lo mínimo que debe traer un paquete para guardarse (precio y duración válidos)."""
+    nombre = serializers.CharField(
+        max_length=150,
+        error_messages={"required": "El nombre es obligatorio", "blank": "El nombre es obligatorio",
+                        "null": "El nombre es obligatorio"},
+    )
+    agencia_id = serializers.IntegerField(
+        min_value=1,
+        error_messages={"required": "La agencia es obligatoria", "null": "La agencia es obligatoria",
+                        "invalid": "La agencia no es válida", "min_value": "La agencia no es válida"},
+    )
+    duracion_estimada = serializers.CharField(
+        max_length=50,
+        error_messages={"required": "La duración es obligatoria", "blank": "La duración es obligatoria",
+                        "null": "La duración es obligatoria", "max_length": "La duración admite máximo 50 caracteres"},
+    )
+    precio = serializers.DecimalField(
+        max_digits=12, decimal_places=2, min_value=Decimal("0.01"),
+        error_messages={"required": "El precio es obligatorio", "null": "El precio es obligatorio",
+                        "invalid": "El precio debe ser un número", "min_value": "El precio debe ser mayor que 0",
+                        "max_digits": "El precio es demasiado grande",
+                        "max_whole_digits": "El precio es demasiado grande",
+                        "max_decimal_places": "El precio admite máximo 2 decimales"},
+    )

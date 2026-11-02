@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import date
 
 from django.db import transaction
 from django.utils import timezone
@@ -14,13 +15,15 @@ from decimal import Decimal, InvalidOperation
 
 from destinos.imagenes import destino_json, guardar_imagen_destino, imagen_url, resolver_departamento
 from destinos.models import Destino
+from buses.models import Viaje
+from buses.views import hoy_colombia
 
 from .serializer import (
-    PaqueteRegistrarEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida
+    PaqueteRegistrarEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida, PaqueteValidar
 )
 from .models import Paquete, PaqueteDestino, Itinerario
 from usuarios.paginacion import PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
-from usuarios.permisos import LecturaPublica
+from usuarios.permisos import LecturaPublica, filtrar_catalogo, gestiona_agencia, usuario_de
 
 
 class VistaCatalogo(APIView):
@@ -200,6 +203,29 @@ def destinos_de_paquete(paquete, request=None):
     return [destino_json(rel.destino, request) for rel in relaciones]
 
 
+def salidas_de_paquete(paquete):
+    """Fechas (AAAA-MM-DD) de las salidas programadas desde hoy, sin repetir y en orden."""
+    fechas = (
+        Viaje.objects
+        .filter(paquete=paquete, estado=Viaje.PROGRAMADO, fecha__gte=hoy_colombia())
+        .order_by("fecha")
+        .values_list("fecha", flat=True)
+        .distinct()
+    )
+    return [f.isoformat() for f in fechas]
+
+
+def proxima_salida(paquete):
+    """Salida programada más cercana desde hoy ({"fecha", "hora"}) o None si no hay ninguna."""
+    viaje = (
+        Viaje.objects
+        .filter(paquete=paquete, estado=Viaje.PROGRAMADO, fecha__gte=hoy_colombia())
+        .order_by("fecha", "hora")
+        .first()
+    )
+    return {"fecha": viaje.fecha.isoformat(), "hora": viaje.hora.strftime("%H:%M")} if viaje else None
+
+
 def paquete_json(paquete, request=None):
     return {
         "id": paquete.id,
@@ -212,6 +238,8 @@ def paquete_json(paquete, request=None):
         "precio": str(paquete.precio),
         "imagen": imagen_url(getattr(paquete, "imagen", None), request),
         "destinos": destinos_de_paquete(paquete, request),
+        "salidas": salidas_de_paquete(paquete),
+        "proxima_salida": proxima_salida(paquete),
     }
 
 
@@ -224,7 +252,28 @@ def vincular_destinos(paquete, destinos):
         vistos.add(destino.id)
 
 
+class SinPermisoAgencia(Exception):
+    """El administrador intentó guardar un paquete en una agencia que no gestiona."""
+
+
+def validar_paquete(datos):
+    """Valida nombre, agencia, duración y precio; ValueError con el primer problema (HU-W-21)."""
+    serializador = PaqueteValidar(data={
+        campo: datos.get(campo) for campo in ("nombre", "agencia_id", "duracion_estimada", "precio")
+        if datos.get(campo) is not None
+    })
+    if not serializador.is_valid():
+        campo, errores = next(iter(serializador.errors.items()))
+        raise ValueError(str(errores[0]))
+    return serializador.validated_data
+
+
 def crear_o_actualizar_paquete(request, paquete=None):
+    validos = validar_paquete(request.data)
+    yo = usuario_de(request)
+    agencias = {validos["agencia_id"]} | ({paquete.agencia_id} if paquete else set())
+    if not all(gestiona_agencia(yo, agencia) for agencia in agencias):
+        raise SinPermisoAgencia("Solo puedes guardar paquetes de tu agencia")
     items, destinos_enviados = extraer_items_destino(request)
     archivos = archivos_destino(request, len(items))
     destinos = []
@@ -242,12 +291,12 @@ def crear_o_actualizar_paquete(request, paquete=None):
 
     imagen = request.FILES.get("imagen")
     datos = {
-        "nombre": request.data.get("nombre"),
-        "agencia_id": request.data.get("agencia_id"),
+        "nombre": validos["nombre"],
+        "agencia_id": validos["agencia_id"],
         "descripcion": request.data.get("descripcion") or "",
-        "duracion_estimada": request.data.get("duracion_estimada") or "",
+        "duracion_estimada": validos["duracion_estimada"],
         "estado": estado,
-        "precio": request.data.get("precio") or 0,
+        "precio": validos["precio"],
     }
     fecha = request.data.get("fecha_creacion")
     with transaction.atomic():
@@ -279,11 +328,12 @@ class PaqueteView(VistaCatalogo):
 
     @swagger_auto_schema(
         operation_description=(
-            "Listar paquetes con destinos e imagen. "
-            "Opcional: ?search=, ?destino_id=, ?estado=, ?agencia_id=, "
-            "?precio_min=, ?precio_max=, ?page= y ?page_size="
+            "Listar paquetes con destinos e imagen. Un cliente registrado por una agencia "
+            "solo ve los de esa agencia. Opcional: ?search=, ?destino_id=, ?estado=, ?agencia_id=, "
+            "?precio_min=, ?precio_max=, ?fecha= (AAAA-MM-DD, desde hoy), ?page= y ?page_size="
         ),
         manual_parameters=PARAMETROS_LISTA + [
+            openapi.Parameter("fecha", openapi.IN_QUERY, type=openapi.TYPE_STRING, example="2026-11-02"),
             openapi.Parameter("destino_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
             openapi.Parameter("estado", openapi.IN_QUERY, type=openapi.TYPE_STRING),
             openapi.Parameter("agencia_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
@@ -292,7 +342,7 @@ class PaqueteView(VistaCatalogo):
         ],
     )
     def get(self, request):
-        paqueteLista = Paquete.objects.all()
+        paqueteLista = filtrar_catalogo(usuario_de(request), Paquete.objects.all())
         texto = texto_busqueda(request)
         if texto:
             paqueteLista = paqueteLista.filter(
@@ -316,6 +366,17 @@ class PaqueteView(VistaCatalogo):
                     paqueteLista = paqueteLista.filter(**{lookup: Decimal(str(crudo))})
                 except InvalidOperation:
                     return Response({"mensaje": f"{campo} no es un número válido"}, status=status.HTTP_400_BAD_REQUEST)
+        crudo = (request.query_params.get("fecha") or "").strip()
+        if crudo:
+            try:
+                fecha = date.fromisoformat(crudo)
+            except ValueError:
+                return Response({"mensaje": "fecha debe tener el formato AAAA-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
+            if fecha < hoy_colombia():
+                return Response({"mensaje": "La fecha no puede ser anterior a hoy"}, status=status.HTTP_400_BAD_REQUEST)
+            paqueteLista = paqueteLista.filter(
+                viaje__fecha=fecha, viaje__estado=Viaje.PROGRAMADO
+            ).distinct()
         return Response(paginar(request, paqueteLista.order_by("id"), lambda p: paquete_json(p, request)))
 
     @swagger_auto_schema(
@@ -328,6 +389,8 @@ class PaqueteView(VistaCatalogo):
             paquete = crear_o_actualizar_paquete(request)
         except ValueError as error:
             return Response({"mensaje": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        except SinPermisoAgencia as error:
+            return Response({"mensaje": str(error)}, status=status.HTTP_403_FORBIDDEN)
         data = paquete_json(paquete, request)
         data["mensaje"] = "Paquete almacenado correctamente"
         return Response(data, status=status.HTTP_201_CREATED)
@@ -354,6 +417,8 @@ class PaqueteRegistrarView(VistaCatalogo):
             paquete = crear_o_actualizar_paquete(request)
         except ValueError as error:
             return Response({"mensaje": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        except SinPermisoAgencia as error:
+            return Response({"mensaje": str(error)}, status=status.HTTP_403_FORBIDDEN)
         data = paquete_json(paquete, request)
         data["mensaje"] = "Paquete registrado correctamente"
         return Response(data, status=status.HTTP_201_CREATED)
@@ -366,7 +431,7 @@ class PaqueteIdView(VistaCatalogo):
         operation_description="Listar paquete por id, con destinos e imágenes"
     )
     def get(self, request, id):
-        registroEncontrado = Paquete.objects.filter(id=id).first()
+        registroEncontrado = filtrar_catalogo(usuario_de(request), Paquete.objects.filter(id=id)).first()
         if not registroEncontrado:
             return Response({"mensaje": "Paquete no encontrado"}, status=status.HTTP_404_NOT_FOUND)
         return Response(paquete_json(registroEncontrado, request))
@@ -383,6 +448,8 @@ class PaqueteIdView(VistaCatalogo):
             paqueteB = crear_o_actualizar_paquete(request, paqueteB)
         except ValueError as error:
             return Response({"mensaje": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        except SinPermisoAgencia as error:
+            return Response({"mensaje": str(error)}, status=status.HTTP_403_FORBIDDEN)
         data = paquete_json(paqueteB, request)
         data["mensaje"] = "Paquete actualizado"
         return Response(data)
@@ -401,7 +468,7 @@ class PaqueteDescripcionView(VistaCatalogo):
         operation_description="Busca paquetes por descripción"
     )
     def get(self, request, descripcion):
-        paqueteLista = Paquete.objects.filter(descripcion__icontains=descripcion)
+        paqueteLista = filtrar_catalogo(usuario_de(request), Paquete.objects.filter(descripcion__icontains=descripcion))
         return Response([paquete_json(paquete, request) for paquete in paqueteLista])
 
 
@@ -410,7 +477,7 @@ class PaqueteNombreView(VistaCatalogo):
         operation_description="Busca paquetes por nombre"
     )
     def get(self, request, nombre):
-        paqueteLista = Paquete.objects.filter(nombre__icontains=nombre)
+        paqueteLista = filtrar_catalogo(usuario_de(request), Paquete.objects.filter(nombre__icontains=nombre))
         return Response([paquete_json(paquete, request) for paquete in paqueteLista])
 
 
@@ -612,4 +679,4 @@ class ItinerarioLugarView(VistaCatalogo):
                 "hora": itinerario.hora,
                 "lugar": itinerario.lugar,
             })
-        return Response(lista)
+        return Response(lista)

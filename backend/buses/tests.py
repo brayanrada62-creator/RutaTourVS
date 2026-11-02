@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TestCase, TransactionTestCase
@@ -8,6 +10,12 @@ from usuarios.pruebas import Escenario
 
 from usuarios.models import Agencia, Rol, Usuario, UsuarioAgencia
 from buses.models import Bus, Bus_Conductor, TipoBus
+from buses.views import hoy_colombia
+
+# Fechas futuras relativas a hoy: la programación rechaza el pasado (HU-W-21).
+DIA_1 = (hoy_colombia() + timedelta(days=30)).isoformat()
+DIA_2 = (hoy_colombia() + timedelta(days=31)).isoformat()
+DIA_3 = (hoy_colombia() + timedelta(days=33)).isoformat()
 
 
 class BusConductorFase1Test(TestCase):
@@ -106,6 +114,12 @@ class BusTipoBusCrudTest(TestCase):
 
 class MigracionDuplicadosTest(TransactionTestCase):
     """La migración 0004 borra filas repetidas antes de crear la restricción única."""
+    def tearDown(self):
+        # Deja la base con TODAS las migraciones: las pruebas que vienen después necesitan las tablas nuevas.
+        ejecutor = MigrationExecutor(connection)
+        ejecutor.loader.build_graph()
+        ejecutor.migrate(ejecutor.loader.graph.leaf_nodes())
+
 
     def test_migracion_quita_duplicados(self):
         ejecutor = MigrationExecutor(connection)
@@ -135,7 +149,7 @@ class ViajesPorBusTest(TestCase):
         self.e = Escenario()
         self.admin = Escenario.cliente_http(self.e.admin_a)
 
-    def programar(self, bus, fecha="2026-11-02", hora="06:30", paquete=None):
+    def programar(self, bus, fecha=DIA_1, hora="06:30", paquete=None):
         r = self.admin.post("/api/viaje/", {"paquete_id": (paquete or self.e.paq_a).id, "bus_id": bus.id,
                                             "fecha": fecha, "hora": hora}, format="json")
         return r
@@ -182,12 +196,35 @@ class ViajesPorBusTest(TestCase):
         self.assertEqual(self.programar(self.e.bus_a).status_code, 409)          # misma hora, mismo bus
         b = Escenario.cliente_http(self.e.admin_b)
         r = b.post("/api/viaje/", {"paquete_id": self.e.paq_a.id, "bus_id": self.e.bus_a.id,
-                                   "fecha": "2026-11-03", "hora": "06:30"}, format="json")
+                                   "fecha": DIA_2, "hora": "06:30"}, format="json")
         self.assertEqual(r.status_code, 403)
         self.assertEqual(b.get("/api/viaje/").json(), [])
         cond = Escenario.cliente_http(self.e.cond_a)
         self.assertEqual(cond.post("/api/viaje/", {"paquete_id": self.e.paq_a.id, "bus_id": self.e.bus_a.id,
-                                                   "fecha": "2026-11-05", "hora": "06:30"}, format="json").status_code, 403)
+                                                   "fecha": DIA_3, "hora": "06:30"}, format="json").status_code, 403)
+
+    def test_fecha_u_hora_invalida_no_programa_el_viaje(self):
+        ayer = (hoy_colombia() - timedelta(days=1)).isoformat()
+        for fecha, hora in ((ayer, "06:30"), (DIA_1, "25:99"), (DIA_1, "mañana"), ("2026-02-30", "06:30"), (DIA_1, "")):
+            r = self.programar(self.e.bus_a, fecha=fecha, hora=hora)
+            self.assertEqual(r.status_code, 400, (fecha, hora))
+        self.assertEqual(Viaje.objects.count(), 0)
+
+    def test_programar_guarda_fecha_y_hora_del_paquete_de_su_agencia(self):
+        r = self.programar(self.e.bus_a, fecha=DIA_1, hora="07:15")
+        self.assertEqual(r.status_code, 201)
+        guardado = Viaje.objects.get()
+        self.assertEqual((guardado.paquete_id, guardado.bus.agencia_id), (self.e.paq_a.id, self.e.ag_a.id))
+        self.assertEqual((r.json()["fecha"], r.json()["hora"]), (DIA_1, "07:15"))
+
+    def test_editar_un_viaje_ya_pasado_sin_cambiar_fecha_no_falla(self):
+        viaje = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a,
+                                     fecha=hoy_colombia() - timedelta(days=2), hora="06:30")
+        r = self.admin.put(f"/api/viaje/{viaje.id}/", {"bus_id": self.e.bus_a2.id}, format="json")
+        self.assertEqual(r.status_code, 200)
+        r = self.admin.put(f"/api/viaje/{viaje.id}/", {"fecha": (hoy_colombia() - timedelta(days=1)).isoformat()},
+                           format="json")
+        self.assertEqual(r.status_code, 400)
 
     def test_bus_con_viajes_no_se_borra(self):
         self.programar(self.e.bus_a)
@@ -201,11 +238,11 @@ class EstadosViajeTest(TestCase):
         self.e = Escenario()
         admin = Escenario.cliente_http(self.e.admin_a)
         self.v = admin.post("/api/viaje/", {"paquete_id": self.e.paq_a.id, "bus_id": self.e.bus_a.id,
-                                            "fecha": "2026-11-02", "hora": "06:30"}, format="json").json()
+                                            "fecha": DIA_1, "hora": "06:30"}, format="json").json()
         self.v2 = admin.post("/api/viaje/", {"paquete_id": self.e.paq_a.id, "bus_id": self.e.bus_a.id,
-                                             "fecha": "2026-11-03", "hora": "06:30"}, format="json").json()
+                                             "fecha": DIA_2, "hora": "06:30"}, format="json").json()
         self.otro = admin.post("/api/viaje/", {"paquete_id": self.e.paq_a.id, "bus_id": self.e.bus_a2.id,
-                                               "fecha": "2026-11-02", "hora": "06:30"}, format="json").json()
+                                               "fecha": DIA_1, "hora": "06:30"}, format="json").json()
         admin.post("/api/bus-conductor/", {"bus_id": self.e.bus_a.id, "conductor_id": self.e.cond_a.id}, format="json")
         self.c = Escenario.cliente_http(self.e.cond_a)
 
@@ -256,7 +293,7 @@ class InicioSimultaneoTest(TransactionTestCase):
         e = Escenario()
         admin = Escenario.cliente_http(e.admin_a)
         v = admin.post("/api/viaje/", {"paquete_id": e.paq_a.id, "bus_id": e.bus_a.id,
-                                       "fecha": "2026-11-02", "hora": "06:30"}, format="json").json()
+                                       "fecha": DIA_1, "hora": "06:30"}, format="json").json()
         segundo = e.usuario("cond.a2@rt.co", 3, e.ag_a)
         Bus_Conductor.objects.create(bus=e.bus_a, conductor=e.cond_a)
         Bus_Conductor.objects.create(bus=e.bus_a, conductor=segundo)
@@ -275,3 +312,67 @@ class InicioSimultaneoTest(TransactionTestCase):
             h.join()
         self.assertEqual(sorted(codigos), [200, 409])
         self.assertEqual(Viaje.objects.get(id=v["id"]).estado, "EN_CURSO")
+
+
+class AsientosBusTest(TestCase):
+    """POST /bus/<id>/asientos/ genera las sillas del tipo de bus (plantilla compartida por tipo)."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.c = Escenario.cliente_http(self.e.admin_a)
+
+    def numeros(self, tipo):
+        from buses.models import Asiento
+        return sorted(Asiento.objects.filter(tipo_bus=tipo).values_list("numero_asiento", flat=True))
+
+    def test_genera_sillas_y_actualiza_capacidad(self):
+        r = self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 12}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["cantidad"], 12)
+        self.assertEqual(self.numeros(self.e.tipo_a), list(range(1, 13)))
+        self.e.tipo_a.refresh_from_db()
+        self.assertEqual(self.e.tipo_a.capacidad, 12)
+        consulta = self.c.get(f"/api/bus/{self.e.bus_a.id}/asientos/").json()
+        self.assertEqual(consulta["cantidad"], 12)
+        self.assertEqual(consulta["buses_mismo_tipo"], 2)
+
+    def test_reducir_borra_las_sobrantes_y_no_duplica(self):
+        self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 10}, format="json")
+        self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 10}, format="json")
+        self.assertEqual(self.numeros(self.e.tipo_a), list(range(1, 11)))
+        r = self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 4}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(self.numeros(self.e.tipo_a), [1, 2, 3, 4])
+
+    def test_no_borra_sillas_reservadas(self):
+        from buses.models import Asiento
+        from reservas.models import AsientoReserva, Reserva
+        self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 10}, format="json")
+        reserva = Reserva.objects.create(fecha_reserva=timezone.now(), usuario=self.e.cliente, paquete=self.e.paq_a)
+        AsientoReserva.objects.create(reserva=reserva, asiento=Asiento.objects.get(tipo_bus=self.e.tipo_a, numero_asiento=9))
+        r = self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 5}, format="json")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(len(self.numeros(self.e.tipo_a)), 10)
+
+    def test_valida_cantidad(self):
+        for malo in (0, -1, 101, "abc", None):
+            r = self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": malo}, format="json")
+            self.assertEqual(r.status_code, 400, malo)
+
+    def test_aislamiento_por_agencia(self):
+        r = self.c.post(f"/api/bus/{self.e.bus_b.id}/asientos/", {"cantidad": 5}, format="json")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(self.numeros(self.e.tipo_b), [])
+        conductor = Escenario.cliente_http(self.e.cond_a)
+        self.assertEqual(conductor.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 5}, format="json").status_code, 403)
+        anonimo = APIClient().post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 5}, format="json")
+        self.assertIn(anonimo.status_code, (401, 403))
+        self.assertEqual(self.c.post("/api/bus/999/asientos/", {"cantidad": 5}, format="json").status_code, 404)
+
+    def test_la_app_ve_las_sillas_de_la_salida(self):
+        from buses.models import Viaje
+        self.c.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 8}, format="json")
+        viaje = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a, fecha=timezone.localdate(), hora="08:00")
+        sillas = APIClient().get(f"/api/asiento/?viaje_id={viaje.id}").json()
+        self.assertEqual(len(sillas), 8)
+        self.assertFalse(any(s["ocupado"] for s in sillas))

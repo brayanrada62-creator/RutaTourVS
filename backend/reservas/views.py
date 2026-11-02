@@ -4,13 +4,16 @@ from rest_framework import status
 from drf_yasg.utils import swagger_auto_schema
 
 from .serializer import ReservaEntrada, AsientoReservaEntrada, MensajeSalida
-from .models import Reserva, AsientoReserva, GpsPunto, Novedad, ChatMensaje
+from .models import (
+    ESTADOS_QUE_LIBERAN, ESTADOS_RESERVA, AsientoReserva, ChatMensaje, GpsPunto, Novedad, Reserva,
+    marcar_vencidas, plazo_de_pago, reservas_que_ocupan,
+)
 import hashlib
 import hmac
 import re
 
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -20,11 +23,11 @@ from pagos.models import Pago
 from buses.models import Asiento, Bus_Conductor
 from paquetes.models import Paquete
 from buses.models import Viaje
-from buses.views import conductor_autorizado
+from buses.views import conductor_autorizado, entero_o_none, hoy_colombia
 from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
 from usuarios.permisos import (
-    SoloPersonal, agencias_de, es_admin, es_cliente_de_paquete, es_conductor, es_super, gestiona_agencia,
-    prohibido, trabaja_en_agencia, usuario_de,
+    ROL_CLIENTE, SoloPersonal, agencias_de, agencias_de_catalogo, es_admin, es_cliente_de_paquete, es_cliente_de_viaje, es_conductor,
+    es_super, gestiona_agencia, prohibido, trabaja_en_agencia, usuario_de,
 )
 
 
@@ -81,14 +84,41 @@ def puede_ver_paquete_operativo(yo, paquete_id):
     return trabaja_en_agencia(yo, agencia_id) or es_cliente_de_paquete(yo, paquete_id)
 
 
+def error_pasajero(nombre, documento):
+    """Vacíos = viaja el titular. Si es otra persona: nombre de 3 a 120 letras y documento de 5 a 15 dígitos."""
+    if not nombre and not documento:
+        return None
+    if not (3 <= len(nombre) <= 120):
+        return "Escribe el nombre completo del pasajero"
+    if not (documento.isdigit() and 5 <= len(documento) <= 15):
+        return "El documento del pasajero debe tener de 5 a 15 dígitos"
+    return None
+
+
+def nombre_pasajero(reserva, usuario=None):
+    """Nombre de quien viaja: el pasajero indicado o, si no hay, el titular."""
+    if reserva.pasajero_nombre:
+        return reserva.pasajero_nombre
+    usuario = usuario or reserva.usuario
+    return usuario.nombre_completo if usuario else f"Pasajero {reserva.usuario_id}"
+
+
+def total_reserva(reserva, cantidad_sillas=None):
+    """Precio del paquete × sillas reservadas. Lo calcula el servidor, nunca la app."""
+    if cantidad_sillas is None:
+        cantidad_sillas = AsientoReserva.objects.filter(reserva=reserva).count()
+    return reserva.paquete.precio * cantidad_sillas
+
+
 def reserva_json(reserva):
     asientos = list(
         AsientoReserva.objects.filter(reserva=reserva).values_list("asiento__numero_asiento", flat=True)
     )
     pago = Pago.objects.filter(reserva=reserva).order_by("-id").first()
-    estado = reserva.estado
+    estado = "vencida" if reserva.vencida else reserva.estado
     if pago and pago.estado == "aprobado" and estado == "pendiente":
         estado = "pagada"
+    viaje = reserva.viaje
     return {
         "id": reserva.id,
         "fecha_reserva": reserva.fecha_reserva,
@@ -100,7 +130,66 @@ def reserva_json(reserva):
         "codigo": codigo_reserva(reserva.id),
         "pago_estado": pago.estado if pago else "",
         "viaje_id": reserva.viaje_id,
+        # Hasta cuándo se guardan las sillas sin comprobante (null = plazo detenido).
+        "vence_en": reserva.vence_en,
+        "pasajero_nombre": reserva.pasajero_nombre,
+        "pasajero_documento": reserva.pasajero_documento,
+        "paquete": reserva.paquete.nombre,
+        "agencia_id": reserva.paquete.agencia_id,
+        "total": str(total_reserva(reserva, len(asientos))),
+        # Salida elegida (null en reservas antiguas sin salida).
+        "viaje_fecha": viaje.fecha.isoformat() if viaje else None,
+        "viaje_hora": viaje.hora.strftime("%H:%M") if viaje else None,
+        "viaje_estado": viaje.estado if viaje else None,
+        "placa": viaje.bus.placa if viaje else None,
     }
+
+
+def leer_ids_asientos(valor):
+    """Acepta [3, 4], "3,4" o vacío. Devuelve (lista de ids, error)."""
+    if valor in (None, "", []):
+        return [], None
+    partes = valor if isinstance(valor, (list, tuple)) else str(valor).split(",")
+    ids = []
+    for parte in partes:
+        numero = entero_o_none(str(parte).strip())
+        if numero is None or numero <= 0:
+            return None, "Las sillas deben ser números separados por coma"
+        ids.append(numero)
+    return ids, None
+
+
+def tomar_sillas(reserva, asiento_ids, excluir_asiento_reserva=None):
+    """Valida las sillas de una reserva. Debe llamarse dentro de transaction.atomic().
+
+    Bloquea las filas de las sillas en orden de id (así dos compras simultáneas se turnan y no se
+    traban entre sí), revisa que sean del bus de la salida y que nadie más las tenga.
+    Devuelve (sillas, None) o (None, Response con el error)."""
+    ids = sorted(set(asiento_ids))
+    sillas = list(Asiento.objects.select_for_update().select_related("tipo_bus").filter(id__in=ids).order_by("id"))
+    if not ids or len(sillas) != len(ids):
+        return None, Response({"message": "Alguna silla no existe"}, status=status.HTTP_400_BAD_REQUEST)
+    for silla in sillas:
+        if reserva.viaje_id:
+            propia = silla.tipo_bus_id == reserva.viaje.bus.tipo_bus_id
+        else:
+            propia = silla.tipo_bus.agencia_id == reserva.paquete.agencia_id
+        if not propia:
+            return None, Response({"message": f"La silla {silla.numero_asiento} no es del bus de la salida"},
+                                  status=status.HTTP_400_BAD_REQUEST)
+    ocupadas = AsientoReserva.objects.filter(
+        asiento_id__in=ids, reserva__in=reservas_que_ocupan(reserva.paquete_id, reserva.viaje_id),
+    )
+    if excluir_asiento_reserva is not None:
+        ocupadas = ocupadas.exclude(id=excluir_asiento_reserva)
+    numeros = sorted(set(ocupadas.values_list("asiento__numero_asiento", flat=True)))
+    if numeros:
+        texto = "La silla" if len(numeros) == 1 else "Las sillas"
+        return None, Response(
+            {"message": f"{texto} {', '.join(str(n) for n in numeros)} ya está(n) reservada(s)", "ocupadas": numeros},
+            status=status.HTTP_409_CONFLICT,
+        )
+    return sillas, None
 
 
 class ReservaView(APIView):
@@ -119,26 +208,82 @@ class ReservaView(APIView):
         return Response(paginar(request, lista.order_by("id"), reserva_json))
 
     @swagger_auto_schema(
-        operation_description="Guardar reserva",
+        operation_description=(
+            "Guardar reserva CON sus sillas en una sola operación. El cliente envía viaje_id (una salida "
+            "PROGRAMADA del paquete, desde hoy) y asientos (ids, ej. \"12,13\"); si una silla está ocupada "
+            "responde 409 con 'ocupadas' y no guarda nada. Las sillas se guardan "
+            f"{settings.RESERVA_MINUTOS_PAGO} minutos (vence_en) mientras llega el comprobante. "
+            "clave_idempotencia (opcional): repetir la petición con la misma clave devuelve la misma reserva (200). "
+            "Sin asientos se crea la reserva sola (compatibilidad: luego POST /asientoreserva/)."
+        ),
         request_body=ReservaEntrada,
         responses={201: MensajeSalida}
     )
     def post(self, request):
         yo = usuario_de(request)
-        paquete_id = request.data.get("paquete_id")
-        agencia_id = agencia_del_paquete(paquete_id)
-        if agencia_id is None:
+        paquete = Paquete.objects.filter(id=entero_o_none(request.data.get("paquete_id"))).first()
+        if paquete is None:
             return Response({"message": "El paquete no existe"}, status=status.HTTP_404_NOT_FOUND)
-        personal = gestiona_agencia(yo, agencia_id)
-        # Un cliente solo reserva para sí mismo y siempre queda "pendiente".
-        usuario_id = request.data.get("usuario_id") if personal else yo.id
+        personal = gestiona_agencia(yo, paquete.agencia_id)
+        catalogo = agencias_de_catalogo(yo)
+        if catalogo is not None and paquete.agencia_id not in catalogo:
+            return prohibido("Ese paquete no es de tu agencia")
+        if not personal and paquete.estado != "activo":
+            return Response({"message": "Este paquete no está disponible para reservar"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        clave = str(request.data.get("clave_idempotencia") or "").strip()[:64] or None
+        if clave:
+            repetida = Reserva.objects.filter(usuario=yo, clave_idempotencia=clave).first()
+            if repetida:
+                return Response(reserva_json(repetida), status=status.HTTP_200_OK)
+        viaje_id = entero_o_none(request.data.get("viaje_id"))
+        viaje = None
+        if viaje_id is not None or not personal:
+            viaje = Viaje.objects.filter(id=viaje_id, paquete_id=paquete.id).first() if viaje_id is not None else None
+            if viaje is None:
+                return Response({"message": "Elige una salida de este paquete"}, status=status.HTTP_400_BAD_REQUEST)
+            if not personal and (viaje.estado != Viaje.PROGRAMADO or viaje.fecha < hoy_colombia()):
+                return Response({"message": "Esa salida ya no recibe reservas"}, status=status.HTTP_400_BAD_REQUEST)
+        asiento_ids, error = leer_ids_asientos(request.data.get("asientos"))
+        if error:
+            return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
+        pasajero_nombre = str(request.data.get("pasajero_nombre") or "").strip()
+        pasajero_documento = str(request.data.get("pasajero_documento") or "").strip()
+        error = error_pasajero(pasajero_nombre, pasajero_documento)
+        if error:
+            return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
+        # Un cliente solo reserva para sí mismo, con la fecha del servidor, y siempre queda "pendiente".
+        usuario_id = (request.data.get("usuario_id") or yo.id) if personal else yo.id
         estado = (request.data.get("estado") or "pendiente") if personal else "pendiente"
-        reserva = Reserva.objects.create(
-            fecha_reserva=request.data.get("fecha_reserva"),
-            usuario_id=usuario_id,
-            paquete_id=paquete_id,
-            estado=estado,
-        )
+        if estado not in dict(ESTADOS_RESERVA):
+            return Response({"message": "Estado de reserva no válido"}, status=status.HTTP_400_BAD_REQUEST)
+        fecha = (request.data.get("fecha_reserva") if personal else None) or timezone.now()
+        marcar_vencidas()
+        try:
+            with transaction.atomic():
+                reserva = Reserva.objects.create(
+                    fecha_reserva=fecha,
+                    usuario_id=usuario_id,
+                    paquete=paquete,
+                    estado=estado,
+                    viaje=viaje,
+                    vence_en=plazo_de_pago(),
+                    clave_idempotencia=clave,
+                    pasajero_nombre=pasajero_nombre,
+                    pasajero_documento=pasajero_documento,
+                )
+                if asiento_ids:
+                    sillas, error = tomar_sillas(reserva, asiento_ids)
+                    if error:
+                        transaction.set_rollback(True)  # no queda ni la reserva ni ninguna silla
+                        return error
+                    AsientoReserva.objects.bulk_create([AsientoReserva(reserva=reserva, asiento=a) for a in sillas])
+        except IntegrityError:
+            # Dos envíos con la misma clave llegaron a la vez: se devuelve la que sí se guardó.
+            repetida = Reserva.objects.filter(usuario=yo, clave_idempotencia=clave).first() if clave else None
+            if repetida is None:
+                raise
+            return Response(reserva_json(repetida), status=status.HTTP_200_OK)
         return Response(reserva_json(reserva), status=status.HTTP_201_CREATED)
 
 
@@ -156,23 +301,43 @@ class ReservaIdView(APIView):
             return prohibido("Solo la agencia puede modificar la reserva")
         if "paquete_id" in request.data and not gestiona_agencia(yo, agencia_del_paquete(request.data.get("paquete_id"))):
             return prohibido()
+        tiene_sillas = AsientoReserva.objects.filter(reserva=reservaB).exists()
+        nuevo_paquete = entero_o_none(request.data.get("paquete_id"))
+        if nuevo_paquete is not None and nuevo_paquete != reservaB.paquete_id and tiene_sillas:
+            return Response({"message": "La reserva ya tiene sillas; cancélala y crea otra en el paquete nuevo"},
+                            status=status.HTTP_409_CONFLICT)
+        if "estado" in request.data:
+            estado = request.data.get("estado")
+            if estado not in dict(ESTADOS_RESERVA):
+                return Response({"message": "Estado de reserva no válido"}, status=status.HTTP_400_BAD_REQUEST)
+            if (reservaB.estado in ESTADOS_QUE_LIBERAN or reservaB.vencida) and estado == "pendiente":
+                # Sus sillas ya pudieron venderse a otra persona: no se reactiva.
+                return Response({"message": "Una reserva cancelada o vencida no se reactiva; crea una nueva"},
+                                status=status.HTTP_409_CONFLICT)
+            reservaB.estado = estado
         reservaB.fecha_reserva = request.data.get("fecha_reserva", reservaB.fecha_reserva)
         reservaB.usuario_id = request.data.get("usuario_id", reservaB.usuario_id)
-        reservaB.paquete_id = request.data.get("paquete_id", reservaB.paquete_id)
-        if "estado" in request.data:
-            reservaB.estado = request.data.get("estado")
+        if nuevo_paquete is not None:
+            reservaB.paquete_id = nuevo_paquete
         reservaB.save()
         return Response(reserva_json(reservaB))
 
+    @swagger_auto_schema(
+        operation_description=(
+            "Cancelar la reserva: pasa a 'cancelada' y sus sillas quedan libres. No borra nada "
+            "(los pagos se conservan para la auditoría). Una reserva pagada solo la cancela la agencia."
+        )
+    )
     def delete(self, request, id):
         reserva = get_object_or_404(Reserva, id=id)
         yo = usuario_de(request)
         pagada = Pago.objects.filter(reserva=reserva, estado="aprobado").exists()
         es_dueno = reserva.usuario_id == yo.id and not pagada
         if not (es_dueno or gestiona_agencia(yo, reserva.paquete.agencia_id)):
-            return prohibido("Una reserva pagada solo la puede eliminar la agencia")
-        reserva.delete()
-        return Response({"mensaje": "Reserva eliminada"})
+            return prohibido("Una reserva pagada solo la puede cancelar la agencia")
+        reserva.estado = "cancelada"
+        reserva.save(update_fields=["estado"])
+        return Response({"mensaje": "Reserva cancelada", "id": reserva.id})
 
 
 class ReservaFechaView(APIView):
@@ -205,32 +370,29 @@ class AsientoReservaView(APIView):
         ])
 
     @swagger_auto_schema(
-        operation_description="Reservar un asiento. Responde 409 si el asiento ya está reservado "
-                              "en otra reserva no cancelada del mismo paquete.",
+        operation_description="Agregar una silla a una reserva (compatibilidad; lo recomendado es enviar 'asientos' "
+                              "en POST /reserva/). 409 si la silla ya está reservada en la misma salida (o en una "
+                              "reserva antigua sin salida del paquete); 400 si no es del bus de la salida o si la "
+                              "reserva está cancelada o vencida.",
         request_body=AsientoReservaEntrada,
     )
     def post(self, request):
-        asiento_id = request.data.get("asiento_id")
-        reserva_id = request.data.get("reserva_id")
+        asiento_id = entero_o_none(request.data.get("asiento_id"))
+        reserva_id = entero_o_none(request.data.get("reserva_id"))
+        reserva = Reserva.objects.select_related("paquete", "viaje__bus").filter(id=reserva_id).first()
+        if asiento_id is None or reserva is None:
+            return Response({"message": "Asiento o reserva no existe"}, status=status.HTTP_400_BAD_REQUEST)
+        yo = usuario_de(request)
+        if not (reserva.usuario_id == yo.id or gestiona_agencia(yo, reserva.paquete.agencia_id)):
+            return prohibido("Esa reserva no es tuya")
+        if reserva.estado in ESTADOS_QUE_LIBERAN or reserva.vencida:
+            return Response({"message": "La reserva está cancelada o vencida"}, status=status.HTTP_400_BAD_REQUEST)
         with transaction.atomic():
-            # Bloquea la fila del asiento: si dos personas confirman a la vez, la segunda espera.
-            asiento = Asiento.objects.select_for_update().filter(id=asiento_id).first()
-            reserva = Reserva.objects.filter(id=reserva_id).first()
-            if asiento is None or reserva is None:
-                return Response({"message": "Asiento o reserva no existe"}, status=status.HTTP_400_BAD_REQUEST)
-            yo = usuario_de(request)
-            if not (reserva.usuario_id == yo.id or gestiona_agencia(yo, reserva.paquete.agencia_id)):
-                return prohibido("Esa reserva no es tuya")
-            ocupado = (
-                AsientoReserva.objects
-                .filter(asiento_id=asiento.id, reserva__paquete_id=reserva.paquete_id)
-                .exclude(reserva__estado__iexact="cancelada")
-                .exists()
-            )
-            if ocupado:
-                return Response({"message": "El asiento ya está reservado"}, status=status.HTTP_409_CONFLICT)
-            AsientoReserva.objects.create(asiento_id=asiento.id, reserva_id=reserva.id)
-        return Response({"mensaje": "Asiento reservado correctamente", "id": reserva_id})
+            sillas, error = tomar_sillas(reserva, [asiento_id])
+            if error:
+                return error
+            AsientoReserva.objects.create(asiento=sillas[0], reserva=reserva)
+        return Response({"mensaje": "Asiento reservado correctamente", "id": reserva.id})
 
 
 class AsientoReservaIdView(APIView):
@@ -242,13 +404,28 @@ class AsientoReservaIdView(APIView):
             return prohibido()
         return Response({"id": ar.id, "asiento_id": ar.asiento_id, "reserva_id": ar.reserva_id})
 
+    @swagger_auto_schema(
+        operation_description="Cambiar la silla (o la reserva) de un registro. Aplica las mismas reglas que "
+                              "POST /asientoreserva/: 409 si la silla nueva ya está vendida en esa salida.",
+        request_body=AsientoReservaEntrada,
+    )
     def put(self, request, id):
         arB = get_object_or_404(AsientoReserva, id=id)
-        if not gestiona_agencia(usuario_de(request), arB.reserva.paquete.agencia_id):
+        yo = usuario_de(request)
+        if not gestiona_agencia(yo, arB.reserva.paquete.agencia_id):
             return prohibido()
-        arB.asiento_id = request.data.get("asiento_id")
-        arB.reserva_id = request.data.get("reserva_id")
-        arB.save()
+        reserva = Reserva.objects.select_related("paquete", "viaje__bus").filter(
+            id=entero_o_none(request.data.get("reserva_id")) or arB.reserva_id).first()
+        asiento_id = entero_o_none(request.data.get("asiento_id")) or arB.asiento_id
+        if reserva is None or not gestiona_agencia(yo, reserva.paquete.agencia_id):
+            return prohibido()
+        with transaction.atomic():
+            sillas, error = tomar_sillas(reserva, [asiento_id], excluir_asiento_reserva=arB.id)
+            if error:
+                return error
+            arB.asiento = sillas[0]
+            arB.reserva = reserva
+            arB.save()
         return Response({"mensaje": "Asiento reservado actualizado"})
 
     def delete(self, request, id):
@@ -267,14 +444,14 @@ class PaquetePasajerosView(APIView):
         if not gestiona_agencia(usuario_de(request), agencia_id):
             return prohibido("El conductor consulta los pasajeros desde su viaje")
         lista = []
-        for r in Reserva.objects.filter(paquete_id=paquete_id).exclude(estado="cancelada"):
+        for r in Reserva.objects.filter(paquete_id=paquete_id).exclude(estado__in=ESTADOS_QUE_LIBERAN):
             usuario = Usuario.objects.filter(id=r.usuario_id).first()
             asientos = list(
                 AsientoReserva.objects.filter(reserva=r).values_list("asiento__numero_asiento", flat=True)
             )
             lista.append({
                 "id": r.id,
-                "nombre": usuario.nombre_completo if usuario else f"Pasajero {r.usuario_id}",
+                "nombre": nombre_pasajero(r, usuario),
                 "detalle": r.paquete.nombre if r.paquete_id else "",
                 "codigo": codigo_reserva(r.id),
                 "asiento": ",".join(str(n) for n in asientos) or "-",
@@ -297,10 +474,10 @@ class PaqueteAbordarView(APIView):
 
 
 def reservas_del_viaje(viaje):
-    """Pasajeros de un viaje: reservas no canceladas de su paquete, de ese viaje o sin viaje asignado."""
+    """Pasajeros de un viaje: reservas no canceladas ni vencidas de su paquete, de ese viaje o sin viaje asignado."""
     return (
         Reserva.objects.filter(paquete_id=viaje.paquete_id)
-        .exclude(estado__iexact="cancelada")
+        .exclude(estado__in=ESTADOS_QUE_LIBERAN)
         .filter(Q(viaje=viaje) | Q(viaje__isnull=True))
     )
 
@@ -311,7 +488,7 @@ def pasajero_json(r):
     pago = estado_pago(r)
     return {
         "id": r.id,
-        "nombre": usuario.nombre_completo if usuario else f"Pasajero {r.usuario_id}",
+        "nombre": nombre_pasajero(r, usuario),
         "detalle": r.paquete.nombre if r.paquete_id else "",
         "codigo": codigo_reserva(r.id),
         "asiento": ",".join(str(n) for n in asientos) or "-",
@@ -404,10 +581,11 @@ def gps_json(g):
 
 
 def puede_ver_viaje_gps(yo, viaje):
+    """GPS, chat y novedades de una salida: su agencia, su conductor o un cliente de ESA salida."""
     return (
         gestiona_agencia(yo, viaje.bus.agencia_id)
         or conductor_autorizado(yo, viaje)
-        or es_cliente_de_paquete(yo, viaje.paquete_id)
+        or es_cliente_de_viaje(yo, viaje)
     )
 
 
@@ -598,12 +776,17 @@ class NovedadIdView(APIView):
 
 
 def chat_json(m):
+    autor = m.usuario
     return {"id": m.id, "paquete_id": m.paquete_id, "viaje_id": m.viaje_id, "usuario_id": m.usuario_id,
+            "autor": autor.nombre_completo if autor else "", "rol_id": autor.rol_id if autor else None,
             "texto": m.texto, "fecha": m.fecha}
 
 
 class ChatView(APIView):
-    @swagger_auto_schema(operation_description="Mensajes de un viaje (?viaje_id=) o de un paquete (?paquete_id=).")
+    @swagger_auto_schema(operation_description=(
+        "Mensajes de un viaje (?viaje_id=) o de un paquete (?paquete_id=), con autor y rol_id. "
+        "Un cliente solo ve sus mensajes y los del conductor o la agencia."
+    ))
     def get(self, request):
         yo = usuario_de(request)
         viaje_id = request.query_params.get("viaje_id")
@@ -619,7 +802,10 @@ class ChatView(APIView):
             lista = ChatMensaje.objects.filter(paquete_id=paquete_id)
         else:
             return Response({"message": "Indica viaje_id o paquete_id"}, status=status.HTTP_400_BAD_REQUEST)
-        return Response([chat_json(m) for m in lista.order_by("fecha", "id")])
+        if yo.rol_id == ROL_CLIENTE:
+            # Privacidad entre pasajeros: cada cliente ve lo suyo y lo que escriben conductor y agencia.
+            lista = lista.filter(Q(usuario=yo) | ~Q(usuario__rol_id=ROL_CLIENTE))
+        return Response([chat_json(m) for m in lista.select_related("usuario").order_by("fecha", "id")])
 
     @swagger_auto_schema(operation_description="Enviar mensaje: {viaje_id o paquete_id, texto}. El autor es quien tiene la sesión.")
     def post(self, request):

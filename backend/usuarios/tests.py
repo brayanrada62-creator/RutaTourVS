@@ -3,10 +3,18 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from buses.models import Bus_Conductor
+import tempfile
+from datetime import timedelta
+
+from django.test import override_settings
+
+from buses.models import Asiento, Bus_Conductor, Viaje
+from buses.views import hoy_colombia
 from pagos.models import Pago
 from reservas.models import ChatMensaje, Reserva
-from usuarios.models import Usuario
+from usuarios.models import RecuperarContrasena, Usuario
+from usuarios.views import hash_valor
+from pagos.tests import imagen
 from usuarios.pruebas import CLAVE, Escenario
 
 
@@ -97,8 +105,8 @@ class UsuariosTest(TestCase):
 
     def test_registro_publico_siempre_cliente(self):
         r = APIClient().post("/api/usuario/", {
-            "nombre_completo": "N", "rol_id": 1, "agencia_id": self.e.ag_a.id, "tipo_documento": "CC",
-            "numero_documento": "999", "correo": "nuevo@rt.co", "telefono": "1", "contrasena": "abc123",
+            "nombre_completo": "Nuevo Cliente", "rol_id": 1, "agencia_id": self.e.ag_a.id, "tipo_documento": "CC",
+            "numero_documento": "99999", "correo": "nuevo@rt.co", "telefono": "3001234567", "contrasena": "clave1234",
         }, format="json")
         self.assertEqual(r.status_code, 201)
         self.assertTrue(r.json()["token"])
@@ -111,10 +119,39 @@ class UsuariosTest(TestCase):
 
     def test_registro_duplicado_400(self):
         r = APIClient().post("/api/usuario/", {
-            "nombre_completo": "N", "numero_documento": "777", "correo": self.e.cliente.correo,
-            "telefono": "1", "contrasena": "abc123",
+            "nombre_completo": "Nuevo Cliente", "numero_documento": "7777777", "correo": self.e.cliente.correo,
+            "telefono": "3001234567", "contrasena": "clave1234",
         }, format="json")
         self.assertEqual(r.status_code, 400)
+        self.assertIn("Ya existe", r.json()["message"])
+
+    def test_registro_valida_datos(self):
+        valido = {"nombre_completo": "Nuevo Cliente", "numero_documento": "1234567", "correo": "nuevo@rt.co",
+                  "telefono": "3001234567", "contrasena": "clave1234"}
+        malos = [
+            {"nombre_completo": ""},
+            {"correo": "no-es-correo"},
+            {"numero_documento": "12ab567"},
+            {"numero_documento": "1234"},
+            {"contrasena": "corta12"},
+            {"telefono": "12"},
+        ]
+        for cambio in malos:
+            r = APIClient().post("/api/usuario/", {**valido, **cambio}, format="json")
+            self.assertEqual(r.status_code, 400, cambio)
+            self.assertTrue(r.json()["message"])
+        self.assertFalse(Usuario.objects.filter(correo="nuevo@rt.co").exists())
+        self.assertEqual(APIClient().post("/api/usuario/", valido, format="json").status_code, 201)
+
+    def test_confirmar_clave_minimo_8(self):
+        RecuperarContrasena.objects.create(usuario=self.e.cliente, token_hash=hash_valor("tok"),
+                                           codigo_hash=hash_valor("123456"))
+        corta = APIClient().post("/api/password/reset/confirmar/", {"token": "tok", "contrasena": "corta12"},
+                                 format="json")
+        self.assertEqual(corta.status_code, 400)
+        ok = APIClient().post("/api/password/reset/confirmar/", {"token": "tok", "contrasena": "clave1234"},
+                              format="json")
+        self.assertEqual(ok.status_code, 200)
 
     def test_nadie_cambia_clave_ni_rol_ajeno(self):
         c = Escenario.cliente_http(self.e.cond_a)
@@ -176,18 +213,25 @@ class AsignacionesTest(TestCase):
 class ReservasPagosTest(TestCase):
     def setUp(self):
         self.e = Escenario()
+        self.salida = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a,
+                                           fecha=hoy_colombia() + timedelta(days=7), hora="06:30")
 
     def test_cliente_reserva_para_si_y_pago_queda_pendiente(self):
         c = Escenario.cliente_http(self.e.cliente)
         r = c.post("/api/reserva/", {"fecha_reserva": "2026-10-20", "usuario_id": self.e.otro_cliente.id,
-                                     "paquete_id": self.e.paq_a.id, "estado": "pagada"}, format="json")
+                                     "paquete_id": self.e.paq_a.id, "viaje_id": self.salida.id,
+                                     "estado": "pagada"}, format="json")
         self.assertEqual(r.status_code, 201)
         reserva = Reserva.objects.get(id=r.json()["id"])
         self.assertEqual(reserva.usuario_id, self.e.cliente.id)
         self.assertEqual(reserva.estado, "pendiente")
-        p = c.post("/api/pago/", {"precio": "1000", "reserva_id": reserva.id, "fecha_pago": "2026-10-20",
-                                  "referencia": "x.jpg", "estado": "aprobado"}, format="json")
-        self.assertEqual(p.status_code, 200)
+        silla = Asiento.objects.create(numero_asiento=1, tipo_bus=self.e.tipo_a)
+        c.post("/api/asientoreserva/", {"asiento_id": silla.id, "reserva_id": reserva.id}, format="json")
+        # Fase 2: el cliente sube la foto del comprobante (multipart); el estado lo ignora el servidor.
+        with override_settings(MEDIA_ROOT=tempfile.mkdtemp()):
+            p = c.post("/api/pago/", {"precio": "1000", "reserva_id": reserva.id, "fecha_pago": "2026-10-20",
+                                      "referencia": "x.jpg", "estado": "aprobado", "comprobante": imagen()})
+        self.assertEqual(p.status_code, 200, p.content)
         self.assertEqual(Pago.objects.get(reserva=reserva).estado, "pendiente")
         pago = Pago.objects.get(reserva=reserva)
         self.assertEqual(c.put(f"/api/pago/{pago.id}/", {"estado": "aprobado"}, format="json").status_code, 403)
@@ -230,6 +274,12 @@ from django.test import TransactionTestCase
 
 
 class MigracionContrasenasTest(TransactionTestCase):
+    def tearDown(self):
+        # Deja la base con TODAS las migraciones: las pruebas que vienen después necesitan las tablas nuevas.
+        ejecutor = MigrationExecutor(connection)
+        ejecutor.loader.build_graph()
+        ejecutor.migrate(ejecutor.loader.graph.leaf_nodes())
+
     def test_cifra_las_planas_y_respeta_las_cifradas(self):
         e = MigrationExecutor(connection)
         e.migrate([("usuarios", "0006_merge_usuarioagencia_recuperarcontrasena")])
