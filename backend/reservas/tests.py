@@ -124,7 +124,10 @@ class AbordajeTest(TestCase):
     def test_por_paquete_tambien_exige_pago_y_es_solo_personal(self):
         r = self.reserva("pendiente")
         admin = Escenario.cliente_http(self.e.admin_a)
-        self.assertEqual(admin.post(f"/api/paquete/{self.e.paq_a.id}/abordar/", {"reserva_id": r.id}, format="json").status_code, 409)
+        self.assertEqual(admin.post(f"/api/paquete/{self.e.paq_a.id}/abordar/", {"reserva_id": r.id},
+                                    format="json").status_code, 400)  # falta viaje_id
+        self.assertEqual(admin.post(f"/api/paquete/{self.e.paq_a.id}/abordar/",
+                                    {"reserva_id": r.id, "viaje_id": self.viaje.id}, format="json").status_code, 409)
         self.assertEqual(self.c.post(f"/api/paquete/{self.e.paq_a.id}/abordar/", {"reserva_id": r.id}, format="json").status_code, 403)
 
     def test_ausente_no_necesita_pago_y_viaje_completado_rechaza(self):
@@ -419,3 +422,79 @@ class PasajeroTest(TestCase):
         self.reservar()
         nombres = {p["nombre"] for p in Escenario.cliente_http(self.e.cond_a).get(f"/api/viaje/{self.v.id}/pasajeros/").json()}
         self.assertEqual(nombres, {"Ana Pérez", self.e.cliente.nombre_completo})
+
+
+class ReservaPorViajeTest(TestCase):
+    """Sub-paso 1A: toda reserva nueva pertenece a una salida; dos salidas del mismo paquete no se cruzan."""
+
+    def setUp(self):
+        self.e = Escenario()
+        hoy = hoy_colombia()
+        self.v1 = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a, fecha=hoy + timedelta(days=3), hora="06:30")
+        self.v2 = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a2, fecha=hoy + timedelta(days=4), hora="07:00")
+        self.s1 = Asiento.objects.create(numero_asiento=1, tipo_bus=self.e.tipo_a)
+        self.admin = Escenario.cliente_http(self.e.admin_a)
+
+    def reserva(self, viaje, silla=None, pago=None):
+        r = Reserva.objects.create(fecha_reserva=timezone.now(), usuario=self.e.cliente, paquete=self.e.paq_a, viaje=viaje)
+        if silla:
+            AsientoReserva.objects.create(reserva=r, asiento=silla)
+        if pago:
+            Pago.objects.create(precio=1, reserva=r, fecha_pago=timezone.now(), estado=pago)
+        return r
+
+    def test_personal_tambien_debe_indicar_salida(self):
+        sin = self.admin.post("/api/reserva/", {"paquete_id": self.e.paq_a.id, "usuario_id": self.e.cliente.id},
+                              format="json")
+        self.assertEqual(sin.status_code, 400)
+        con = self.admin.post("/api/reserva/", {"paquete_id": self.e.paq_a.id, "viaje_id": self.v2.id,
+                                                "usuario_id": self.e.cliente.id}, format="json")
+        self.assertEqual(con.status_code, 201)
+        datos = con.json()
+        self.assertEqual((datos["viaje_id"], datos["viaje_hora"], datos["paquete"], datos["cliente_nombre"]),
+                         (self.v2.id, "07:00", "PA", self.e.cliente.nombre_completo))
+
+    def test_filtro_por_viaje(self):
+        r1, r2 = self.reserva(self.v1), self.reserva(self.v2)
+        ids = [x["id"] for x in self.admin.get(f"/api/reserva/?viaje_id={self.v1.id}").json()]
+        self.assertEqual(ids, [r1.id])
+        self.assertNotIn(r2.id, ids)
+        self.assertEqual(self.admin.get("/api/reserva/?viaje_id=abc").status_code, 400)
+        # otra agencia no ve nada aunque conozca el id del viaje
+        self.assertEqual(Escenario.cliente_http(self.e.admin_b).get(f"/api/reserva/?viaje_id={self.v1.id}").json(), [])
+
+    def test_asignar_salida_a_reserva_antigua(self):
+        vieja = self.reserva(None, silla=self.s1)
+        r = self.admin.put(f"/api/reserva/{vieja.id}/", {"viaje_id": self.v1.id}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["viaje_id"], self.v1.id)
+        # su silla ya no bloquea la otra salida
+        lista = self.admin.get(f"/api/asiento/?viaje_id={self.v2.id}").json()
+        self.assertFalse([a for a in lista if a["ocupado"]])
+        # ya tiene salida y sillas: no se mueve
+        self.assertEqual(self.admin.put(f"/api/reserva/{vieja.id}/", {"viaje_id": self.v2.id}, format="json").status_code, 409)
+
+    def test_asignar_salida_con_silla_ocupada_da_409(self):
+        self.reserva(self.v1, silla=self.s1)
+        vieja = self.reserva(None, silla=self.s1)
+        r = self.admin.put(f"/api/reserva/{vieja.id}/", {"viaje_id": self.v1.id}, format="json")
+        self.assertEqual(r.status_code, 409)
+        self.assertIsNone(Reserva.objects.get(id=vieja.id).viaje_id)
+        otra = Viaje.objects.create(paquete=self.e.paq_b, bus=self.e.bus_b, fecha=self.v1.fecha, hora="06:30")
+        self.assertEqual(self.admin.put(f"/api/reserva/{vieja.id}/", {"viaje_id": otra.id}, format="json").status_code, 400)
+
+    def test_pasajeros_y_abordaje_por_paquete_no_mezclan_salidas(self):
+        r1 = self.reserva(self.v1, pago="aprobado")
+        r2 = self.reserva(self.v2, pago="aprobado")
+        todos = self.admin.get(f"/api/paquete/{self.e.paq_a.id}/pasajeros/").json()
+        self.assertEqual([(p["id"], p["viaje_id"]) for p in todos], [(r1.id, self.v1.id), (r2.id, self.v2.id)])
+        solo_v1 = self.admin.get(f"/api/paquete/{self.e.paq_a.id}/pasajeros/?viaje_id={self.v1.id}").json()
+        self.assertEqual([p["id"] for p in solo_v1], [r1.id])
+        url = f"/api/paquete/{self.e.paq_a.id}/abordar/"
+        otro = self.admin.post(url, {"reserva_id": r2.id, "viaje_id": self.v1.id}, format="json")
+        self.assertEqual((otro.status_code, otro.json()["motivo"]), (409, "otro_viaje"))
+        self.assertEqual(self.admin.post(url, {"reserva_id": r1.id, "viaje_id": self.v1.id}, format="json").status_code, 200)
+
+    def test_viaje_con_reservas_no_se_borra(self):
+        self.reserva(self.v1)
+        self.assertEqual(self.admin.delete(f"/api/viaje/{self.v1.id}/").status_code, 409)

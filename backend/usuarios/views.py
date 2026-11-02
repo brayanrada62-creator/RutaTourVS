@@ -10,13 +10,16 @@ from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
-from django.db.models import Sum
+from django.db.models import ProtectedError, Sum
 from django.db.models.functions import TruncDate
+from django.core.validators import validate_email
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from django.contrib.auth.hashers import check_password, identify_hasher, make_password
@@ -28,7 +31,7 @@ from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 from drf_yasg import openapi
 
 from .serializer import (
-    UsuarioEntrada, loginSerializer, AgenciaEntrada, MensajeSalida,
+    UsuarioEditarEntrada, UsuarioEntrada, loginSerializer, AgenciaEntrada, MensajeSalida,
     UsuarioAgenciaEntrada, RecuperarContrasenaEntrada,
     ConfirmarContrasenaEntrada, LoginGoogleEntrada,
 )
@@ -39,6 +42,7 @@ from .permisos import (
     agencias_de, es_admin, es_super, gestiona_agencia, prohibido, usuario_de,
 )
 from buses.models import Bus
+from destinos.imagenes import imagen_url
 from destinos.models import Hospedaje
 from pagos.models import Pago
 from paquetes.models import Paquete
@@ -56,8 +60,55 @@ def asociar_agencia(usuario, agencia_id):
     UsuarioAgencia.objects.get_or_create(usuario=usuario, agencia_id=agencia_id)
 
 
-def usuario_json(usuario):
+LICENCIA_PDF_MAX_BYTES = 5 * 1024 * 1024
+
+
+def error_licencia_pdf(archivo):
+    """Mensaje de error si el archivo no es un PDF de máximo 5 MB; None si sirve.
+    Se revisa la extensión y también el contenido (todo PDF empieza con %PDF-)."""
+    if not str(archivo.name).lower().endswith(".pdf"):
+        return "La licencia debe ser un archivo .pdf"
+    if archivo.size > LICENCIA_PDF_MAX_BYTES:
+        return "La licencia en PDF supera 5 MB"
+    inicio = archivo.read(5)
+    archivo.seek(0)
+    if inicio != b"%PDF-":
+        return "El archivo no es un PDF válido"
+    return None
+
+
+def puede_gestionar_licencia(yo, objetivo):
+    """Subir o ver la licencia en PDF: superadmin, o admin de una agencia en común con el usuario."""
+    if es_super(yo):
+        return True
+    return es_admin(yo) and bool(agencias_de(yo) & agencias_de(objetivo))
+
+
+def archivo_licencia(request):
+    """El PDF enviado en multipart con el nombre 'licencia_pdf' (o None)."""
+    return request.FILES.get("licencia_pdf") if hasattr(request, "FILES") else None
+
+
+def validar_licencia_pdf(archivo):
+    """Mensaje de error, o None si sirve. Si sirve le pone un nombre aleatorio (después de validar):
+    así la URL del archivo no se puede adivinar a partir del documento del conductor."""
+    error = error_licencia_pdf(archivo)
+    if error is None:
+        archivo.name = f"licencia_{secrets.token_hex(8)}.pdf"
+    return error
+
+
+def borrar_licencia_pdf(usuario):
+    """Borra del almacenamiento (local o Cloudinary) el PDF guardado, si hay uno."""
+    if usuario.licencia_pdf:
+        usuario.licencia_pdf.storage.delete(usuario.licencia_pdf.name)
+
+
+def usuario_json(usuario, request=None):
+    """licencia_pdf_url solo aparece para el superadmin o el admin de la misma agencia (con request)."""
     ids = agencia_ids_de(usuario)
+    yo = usuario_de(request) if request is not None else None
+    puede_ver_pdf = yo is not None and puede_gestionar_licencia(yo, usuario)
     return {
         'id': usuario.id,
         'nombre_completo': usuario.nombre_completo,
@@ -69,6 +120,8 @@ def usuario_json(usuario):
         'correo': usuario.correo,
         'telefono': usuario.telefono,
         'licencia': usuario.licencia,
+        'tiene_licencia_pdf': bool(usuario.licencia_pdf),
+        'licencia_pdf_url': imagen_url(usuario.licencia_pdf, request) if puede_ver_pdf else None,
         'activo': usuario.activo,
     }
 
@@ -165,6 +218,28 @@ def datos_sesion(usuario_negocio, auth_user, mensaje='Login correcto'):
         'telefono': usuario_negocio.telefono,
         'usuario': data,
     }
+
+
+CLAVE_MINIMA = 8
+
+
+def error_registro(nombre, correo, documento, telefono, clave):
+    """Reglas del registro público (las mismas que valida la app). Devuelve el mensaje o None."""
+    if not str(nombre or "").strip():
+        return "Escribe tu nombre completo"
+    try:
+        validate_email(str(correo or ""))
+    except ValidationError:
+        return "Escribe un correo válido"
+    documento = str(documento or "")
+    if not (documento.isdigit() and 5 <= len(documento) <= 15):
+        return "El documento debe tener de 5 a 15 dígitos"
+    telefono = str(telefono or "")
+    if telefono and not (telefono.isdigit() and 7 <= len(telefono) <= 15):
+        return "El teléfono debe tener de 7 a 15 dígitos"
+    if len(str(clave or "")) < CLAVE_MINIMA:
+        return f"La contraseña debe tener al menos {CLAVE_MINIMA} caracteres"
+    return None
 
 
 def rol_cliente():
@@ -366,9 +441,9 @@ class PasswordResetConfirmarView(APIView):
         contrasena = request.data.get("contrasena") or ""
         confirmar = request.data.get("confirmar") or contrasena
 
-        if len(contrasena) < 6:
+        if len(contrasena) < CLAVE_MINIMA:
             return Response(
-                {"message": "La contraseña debe tener al menos 6 caracteres"},
+                {"message": f"La contraseña debe tener al menos {CLAVE_MINIMA} caracteres"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if contrasena != confirmar:
@@ -493,13 +568,20 @@ class RolView(APIView):
 class UsuarioView(APIView):
     # El registro desde la app es público (queda como cliente); el resto se revisa por rol.
     permission_classes = [AllowAny]
+    # JSON como siempre, o multipart/form-data cuando el conductor trae su licencia en PDF.
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     @swagger_auto_schema(
         operation_description=(
-            "Crea un usuario. Sin sesión: registro de cliente (rol 4, sin agencia). "
-            "Administrador: conductores o clientes de su agencia. Superadministrador: cualquiera."
+            "Crea un usuario. Sin sesión: registro de cliente (rol 4, sin agencia) con nombre, correo válido, "
+            "documento de 5 a 15 dígitos, contraseña de 8 o más y teléfono de 7 a 15 dígitos si se envía (400 si no). "
+            "Administrador: conductores o clientes de su agencia. Superadministrador: cualquiera. "
+            "Conductor (rol 3): se puede enviar como multipart/form-data con 'licencia_pdf' (.pdf, máx. 5 MB; "
+            "400 si no cumple). Solo el admin de la agencia o el superadmin suben ese PDF (403 sin sesión)."
         ),
         request_body=UsuarioEntrada,
+        # Swagger muestra formulario con selector de archivo; la vista acepta también JSON.
+        consumes=["multipart/form-data"],
         responses={201: openapi.Response(description="Registro exitoso con tokens JWT")}
     )
     def post(self, request):
@@ -517,6 +599,10 @@ class UsuarioView(APIView):
         registro_publico = not request.user.is_authenticated
         if registro_publico:
             rol_id, agencia_id = ROL_CLIENTE, None
+            error = error_registro(nombre_completo, correo, numero_documento, telefono, contrasena)
+            if error:
+                return Response({'message': error}, status=status.HTTP_400_BAD_REQUEST)
+            tipo_documento = tipo_documento or "CC"
         elif yo is None:
             return prohibido()
         elif es_admin(yo):
@@ -526,6 +612,17 @@ class UsuarioView(APIView):
                 return prohibido("Solo puedes crear usuarios de tu agencia")
         elif not es_super(yo):
             return prohibido()
+
+        licencia_pdf = archivo_licencia(request)
+        if licencia_pdf is not None:
+            if registro_publico:
+                return prohibido("Solo la agencia sube la licencia del conductor")
+            if str(rol_id) != str(ROL_CONDUCTOR):
+                return Response({'message': 'La licencia en PDF solo aplica a conductores'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            error = validar_licencia_pdf(licencia_pdf)
+            if error:
+                return Response({'message': error}, status=status.HTTP_400_BAD_REQUEST)
 
         if not correo or not numero_documento or not contrasena:
             return Response({'message': 'Correo, documento y contraseña son obligatorios'},
@@ -551,7 +648,8 @@ class UsuarioView(APIView):
             correo=correo,
             telefono=telefono,
             contrasena=make_password(contrasena),
-            licencia=licencia
+            licencia=licencia,
+            licencia_pdf=licencia_pdf,
         )
         auth_user = User.objects.create_user(
             username=correo,
@@ -561,13 +659,14 @@ class UsuarioView(APIView):
         asociar_agencia(usuario, agencia_id)
         if registro_publico:
             return Response(datos_sesion(usuario, auth_user, "Registro correcto"), status=status.HTTP_201_CREATED)
-        return Response({'message': 'Usuario creado exitosamente'})
+        return Response({'message': 'Usuario creado exitosamente', 'id': usuario.id})
 
     @swagger_auto_schema(
         operation_description=(
             "Obtiene los usuarios visibles para quien consulta. Filtros opcionales: "
             "?rol_id= (3 conductores, 2 administradores; con 3 cada conductor trae bus_id, placa y viajes_pendientes), "
-            "?agencia_id=, ?search=, ?page= y ?page_size=."
+            "?agencia_id=, ?search=, ?page= y ?page_size=. Cada usuario trae tiene_licencia_pdf y "
+            "licencia_pdf_url (solo visible para el superadmin o el admin de su agencia; si no, null)."
         ),
         manual_parameters=[
             openapi.Parameter("rol_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
@@ -597,23 +696,34 @@ class UsuarioView(APIView):
             )
         usuariolista = usuariolista.order_by("id")
         extras = datos_conductores(usuariolista) if str(params.get("rol_id")) == str(ROL_CONDUCTOR) else {}
-        return Response(paginar(request, usuariolista, lambda u: {**usuario_json(u), **extras.get(u.id, {})}))
+        return Response(paginar(request, usuariolista, lambda u: {**usuario_json(u, request), **extras.get(u.id, {})}))
 
 
 class UsuarioIdView(APIView):
+    # JSON como siempre, o multipart/form-data para reemplazar la licencia en PDF del conductor.
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
     @swagger_auto_schema(
-        operation_description="Obtiene un usuario por su ID",
+        operation_description=(
+            "Obtiene un usuario por su ID. licencia_pdf_url solo la ven el superadmin y el admin de su agencia."
+        ),
         responses={200: UsuarioEntrada()}
     )
     def get(self, request, id):
         usuario = get_object_or_404(Usuario, id=id)
         if not puede_ver_usuario(usuario_de(request), usuario):
             return prohibido()
-        return Response(usuario_json(usuario))
+        return Response(usuario_json(usuario, request))
 
     @swagger_auto_schema(
-        operation_description="Actualiza un usuario por su ID",
-        request_body=UsuarioEntrada,
+        operation_description=(
+            "Actualiza un usuario por su ID (JSON o multipart/form-data). Los campos que no se envían se conservan. "
+            "'licencia_pdf' (.pdf, máx. 5 MB) reemplaza el PDF anterior del conductor: solo el admin de su "
+            "agencia o el superadmin (403); 400 si no es PDF, pesa más de 5 MB o el usuario no es conductor."
+        ),
+        request_body=UsuarioEditarEntrada,
+        # Swagger muestra formulario con selector de archivo; la vista acepta también JSON.
+        consumes=["multipart/form-data"],
         responses={200: MensajeSalida}
     )
     def put(self, request, id):
@@ -631,6 +741,16 @@ class UsuarioIdView(APIView):
                 return prohibido("No puedes cambiar ese rol")
             if agencia_nueva not in (None, "") and (mismo or not gestiona_agencia(yo, agencia_nueva)):
                 return prohibido("No puedes asignar esa agencia")
+        licencia_pdf = archivo_licencia(request)
+        if licencia_pdf is not None:
+            if not puede_gestionar_licencia(yo, usuario):
+                return prohibido("Solo el administrador de su agencia sube la licencia del conductor")
+            if str(rol_nuevo) != str(ROL_CONDUCTOR):
+                return Response({'message': 'La licencia en PDF solo aplica a conductores'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            error = validar_licencia_pdf(licencia_pdf)
+            if error:
+                return Response({'message': error}, status=status.HTTP_400_BAD_REQUEST)
         correo_anterior = usuario.correo
         usuario.nombre_completo = datos.get('nombre_completo', usuario.nombre_completo)
         usuario.rol_id = rol_nuevo
@@ -642,6 +762,9 @@ class UsuarioIdView(APIView):
             usuario.contrasena = make_password(datos.get('contrasena'))
         if datos.get('licencia') is not None:
             usuario.licencia = datos.get('licencia')
+        if licencia_pdf is not None:
+            borrar_licencia_pdf(usuario)  # el PDF anterior no queda huérfano en el almacenamiento
+            usuario.licencia_pdf = licencia_pdf
         if 'activo' in datos:
             nuevo_activo = str(datos.get('activo')).lower() in ("true", "1")
             if mismo and nuevo_activo != usuario.activo:
@@ -673,7 +796,15 @@ class UsuarioIdView(APIView):
         yo = usuario_de(request)
         if yo.id == usuario.id or not (es_super(yo) or (es_admin(yo) and puede_ver_usuario(yo, usuario))):
             return prohibido()
-        usuario.delete()
+        archivo_pdf = usuario.licencia_pdf.name if usuario.licencia_pdf else None
+        try:
+            usuario.delete()
+        except ProtectedError:
+            # Sus pagos se conservan para la auditoría: se suspende en lugar de borrarlo.
+            return Response({'message': 'El usuario tiene pagos registrados; suspéndelo en lugar de eliminarlo'},
+                            status=status.HTTP_409_CONFLICT)
+        if archivo_pdf:
+            Usuario._meta.get_field("licencia_pdf").storage.delete(archivo_pdf)
         return Response({'message': 'Usuario eliminado exitosamente'})
 
 
@@ -687,7 +818,7 @@ class UsuarioDocumentoView(APIView):
         usuario = Usuario.objects.filter(numero_documento=numero_documento).first()
         if not usuario or not puede_ver_usuario(usuario_de(request), usuario):
             return Response({'message': 'Usuario no encontrado'})
-        return Response(usuario_json(usuario))
+        return Response(usuario_json(usuario, request))
 
 
 class DashboardResumenView(APIView):
@@ -726,7 +857,7 @@ class DashboardResumenView(APIView):
         cantidad_paquetes = Paquete.objects.filter(agencia_id__in=agencia_ids).count()
         cantidad_buses = Bus.objects.filter(agencia_id__in=agencia_ids).count()
         cantidad_hospedajes = Hospedaje.objects.filter(
-            destinos__paquetedestino__paquete__agencia_id__in=agencia_ids
+            destino__paquetedestino__paquete__agencia_id__in=agencia_ids
         ).distinct().count()
 
         zona_horaria = ZoneInfo("America/Bogota")

@@ -2,15 +2,18 @@ from .models import Departamento, ImagenDestino
 
 
 def imagen_url(campo, request=None):
+    """URL completa de una imagen o archivo (también la usan pagos y la licencia en PDF).
+    Cloudinary ya la entrega absoluta (https://res.cloudinary.com/...) y se devuelve tal cual;
+    en local (MEDIA_ROOT) es relativa (/media/...) y se completa con el dominio de la petición."""
     if not campo:
         return None
     try:
         url = campo.url
     except ValueError:
         return None
-    if request is not None:
-        return request.build_absolute_uri(url)
-    return url
+    if url.startswith(("http://", "https://")) or request is None:
+        return url
+    return request.build_absolute_uri(url)
 
 
 def archivo_imagen(request):

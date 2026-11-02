@@ -11,8 +11,8 @@ class MensajeSalida(serializers.Serializer):
 
 class ReservaEntrada(serializers.Serializer):
     paquete_id = serializers.IntegerField()
-    viaje_id = serializers.IntegerField(required=False, allow_null=True,
-                                       help_text="Salida PROGRAMADA del paquete (obligatoria para el cliente)")
+    viaje_id = serializers.IntegerField(help_text="OBLIGATORIO. Salida del paquete (GET /viaje/?paquete_id=). "
+                                                  "El cliente solo puede elegir una PROGRAMADA desde hoy")
     asientos = serializers.CharField(required=False, allow_blank=True,
                                      help_text="Ids de las sillas separados por coma, ej. 12,13")
     clave_idempotencia = serializers.CharField(required=False, allow_blank=True, max_length=64,
@@ -24,6 +24,25 @@ class ReservaEntrada(serializers.Serializer):
                                             help_text="Vacío = viaja el titular")
     pasajero_documento = serializers.CharField(required=False, allow_blank=True, max_length=15,
                                                help_text="Solo dígitos, 5 a 15")
+
+
+class ReservaEditarEntrada(serializers.Serializer):
+    """PUT /reserva/<id>/ (solo la agencia). Todos los campos son opcionales."""
+    viaje_id = serializers.IntegerField(required=False,
+                                        help_text="Salida del paquete. Sirve para asignar la salida a una reserva "
+                                                  "antigua o para mover una reserva sin sillas")
+    paquete_id = serializers.IntegerField(required=False, help_text="Solo si la reserva no tiene sillas; "
+                                                                    "exige también viaje_id del paquete nuevo")
+    estado = serializers.CharField(required=False, help_text="pendiente, cancelada o vencida")
+    fecha_reserva = serializers.DateTimeField(required=False)
+    usuario_id = serializers.IntegerField(required=False)
+
+
+class PaqueteAbordarEntrada(serializers.Serializer):
+    viaje_id = serializers.IntegerField(help_text="OBLIGATORIO. Salida del paquete en la que se aborda")
+    codigo = serializers.CharField(required=False, help_text="Código del QR: RT-<id>-<firma>")
+    reserva_id = serializers.IntegerField(required=False, help_text="Alternativa al código")
+    estado = serializers.CharField(required=False, help_text="ABORDO (por defecto), AUSENTE o PENDIENTE")
 
 
 class AsientoReservaEntrada(serializers.Serializer):

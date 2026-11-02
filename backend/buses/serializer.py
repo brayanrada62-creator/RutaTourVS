@@ -18,12 +18,13 @@ class TipoBusEntrada(serializers.Serializer):
 
 class BusEntrada(serializers.Serializer):
     placa = serializers.CharField(max_length=20)
-    agencia_id = serializers.IntegerField()
-    tipo_bus_id = serializers.IntegerField(required=False)
-    tipo_bus_ids = serializers.ListField(child=serializers.IntegerField(), required=False)
+    agencia_id = serializers.IntegerField(required=False, allow_null=True,
+                                          help_text="Solo superadmin. Al admin se le toma de su sesión (se ignora)")
+    tipo_bus_id = serializers.IntegerField(help_text="Tipo de bus de la misma agencia")
     marca = serializers.CharField(max_length=100)
     modelo = serializers.CharField(max_length=100)
-    estado = serializers.CharField(max_length=20)
+    estado = serializers.ChoiceField(choices=["activo", "inactivo", "mantenimiento"], required=False,
+                                     help_text="activo (por defecto), inactivo o mantenimiento")
     fecha_registro = serializers.DateField()
     conductor_id = serializers.IntegerField(required=False, allow_null=True)
     

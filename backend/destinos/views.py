@@ -440,7 +440,7 @@ class ImagenUrlView(VistaCatalogo):
             return Response({"mensaje": "Imagen no encontrada"}, status=404)
         return Response({
             "id": imagen.id,
-            "url_img": imagen.url_img.url if imagen.url_img else None,
+            "url_img": imagen_url(imagen.url_img, request),
             "destino_id": imagen.destino_id,
             "descripcion": imagen.descripcion,
         })

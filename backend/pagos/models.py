@@ -12,7 +12,8 @@ class Pago(models.Model):
     # PROTECT: un pago nunca se borra junto con su reserva (trazabilidad del SRS).
     reserva = models.ForeignKey("reservas.Reserva", on_delete=models.PROTECT)
     fecha_pago = models.DateTimeField()
-    comprobante = models.ImageField(max_length=100, blank=True)
+    # En Cloudinary (o MEDIA_ROOT en local) dentro de la carpeta comprobantes/.
+    comprobante = models.ImageField(upload_to="comprobantes/", max_length=255, blank=True)
     referencia = models.CharField(max_length=255, blank=True, default="")
 
     estado = models.CharField(max_length=20, choices=ESTADOS, default="pendiente")

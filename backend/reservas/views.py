@@ -1,9 +1,12 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 
-from .serializer import ReservaEntrada, AsientoReservaEntrada, MensajeSalida
+from .serializer import (
+    AsientoReservaEntrada, MensajeSalida, PaqueteAbordarEntrada, ReservaEditarEntrada, ReservaEntrada,
+)
 from .models import (
     ESTADOS_QUE_LIBERAN, ESTADOS_RESERVA, AsientoReserva, ChatMensaje, GpsPunto, Novedad, Reserva,
     marcar_vencidas, plazo_de_pago, reservas_que_ocupan,
@@ -24,7 +27,7 @@ from buses.models import Asiento, Bus_Conductor
 from paquetes.models import Paquete
 from buses.models import Viaje
 from buses.views import conductor_autorizado, entero_o_none, hoy_colombia
-from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
+from usuarios.paginacion import PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
 from usuarios.permisos import (
     ROL_CLIENTE, SoloPersonal, agencias_de, agencias_de_catalogo, es_admin, es_cliente_de_paquete, es_cliente_de_viaje, es_conductor,
     es_super, gestiona_agencia, prohibido, trabaja_en_agencia, usuario_de,
@@ -32,6 +35,10 @@ from usuarios.permisos import (
 
 
 ESTADOS_ABORDAJE = ("PENDIENTE", "ABORDO", "AUSENTE")
+
+PARAMETRO_VIAJE = openapi.Parameter(
+    "viaje_id", openapi.IN_QUERY, description="Solo las reservas de esta salida", type=openapi.TYPE_INTEGER,
+)
 
 
 def firma_reserva(reserva_id):
@@ -134,7 +141,8 @@ def reserva_json(reserva):
         "vence_en": reserva.vence_en,
         "pasajero_nombre": reserva.pasajero_nombre,
         "pasajero_documento": reserva.pasajero_documento,
-        "paquete": reserva.paquete.nombre,
+        "paquete": reserva.paquete.nombre,  # nombre del paquete
+        "cliente_nombre": reserva.usuario.nombre_completo,  # titular de la cuenta que reservó
         "agencia_id": reserva.paquete.agencia_id,
         "total": str(total_reserva(reserva, len(asientos))),
         # Salida elegida (null en reservas antiguas sin salida).
@@ -159,11 +167,12 @@ def leer_ids_asientos(valor):
     return ids, None
 
 
-def tomar_sillas(reserva, asiento_ids, excluir_asiento_reserva=None):
+def tomar_sillas(reserva, asiento_ids, excluir_asiento_reserva=None, excluir_reserva=None):
     """Valida las sillas de una reserva. Debe llamarse dentro de transaction.atomic().
 
     Bloquea las filas de las sillas en orden de id (así dos compras simultáneas se turnan y no se
     traban entre sí), revisa que sean del bus de la salida y que nadie más las tenga.
+    excluir_reserva: no cuenta las sillas que ya tiene esa reserva (al asignarle salida a una antigua).
     Devuelve (sillas, None) o (None, Response con el error)."""
     ids = sorted(set(asiento_ids))
     sillas = list(Asiento.objects.select_for_update().select_related("tipo_bus").filter(id__in=ids).order_by("id"))
@@ -182,6 +191,8 @@ def tomar_sillas(reserva, asiento_ids, excluir_asiento_reserva=None):
     )
     if excluir_asiento_reserva is not None:
         ocupadas = ocupadas.exclude(id=excluir_asiento_reserva)
+    if excluir_reserva is not None:
+        ocupadas = ocupadas.exclude(reserva_id=excluir_reserva)
     numeros = sorted(set(ocupadas.values_list("asiento__numero_asiento", flat=True)))
     if numeros:
         texto = "La silla" if len(numeros) == 1 else "Las sillas"
@@ -194,14 +205,24 @@ def tomar_sillas(reserva, asiento_ids, excluir_asiento_reserva=None):
 
 class ReservaView(APIView):
     @swagger_auto_schema(
-        operation_description="Listar reservas. Opcional: ?search=, ?page= y ?page_size=",
-        manual_parameters=PARAMETROS_LISTA,
+        operation_description=(
+            "Listar reservas (superadmin: todas · admin: las de su agencia · cliente: las suyas). "
+            "Cada reserva trae viaje_id, viaje_fecha, viaje_hora, paquete (nombre) y cliente_nombre. "
+            "Filtro ?viaje_id= (solo esa salida; 400 si no es un número). Opcional: ?search=, ?page= y ?page_size="
+        ),
+        manual_parameters=PARAMETROS_LISTA + [PARAMETRO_VIAJE],
     )
     def get(self, request):
         yo = usuario_de(request)
         if es_conductor(yo):
             return prohibido("El conductor consulta sus pasajeros desde su viaje")
-        lista = reservas_visibles(yo)
+        lista = reservas_visibles(yo).select_related("usuario", "paquete", "viaje__bus")
+        if "viaje_id" in request.query_params:
+            viaje_id = entero_query(request, "viaje_id")
+            if viaje_id is None:
+                return Response({"message": "viaje_id debe ser un número"}, status=status.HTTP_400_BAD_REQUEST)
+            # Se filtra sobre reservas_visibles: un viaje de otra agencia devuelve la lista vacía.
+            lista = lista.filter(viaje_id=viaje_id)
         texto = texto_busqueda(request)
         if texto:
             lista = lista.filter(Q(paquete__nombre__icontains=texto) | Q(usuario__nombre_completo__icontains=texto))
@@ -209,9 +230,10 @@ class ReservaView(APIView):
 
     @swagger_auto_schema(
         operation_description=(
-            "Guardar reserva CON sus sillas en una sola operación. El cliente envía viaje_id (una salida "
-            "PROGRAMADA del paquete, desde hoy) y asientos (ids, ej. \"12,13\"); si una silla está ocupada "
-            "responde 409 con 'ocupadas' y no guarda nada. Las sillas se guardan "
+            "Guardar reserva CON sus sillas en una sola operación. viaje_id es OBLIGATORIO para todos "
+            "(cliente y personal) y debe ser una salida de ese paquete; sin él responde 400. "
+            "El cliente solo elige salidas PROGRAMADAS desde hoy. asientos: ids, ej. \"12,13\"; si una silla "
+            "está ocupada EN ESA SALIDA responde 409 con 'ocupadas' y no guarda nada. Las sillas se guardan "
             f"{settings.RESERVA_MINUTOS_PAGO} minutos (vence_en) mientras llega el comprobante. "
             "clave_idempotencia (opcional): repetir la petición con la misma clave devuelve la misma reserva (200). "
             "Sin asientos se crea la reserva sola (compatibilidad: luego POST /asientoreserva/)."
@@ -236,14 +258,15 @@ class ReservaView(APIView):
             repetida = Reserva.objects.filter(usuario=yo, clave_idempotencia=clave).first()
             if repetida:
                 return Response(reserva_json(repetida), status=status.HTTP_200_OK)
+        # La salida es obligatoria para TODOS (también el personal): así las reservas de dos
+        # viajes del mismo paquete nunca se cruzan.
         viaje_id = entero_o_none(request.data.get("viaje_id"))
-        viaje = None
-        if viaje_id is not None or not personal:
-            viaje = Viaje.objects.filter(id=viaje_id, paquete_id=paquete.id).first() if viaje_id is not None else None
-            if viaje is None:
-                return Response({"message": "Elige una salida de este paquete"}, status=status.HTTP_400_BAD_REQUEST)
-            if not personal and (viaje.estado != Viaje.PROGRAMADO or viaje.fecha < hoy_colombia()):
-                return Response({"message": "Esa salida ya no recibe reservas"}, status=status.HTTP_400_BAD_REQUEST)
+        viaje = Viaje.objects.select_related("bus").filter(id=viaje_id, paquete_id=paquete.id).first() if viaje_id else None
+        if viaje is None:
+            return Response({"message": "Elige una salida (viaje_id) de este paquete"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if not personal and (viaje.estado != Viaje.PROGRAMADO or viaje.fecha < hoy_colombia()):
+            return Response({"message": "Esa salida ya no recibe reservas"}, status=status.HTTP_400_BAD_REQUEST)
         asiento_ids, error = leer_ids_asientos(request.data.get("asientos"))
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
@@ -294,8 +317,18 @@ class ReservaIdView(APIView):
             return prohibido()
         return Response(reserva_json(reserva))
 
+    @swagger_auto_schema(
+        operation_description=(
+            "Modificar una reserva. Solo la agencia del paquete (o superadmin). "
+            "viaje_id: asigna la salida a una reserva ANTIGUA sin salida (sus sillas deben estar libres en "
+            "esa salida, si no 409 con 'ocupadas') o mueve una reserva SIN sillas a otra salida del mismo paquete. "
+            "Una reserva con sillas que ya tiene salida no se mueve (409): se cancela y se crea otra. "
+            "Cambiar paquete_id exige que no tenga sillas y que venga viaje_id del paquete nuevo (400)."
+        ),
+        request_body=ReservaEditarEntrada,
+    )
     def put(self, request, id):
-        reservaB = get_object_or_404(Reserva, id=id)
+        reservaB = get_object_or_404(Reserva.objects.select_related("paquete", "viaje__bus"), id=id)
         yo = usuario_de(request)
         if not gestiona_agencia(yo, reservaB.paquete.agencia_id):
             return prohibido("Solo la agencia puede modificar la reserva")
@@ -303,9 +336,27 @@ class ReservaIdView(APIView):
             return prohibido()
         tiene_sillas = AsientoReserva.objects.filter(reserva=reservaB).exists()
         nuevo_paquete = entero_o_none(request.data.get("paquete_id"))
-        if nuevo_paquete is not None and nuevo_paquete != reservaB.paquete_id and tiene_sillas:
+        cambia_paquete = nuevo_paquete is not None and nuevo_paquete != reservaB.paquete_id
+        if cambia_paquete and tiene_sillas:
             return Response({"message": "La reserva ya tiene sillas; cancélala y crea otra en el paquete nuevo"},
                             status=status.HTTP_409_CONFLICT)
+        nuevo_viaje_id = entero_o_none(request.data.get("viaje_id"))
+        if "viaje_id" in request.data and nuevo_viaje_id is None:
+            return Response({"message": "viaje_id debe ser el número de una salida"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if cambia_paquete and nuevo_viaje_id is None:
+            return Response({"message": "Al cambiar de paquete indica también la salida (viaje_id) del paquete nuevo"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        nuevo_viaje = None
+        if nuevo_viaje_id is not None and nuevo_viaje_id != reservaB.viaje_id:
+            paquete_final = nuevo_paquete if cambia_paquete else reservaB.paquete_id
+            nuevo_viaje = Viaje.objects.select_related("bus").filter(id=nuevo_viaje_id, paquete_id=paquete_final).first()
+            if nuevo_viaje is None:
+                return Response({"message": "Esa salida no es del paquete de la reserva"},
+                                status=status.HTTP_400_BAD_REQUEST)
+            if tiene_sillas and reservaB.viaje_id is not None:
+                return Response({"message": "La reserva ya tiene sillas en otra salida; cancélala y crea una nueva"},
+                                status=status.HTTP_409_CONFLICT)
         if "estado" in request.data:
             estado = request.data.get("estado")
             if estado not in dict(ESTADOS_RESERVA):
@@ -319,8 +370,17 @@ class ReservaIdView(APIView):
         reservaB.usuario_id = request.data.get("usuario_id", reservaB.usuario_id)
         if nuevo_paquete is not None:
             reservaB.paquete_id = nuevo_paquete
-        reservaB.save()
-        return Response(reserva_json(reservaB))
+        with transaction.atomic():
+            if nuevo_viaje is not None:
+                reservaB.viaje = nuevo_viaje
+                if tiene_sillas:
+                    # Reserva antigua: sus sillas deben existir en el bus de la salida y estar libres en ella.
+                    ids = list(AsientoReserva.objects.filter(reserva=reservaB).values_list("asiento_id", flat=True))
+                    _, error = tomar_sillas(reservaB, ids, excluir_reserva=reservaB.id)
+                    if error:
+                        return error
+            reservaB.save()
+        return Response(reserva_json(Reserva.objects.select_related("paquete", "usuario", "viaje__bus").get(id=reservaB.id)))
 
     @swagger_auto_schema(
         operation_description=(
@@ -437,44 +497,60 @@ class AsientoReservaIdView(APIView):
 
 
 class PaquetePasajerosView(APIView):
+    @swagger_auto_schema(
+        operation_description=(
+            "Pasajeros del paquete (solo la agencia o superadmin). Cada fila trae viaje_id, viaje_fecha y "
+            "viaje_hora para no mezclar salidas; vienen ordenados por salida. Con ?viaje_id= solo los de esa "
+            "salida (400 si no es de este paquete). Las reservas antiguas sin salida traen viaje_id null."
+        ),
+        manual_parameters=[PARAMETRO_VIAJE],
+    )
     def get(self, request, paquete_id):
         agencia_id = agencia_del_paquete(paquete_id)
         if agencia_id is None:
             return Response({"message": "El paquete no existe"}, status=status.HTTP_404_NOT_FOUND)
         if not gestiona_agencia(usuario_de(request), agencia_id):
             return prohibido("El conductor consulta los pasajeros desde su viaje")
-        lista = []
-        for r in Reserva.objects.filter(paquete_id=paquete_id).exclude(estado__in=ESTADOS_QUE_LIBERAN):
-            usuario = Usuario.objects.filter(id=r.usuario_id).first()
-            asientos = list(
-                AsientoReserva.objects.filter(reserva=r).values_list("asiento__numero_asiento", flat=True)
-            )
-            lista.append({
-                "id": r.id,
-                "nombre": nombre_pasajero(r, usuario),
-                "detalle": r.paquete.nombre if r.paquete_id else "",
-                "codigo": codigo_reserva(r.id),
-                "asiento": ",".join(str(n) for n in asientos) or "-",
-                "estado": r.abordado,
-                "pago_estado": estado_pago(r),
-            })
-        return Response(lista)
+        lista = Reserva.objects.filter(paquete_id=paquete_id).exclude(estado__in=ESTADOS_QUE_LIBERAN)
+        if "viaje_id" in request.query_params:
+            viaje = Viaje.objects.filter(id=entero_query(request, "viaje_id"), paquete_id=paquete_id).first()
+            if viaje is None:
+                return Response({"message": "Esa salida no es de este paquete"}, status=status.HTTP_400_BAD_REQUEST)
+            lista = reservas_del_viaje(viaje)
+        lista = lista.select_related("paquete", "viaje").order_by("viaje__fecha", "viaje__hora", "id")
+        return Response([pasajero_json(r) for r in lista])
 
 
 class PaqueteAbordarView(APIView):
     """Compatibilidad para el panel: el personal marca abordaje por paquete con la misma regla de pago."""
 
+    @swagger_auto_schema(
+        operation_description=(
+            "Registrar abordaje desde el panel (solo la agencia o superadmin). viaje_id es OBLIGATORIO: "
+            "solo aborda una reserva de ESA salida (409 'otro_viaje' si es de otra salida del mismo paquete). "
+            "Misma regla que /viaje/<id>/abordar/: ABORDO exige el último pago aprobado."
+        ),
+        request_body=PaqueteAbordarEntrada,
+    )
     def post(self, request, paquete_id):
         agencia_id = agencia_del_paquete(paquete_id)
         if agencia_id is None:
             return Response({"message": "El paquete no existe"}, status=status.HTTP_404_NOT_FOUND)
         if not gestiona_agencia(usuario_de(request), agencia_id):
             return prohibido("El conductor registra el abordaje desde su viaje")
-        return registrar_abordaje(request, Reserva.objects.filter(paquete_id=paquete_id), viaje=None)
+        viaje_id = entero_o_none(request.data.get("viaje_id"))
+        viaje = Viaje.objects.filter(id=viaje_id, paquete_id=paquete_id).first() if viaje_id else None
+        if viaje is None:
+            return Response({"message": "Indica la salida (viaje_id) de este paquete en la que aborda el pasajero"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if viaje.estado == Viaje.COMPLETADO:
+            return Response({"message": "El viaje ya finalizó"}, status=status.HTTP_409_CONFLICT)
+        return registrar_abordaje(request, reservas_del_viaje(viaje), viaje)
 
 
 def reservas_del_viaje(viaje):
-    """Pasajeros de un viaje: reservas no canceladas ni vencidas de su paquete, de ese viaje o sin viaje asignado."""
+    """Pasajeros de un viaje: reservas no canceladas ni vencidas de su paquete, de ese viaje o antiguas
+    sin viaje asignado (nunca las de otra salida del mismo paquete)."""
     return (
         Reserva.objects.filter(paquete_id=viaje.paquete_id)
         .exclude(estado__in=ESTADOS_QUE_LIBERAN)
@@ -486,6 +562,7 @@ def pasajero_json(r):
     usuario = Usuario.objects.filter(id=r.usuario_id).first()
     asientos = list(AsientoReserva.objects.filter(reserva=r).values_list("asiento__numero_asiento", flat=True))
     pago = estado_pago(r)
+    viaje = r.viaje
     return {
         "id": r.id,
         "nombre": nombre_pasajero(r, usuario),
@@ -495,6 +572,10 @@ def pasajero_json(r):
         "estado": r.abordado,
         "pago_estado": pago,
         "puede_abordar": pago == "aprobado",
+        # Salida de la reserva (null = reserva antigua sin salida).
+        "viaje_id": r.viaje_id,
+        "viaje_fecha": viaje.fecha.isoformat() if viaje else None,
+        "viaje_hora": viaje.hora.strftime("%H:%M") if viaje else None,
     }
 
 

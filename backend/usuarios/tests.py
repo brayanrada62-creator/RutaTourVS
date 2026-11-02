@@ -322,3 +322,79 @@ class SuspensionTest(TestCase):
         self.assertEqual(c.put(f"/api/usuario/{self.e.cond_a.id}/", {"activo": False}, format="json").status_code, 403)
         b = Escenario.cliente_http(self.e.admin_b)
         self.assertEqual(b.put(f"/api/usuario/{self.e.cond_a.id}/", {"activo": False}, format="json").status_code, 403)
+
+
+from django.core.files.uploadedfile import SimpleUploadedFile
+
+from usuarios.models import Usuario
+
+MEDIA_LICENCIAS = tempfile.mkdtemp()
+
+
+def pdf(nombre="licencia.pdf", contenido=b"%PDF-1.4\n%prueba\n"):
+    return SimpleUploadedFile(nombre, contenido, content_type="application/pdf")
+
+
+@override_settings(MEDIA_ROOT=MEDIA_LICENCIAS)
+class LicenciaPdfTest(TestCase):
+    """Sub-paso 1D: el admin de la agencia sube la licencia del conductor en PDF (máx. 5 MB)."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.admin = Escenario.cliente_http(self.e.admin_a)
+
+    def crear(self, c, archivo, rol=3, documento="900100", correo="nuevo@rt.co"):
+        return c.post("/api/usuario/", {
+            "nombre_completo": "Nuevo Conductor", "agencia_id": self.e.ag_a.id, "rol_id": rol,
+            "tipo_documento": "CC", "numero_documento": documento, "correo": correo, "telefono": "3001234567",
+            "contrasena": "clave12345", "licencia": "LIC-123", "licencia_pdf": archivo,
+        }, format="multipart")
+
+    def test_admin_crea_conductor_con_pdf_y_ve_la_url(self):
+        r = self.crear(self.admin, pdf())
+        self.assertEqual(r.status_code, 200, r.content)
+        nuevo = Usuario.objects.get(id=r.json()["id"])
+        self.assertTrue(nuevo.licencia_pdf.name.startswith("licencias/licencia_"))
+        self.assertNotIn("900100", nuevo.licencia_pdf.name)  # nombre aleatorio
+        datos = self.admin.get(f"/api/usuario/{nuevo.id}/").json()
+        self.assertTrue(datos["tiene_licencia_pdf"])
+        self.assertTrue(datos["licencia_pdf_url"].startswith("http://testserver/media/licencias/"))
+        self.assertEqual(datos["licencia"], "LIC-123")
+
+    def test_valida_pdf_y_tamano(self):
+        self.assertEqual(self.crear(self.admin, pdf("foto.png")).status_code, 400)
+        self.assertEqual(self.crear(self.admin, pdf(contenido=b"no soy un pdf")).status_code, 400)
+        grande = pdf(contenido=b"%PDF-" + b"0" * (5 * 1024 * 1024))
+        self.assertEqual(self.crear(self.admin, grande).status_code, 400)
+        self.assertEqual(self.crear(self.admin, pdf(), rol=4).status_code, 400)  # cliente no lleva licencia
+        self.assertFalse(Usuario.objects.filter(numero_documento="900100").exists())
+
+    def test_registro_publico_no_sube_pdf(self):
+        self.assertEqual(self.crear(APIClient(), pdf()).status_code, 403)
+
+    def test_solo_admin_de_su_agencia_reemplaza_y_ve_el_pdf(self):
+        url = f"/api/usuario/{self.e.cond_a.id}/"
+        self.assertEqual(self.admin.put(url, {"licencia_pdf": pdf()}, format="multipart").status_code, 200)
+        primero = Usuario.objects.get(id=self.e.cond_a.id).licencia_pdf.name
+        self.assertEqual(self.admin.put(url, {"licencia_pdf": pdf()}, format="multipart").status_code, 200)
+        segundo = Usuario.objects.get(id=self.e.cond_a.id).licencia_pdf.name
+        self.assertNotEqual(primero, segundo)
+        storage = Usuario._meta.get_field("licencia_pdf").storage
+        self.assertFalse(storage.exists(primero))  # el anterior se borró
+        # el propio conductor no sube ni ve la URL; otra agencia tampoco
+        conductor = Escenario.cliente_http(self.e.cond_a)
+        self.assertEqual(conductor.put(url, {"licencia_pdf": pdf()}, format="multipart").status_code, 403)
+        self.assertIsNone(conductor.get(url).json()["licencia_pdf_url"])
+        self.assertTrue(conductor.get(url).json()["tiene_licencia_pdf"])
+        b = Escenario.cliente_http(self.e.admin_b)
+        self.assertEqual(b.put(url, {"licencia_pdf": pdf()}, format="multipart").status_code, 403)
+        sup = Escenario.cliente_http(self.e.super).get(url).json()
+        self.assertIsNotNone(sup["licencia_pdf_url"])
+
+    def test_editar_en_json_sigue_funcionando_y_borrar_limpia_el_pdf(self):
+        url = f"/api/usuario/{self.e.cond_a.id}/"
+        self.assertEqual(self.admin.put(url, {"telefono": "3110000000"}, format="json").status_code, 200)
+        self.admin.put(url, {"licencia_pdf": pdf()}, format="multipart")
+        nombre = Usuario.objects.get(id=self.e.cond_a.id).licencia_pdf.name
+        self.assertEqual(self.admin.delete(url).status_code, 200)
+        self.assertFalse(Usuario._meta.get_field("licencia_pdf").storage.exists(nombre))
