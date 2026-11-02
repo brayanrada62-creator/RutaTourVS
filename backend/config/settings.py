@@ -181,7 +181,28 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')  # solo se usa en desarrollo local, sin Cloudinary
+
+# Cloudinary para imágenes y archivos subidos (paquetes, destinos, hospedajes, comprobantes, licencias).
+# En Render: variable CLOUDINARY_URL=cloudinary://<api_key>:<api_secret>@<cloud_name>
+# (se lee del entorno o del archivo .env con load_dotenv). Sin la variable todo se guarda en MEDIA_ROOT.
+CLOUDINARY_URL = os.environ.get('CLOUDINARY_URL', '')
+CLOUDINARY_ACTIVO = bool(CLOUDINARY_URL)
+
+if CLOUDINARY_ACTIVO:
+    # Van DESPUÉS de 'django.contrib.staticfiles': el collectstatic de django-cloudinary-storage 0.3.0
+    # no es compatible con Django 5.2 (usa STATICFILES_STORAGE, que ya no existe) y los estáticos
+    # los sigue sirviendo whitenoise. Solo se instalan con la variable: sin credenciales el paquete falla.
+    INSTALLED_APPS += ['cloudinary_storage', 'cloudinary']
+    ALMACEN_MEDIA = 'cloudinary_storage.storage.MediaCloudinaryStorage'  # imágenes (resource_type "image")
+else:
+    ALMACEN_MEDIA = 'django.core.files.storage.FileSystemStorage'
+
+# Django 5.2 usa STORAGES (DEFAULT_FILE_STORAGE se eliminó en Django 5.1).
+STORAGES = {
+    'default': {'BACKEND': ALMACEN_MEDIA},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+}
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

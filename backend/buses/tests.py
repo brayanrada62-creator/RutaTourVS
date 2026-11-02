@@ -56,7 +56,10 @@ class BusConductorFase1Test(TestCase):
         self.assertEqual(self.c.get("/api/reserva/999/").status_code, 404)
 
     def test_abordar_inexistente_404(self):
-        r = self.c.post(f"/api/paquete/{self.e.paq_a.id}/abordar/", {"reserva_id": 999999}, format="json")
+        from buses.models import Viaje
+        viaje = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a, fecha=hoy_colombia(), hora="06:30")
+        r = self.c.post(f"/api/paquete/{self.e.paq_a.id}/abordar/", {"reserva_id": 999999, "viaje_id": viaje.id},
+                        format="json")
         self.assertEqual(r.status_code, 404)
 
 
@@ -324,3 +327,136 @@ class AsientosBusTest(TestCase):
         sillas = APIClient().get(f"/api/asiento/?viaje_id={viaje.id}").json()
         self.assertEqual(len(sillas), 8)
         self.assertFalse(any(s["ocupado"] for s in sillas))
+
+
+class UnViajePorDiaTest(TestCase):
+    """Sub-paso 1B: un bus hace un solo viaje por día; el paquete sí se repite en días distintos."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.admin = Escenario.cliente_http(self.e.admin_a)
+
+    def programar(self, bus, fecha=DIA_1, hora="06:30"):
+        return self.admin.post("/api/viaje/", {"paquete_id": self.e.paq_a.id, "bus_id": bus.id,
+                                               "fecha": fecha, "hora": hora}, format="json")
+
+    def test_mismo_bus_mismo_dia_otra_hora_da_409(self):
+        primero = self.programar(self.e.bus_a).json()
+        r = self.programar(self.e.bus_a, hora="15:00")
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("un viaje por día", r.json()["message"])
+        self.assertEqual(r.json()["viaje"]["id"], primero["id"])
+
+    def test_mismo_paquete_otro_dia_u_otro_bus_si(self):
+        self.assertEqual(self.programar(self.e.bus_a).status_code, 201)
+        self.assertEqual(self.programar(self.e.bus_a, fecha=DIA_2).status_code, 201)
+        self.assertEqual(self.programar(self.e.bus_a2).status_code, 201)
+
+    def test_editar_excluye_el_propio_viaje(self):
+        v1 = self.programar(self.e.bus_a).json()
+        v2 = self.programar(self.e.bus_a, fecha=DIA_2).json()
+        # cambiar solo la hora no choca consigo mismo
+        self.assertEqual(self.admin.put(f"/api/viaje/{v1['id']}/", {"hora": "09:00"}, format="json").status_code, 200)
+        # mover v2 al día de v1 con el mismo bus: 409
+        self.assertEqual(self.admin.put(f"/api/viaje/{v2['id']}/", {"fecha": DIA_1}, format="json").status_code, 409)
+        # con otro bus sí puede ir ese día
+        r = self.admin.put(f"/api/viaje/{v2['id']}/", {"fecha": DIA_1, "bus_id": self.e.bus_a2.id}, format="json")
+        self.assertEqual(r.status_code, 200)
+
+    def test_la_base_tambien_lo_impide(self):
+        from django.db import IntegrityError, transaction
+        Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a, fecha=DIA_1, hora="06:30")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a, fecha=DIA_1, hora="18:00")
+
+
+class BusAgenciaEstadoTest(TestCase):
+    """Sub-paso 1C: la agencia del bus sale de la sesión del admin y el estado es uno de los válidos."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.admin = Escenario.cliente_http(self.e.admin_a)
+
+    def datos(self, **extra):
+        d = {"placa": "NUE123", "tipo_bus_id": self.e.tipo_a.id, "marca": "m", "modelo": "m",
+             "fecha_registro": "2026-10-28"}
+        d.update(extra)
+        return d
+
+    def test_admin_crea_sin_agencia_y_se_ignora_la_del_body(self):
+        r = self.admin.post("/api/bus/", self.datos(), format="json")
+        self.assertEqual(r.status_code, 200)
+        bus = Bus.objects.get(id=r.json()["id"])
+        self.assertEqual((bus.agencia_id, bus.estado), (self.e.ag_a.id, "activo"))
+        # aunque mande otra agencia, el bus queda en la suya
+        r = self.admin.post("/api/bus/", self.datos(placa="OTR999", agencia_id=self.e.ag_b.id), format="json")
+        self.assertEqual(Bus.objects.get(id=r.json()["id"]).agencia_id, self.e.ag_a.id)
+
+    def test_superadmin_indica_la_agencia(self):
+        s = Escenario.cliente_http(self.e.super)
+        self.assertEqual(s.post("/api/bus/", self.datos(), format="json").status_code, 400)
+        r = s.post("/api/bus/", self.datos(agencia_id=self.e.ag_a.id), format="json")
+        self.assertEqual(r.status_code, 200)
+
+    def test_estado_valido(self):
+        self.assertEqual(self.admin.post("/api/bus/", self.datos(estado="dañado"), format="json").status_code, 400)
+        r = self.admin.post("/api/bus/", self.datos(estado="Mantenimiento"), format="json")
+        self.assertEqual(Bus.objects.get(id=r.json()["id"]).estado, "mantenimiento")
+        url = f"/api/bus/{self.e.bus_a.id}/"
+        self.assertEqual(self.admin.put(url, {"estado": "roto"}, format="json").status_code, 400)
+        self.assertEqual(self.admin.put(url, {"estado": "inactivo"}, format="json").status_code, 200)
+        self.e.bus_a.refresh_from_db()
+        self.assertEqual((self.e.bus_a.estado, self.e.bus_a.placa), ("inactivo", "AAA111"))
+
+    def test_admin_no_edita_ni_mueve_buses_ajenos(self):
+        b = Escenario.cliente_http(self.e.admin_b)
+        self.assertEqual(b.put(f"/api/bus/{self.e.bus_a.id}/", {"estado": "inactivo"}, format="json").status_code, 403)
+        self.admin.put(f"/api/bus/{self.e.bus_a.id}/", {"agencia_id": self.e.ag_b.id}, format="json")
+        self.e.bus_a.refresh_from_db()
+        self.assertEqual(self.e.bus_a.agencia_id, self.e.ag_a.id)
+
+    def test_bus_no_activo_no_se_programa(self):
+        Bus.objects.filter(id=self.e.bus_a.id).update(estado="mantenimiento")
+        r = self.admin.post("/api/viaje/", {"paquete_id": self.e.paq_a.id, "bus_id": self.e.bus_a.id,
+                                            "fecha": DIA_1, "hora": "06:30"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("mantenimiento", r.json()["message"])
+        v = self.admin.post("/api/viaje/", {"paquete_id": self.e.paq_a.id, "bus_id": self.e.bus_a2.id,
+                                            "fecha": DIA_1, "hora": "06:30"}, format="json").json()
+        # tampoco se puede cambiar un viaje a un bus en mantenimiento
+        self.assertEqual(self.admin.put(f"/api/viaje/{v['id']}/", {"bus_id": self.e.bus_a.id}, format="json").status_code, 400)
+
+
+class BusMultitenantTest(TestCase):
+    """Lectura de buses aislada por agencia y sin pasar a mantenimiento un bus con viajes pendientes."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.admin = Escenario.cliente_http(self.e.admin_a)
+
+    def test_cada_agencia_ve_solo_sus_buses(self):
+        placas = {b["placa"] for b in self.admin.get("/api/bus/").json()}
+        self.assertEqual(placas, {"AAA111", "AAA222"})
+        self.assertEqual(len(Escenario.cliente_http(self.e.super).get("/api/bus/").json()), 3)
+        self.assertEqual({b["placa"] for b in Escenario.cliente_http(self.e.cond_a).get("/api/bus/").json()},
+                         {"AAA111", "AAA222"})
+        self.assertEqual(Escenario.cliente_http(self.e.cliente).get("/api/bus/").json(), [])
+        self.assertEqual(Escenario.cliente_http().get("/api/bus/").json(), [])
+        self.assertEqual(self.admin.get(f"/api/bus/{self.e.bus_b.id}/").status_code, 404)
+        self.assertEqual(self.admin.get(f"/api/bus/{self.e.bus_a.id}/").status_code, 200)
+        self.assertEqual(self.admin.get("/api/bus/placa/BBB111/").json(), {"mensaje": "Bus no encontrado"})
+        self.assertEqual(self.admin.get("/api/bus/placa/AAA111/").json()["id"], self.e.bus_a.id)
+
+    def test_no_pasa_a_mantenimiento_con_viajes_pendientes(self):
+        url = f"/api/bus/{self.e.bus_a.id}/"
+        pasado = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a,
+                                      fecha=hoy_colombia() - timedelta(days=3), hora="06:30")
+        futuro = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a, fecha=DIA_1, hora="06:30")
+        r = self.admin.put(url, {"estado": "mantenimiento"}, format="json")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual([v["id"] for v in r.json()["viajes"]], [futuro.id])  # el viaje pasado no cuenta
+        # se reasigna el viaje a otro bus y ya se puede
+        self.assertEqual(self.admin.put(f"/api/viaje/{futuro.id}/", {"bus_id": self.e.bus_a2.id},
+                                        format="json").status_code, 200)
+        self.assertEqual(self.admin.put(url, {"estado": "mantenimiento"}, format="json").status_code, 200)
+        self.assertTrue(Viaje.objects.filter(id=pasado.id).exists())

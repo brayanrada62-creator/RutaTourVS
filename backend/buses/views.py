@@ -10,14 +10,14 @@ from .serializer import TipoBusEntrada, BusEntrada, AsientoEntrada, MensajeSalid
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError, Q
 from django.utils import timezone
 
 from .models import Bus_Conductor, TipoBus, Bus, Asiento, Viaje, ParadaCumplida
 from paquetes.models import Itinerario, Paquete
 from reservas.models import AsientoReserva, Reserva, marcar_vencidas, reservas_activas, reservas_que_ocupan
-from usuarios.models import Usuario, UsuarioAgencia
+from usuarios.models import Agencia, Usuario, UsuarioAgencia
 
 from usuarios.permisos import (
     ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, agencias_de, filtrar_catalogo, es_admin, es_conductor, es_super, gestiona_agencia,
@@ -151,15 +151,73 @@ def bus_json(bus):
     }
 
 
+ESTADOS_BUS = dict(Bus.ESTADOS)  # activo, mantenimiento, inactivo
+
+
+def buses_visibles(yo):
+    """Multitenant: superadmin ve todos; admin y conductor, solo los de su(s) agencia(s);
+    cliente o sin sesión, ninguno (la app del cliente recibe placa y tipo de bus dentro de /viaje/)."""
+    base = Bus.objects.select_related("tipo_bus")
+    if es_super(yo):
+        return base
+    if es_admin(yo) or es_conductor(yo):
+        return base.filter(agencia_id__in=agencias_de(yo))
+    return base.none()
+
+
+def viajes_pendientes_del_bus(bus):
+    """Viajes que todavía dependen del bus: EN_CURSO, o PROGRAMADOS desde hoy."""
+    return Viaje.objects.select_related("bus", "paquete").filter(
+        Q(estado=Viaje.EN_CURSO) | Q(estado=Viaje.PROGRAMADO, fecha__gte=hoy_colombia()), bus=bus,
+    )
+
+
+def leer_estado_bus(valor, actual="activo"):
+    """(estado, error). Vacío = se conserva el actual ("activo" al crear). Acepta mayúsculas ("Activo")."""
+    estado = str(valor).strip().lower() if valor not in (None, "") else actual
+    if estado not in ESTADOS_BUS:
+        return None, Response({"message": "Estado no válido: usa activo, inactivo o mantenimiento"},
+                              status=status.HTTP_400_BAD_REQUEST)
+    return estado, None
+
+
+def agencia_del_bus(yo, datos, bus=None):
+    """(agencia_id, error). La agencia NUNCA se toma del body para el admin: sale de su sesión.
+    - Superadmin: la indica en agencia_id (al editar, si no la envía se conserva la del bus).
+    - Admin al editar: la del bus (debe ser una de sus agencias; no puede pasarlo a otra).
+    - Admin al crear: su agencia; si pertenece a varias, agencia_id debe ser una de ellas."""
+    if es_super(yo):
+        agencia_id = entero_o_none(datos.get("agencia_id")) or (bus.agencia_id if bus else None)
+        if agencia_id is None or not Agencia.objects.filter(id=agencia_id).exists():
+            return None, Response({"message": "Indica una agencia (agencia_id) que exista"},
+                                  status=status.HTTP_400_BAD_REQUEST)
+        return agencia_id, None
+    mias = agencias_de(yo) if es_admin(yo) else set()
+    if bus is not None:
+        if bus.agencia_id not in mias:
+            return None, prohibido("Solo puedes editar buses de tu agencia")
+        return bus.agencia_id, None
+    if not mias:
+        return None, prohibido("Solo el administrador de una agencia registra buses")
+    if len(mias) == 1:
+        return next(iter(mias)), None
+    pedida = entero_o_none(datos.get("agencia_id"))
+    if pedida in mias:
+        return pedida, None
+    return None, Response({"message": "Perteneces a varias agencias: indica agencia_id de una de ellas"},
+                          status=status.HTTP_400_BAD_REQUEST)
+
+
 class BusView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description=(
-            "Listar Buses con tipo_bus_nombre y capacidad. Opcional: ?search=, ?page= y ?page_size="
+            "Listar Buses con tipo_bus_nombre y capacidad. Superadmin: todos. Admin y conductor: solo los de "
+            "su agencia. Cliente o sin sesión: lista vacía. Opcional: ?search=, ?page= y ?page_size="
         ),
         manual_parameters=PARAMETROS_LISTA,
     )
     def get(self, request):
-        busLista = Bus.objects.select_related("tipo_bus")
+        busLista = buses_visibles(usuario_de(request))
         texto = texto_busqueda(request)
         if texto:
             busLista = busLista.filter(
@@ -168,68 +226,93 @@ class BusView(VistaCatalogo):
         return Response(paginar(request, busLista.order_by("id"), bus_json))
 
     @swagger_auto_schema(
-        operation_description="Guardar Bus",
+        operation_description=(
+            "Guardar Bus. Admin: la agencia sale de su sesión (agencia_id del body se ignora). "
+            "Superadmin: agencia_id obligatorio. estado: activo (por defecto), inactivo o mantenimiento; "
+            "otro valor responde 400. El tipo de bus debe ser de la misma agencia (400)."
+        ),
         request_body=BusEntrada,
-        responses={201: MensajeSalida}
+        responses={200: MensajeSalida}
     )
     def post(self, request):
-        placa = request.data.get("placa")
-        agencia_id = request.data.get("agencia_id")
-        if not gestiona_agencia(usuario_de(request), agencia_id):
-            return prohibido("Solo puedes registrar buses de tu agencia")
-        tipo_bus_id = request.data.get("tipo_bus_id")
-        if not TipoBus.objects.filter(id=entero_o_none(tipo_bus_id), agencia_id=entero_o_none(agencia_id)).exists():
+        yo = usuario_de(request)
+        agencia_id, error = agencia_del_bus(yo, request.data)
+        if error:
+            return error
+        tipo_bus_id = entero_o_none(request.data.get("tipo_bus_id"))
+        if not TipoBus.objects.filter(id=tipo_bus_id, agencia_id=agencia_id).exists():
             return Response({"message": "El tipo de bus debe ser de la misma agencia del bus"},
                             status=status.HTTP_400_BAD_REQUEST)
-        marca = request.data.get("marca")
-        modelo = request.data.get("modelo")
-        estado = request.data.get("estado")
-        fecha_registro = request.data.get("fecha_registro")
+        estado, error = leer_estado_bus(request.data.get("estado"))
+        if error:
+            return error
 
-        Bus.objects.create(
-            placa=placa,
+        bus = Bus.objects.create(
+            placa=request.data.get("placa"),
             agencia_id=agencia_id,
             tipo_bus_id=tipo_bus_id,
-            marca=marca,
-            modelo=modelo,
+            marca=request.data.get("marca"),
+            modelo=request.data.get("modelo"),
             estado=estado,
-            fecha_registro=fecha_registro
+            fecha_registro=request.data.get("fecha_registro")
         )
-        return Response({"mensaje": "Bus almacenado correctamente"})
+        return Response({"mensaje": "Bus almacenado correctamente", "id": bus.id})
 
 
 class BusIdView(VistaCatalogo):
     @swagger_auto_schema(
-        operation_description="Listar bus por id"
+        operation_description="Consultar bus por id. 404 si no existe o es de otra agencia (superadmin ve todos)."
     )
     def get(self, request, id):
-        registroEncontrado = get_object_or_404(Bus.objects.select_related("tipo_bus"), id=id)
+        registroEncontrado = get_object_or_404(buses_visibles(usuario_de(request)), id=id)
         return Response(bus_json(registroEncontrado))
 
     @swagger_auto_schema(
-        operation_description="Actualizar bus",
+        operation_description=(
+            "Actualizar bus. Los campos que no se envían conservan su valor. Admin: el bus debe ser de su "
+            "agencia y no puede pasarlo a otra (agencia_id del body se ignora). Superadmin: puede cambiar "
+            "agencia_id si el bus no tiene viajes (409). estado: activo, inactivo o mantenimiento (400 si no). "
+            "No pasa a inactivo/mantenimiento si tiene viajes EN_CURSO o PROGRAMADOS desde hoy: 409 con 'viajes'."
+        ),
         request_body=BusEntrada
     )
     def put(self, request, id):
         busB = get_object_or_404(Bus, id=id)
         yo = usuario_de(request)
-        if not gestiona_agencia(yo, busB.agencia_id) or not gestiona_agencia(yo, request.data.get("agencia_id")):
+        if not gestiona_agencia(yo, busB.agencia_id):
             return prohibido("Solo puedes editar buses de tu agencia")
-        tipo_nuevo = entero_o_none(request.data.get("tipo_bus_id"))
-        if not TipoBus.objects.filter(id=tipo_nuevo, agencia_id=entero_o_none(request.data.get("agencia_id"))).exists():
+        agencia_id, error = agencia_del_bus(yo, request.data, busB)
+        if error:
+            return error
+        if agencia_id != busB.agencia_id and Viaje.objects.filter(bus=busB).exists():
+            return Response({"message": "El bus tiene viajes; no se puede pasar a otra agencia"},
+                            status=status.HTTP_409_CONFLICT)
+        tipo_nuevo = entero_o_none(request.data.get("tipo_bus_id")) or busB.tipo_bus_id
+        if not TipoBus.objects.filter(id=tipo_nuevo, agencia_id=agencia_id).exists():
             return Response({"message": "El tipo de bus debe ser de la misma agencia del bus"},
                             status=status.HTTP_400_BAD_REQUEST)
         if tipo_nuevo != busB.tipo_bus_id and hay_ventas_en_viajes(Viaje.objects.filter(bus=busB)):
             # Las sillas vendidas son del mapa del tipo actual: cambiarlo dejaría esas ventas fuera del bus.
             return Response({"message": "El bus tiene sillas vendidas en sus salidas; no se puede cambiar su tipo"},
                             status=status.HTTP_409_CONFLICT)
-        busB.placa = request.data.get("placa")
-        busB.agencia_id = request.data.get("agencia_id")
-        busB.tipo_bus_id = request.data.get("tipo_bus_id")
-        busB.marca = request.data.get("marca")
-        busB.modelo = request.data.get("modelo")
-        busB.estado = request.data.get("estado")
-        busB.fecha_registro = request.data.get("fecha_registro")
+        estado, error = leer_estado_bus(request.data.get("estado"), busB.estado)
+        if error:
+            return error
+        if estado != "activo" and busB.estado == "activo":
+            pendientes = list(viajes_pendientes_del_bus(busB))
+            if pendientes:
+                return Response({
+                    "message": f"El bus tiene {len(pendientes)} viaje(s) programado(s) o en curso; "
+                               f"cámbialos a otro bus o elimínalos antes de pasarlo a {estado}",
+                    "viajes": [viaje_json(v) for v in pendientes],
+                }, status=status.HTTP_409_CONFLICT)
+        busB.placa = request.data.get("placa") or busB.placa
+        busB.agencia_id = agencia_id
+        busB.tipo_bus_id = tipo_nuevo
+        busB.marca = request.data.get("marca") or busB.marca
+        busB.modelo = request.data.get("modelo") or busB.modelo
+        busB.estado = estado
+        busB.fecha_registro = request.data.get("fecha_registro") or busB.fecha_registro
         busB.save()
         return Response({"mensaje": "Bus actualizado"})
 
@@ -250,10 +333,13 @@ class BusIdView(VistaCatalogo):
 
 class BusPlacaView(VistaCatalogo):
     @swagger_auto_schema(
-        operation_description="Busca un bus por su placa"
+        operation_description=(
+            "Busca un bus por su placa, solo entre los buses de tu agencia (superadmin: todos). "
+            "Si no está responde {mensaje: 'Bus no encontrado'}."
+        )
     )
     def get(self, request, placa):
-        bus = Bus.objects.filter(placa=placa).first()
+        bus = buses_visibles(usuario_de(request)).filter(placa=placa).first()
         if not bus:
             return Response({"mensaje": "Bus no encontrado"})
         return Response({
@@ -688,6 +774,31 @@ def conflicto(mensaje, viaje=None):
     return Response(datos, status=status.HTTP_409_CONFLICT)
 
 
+def bus_ocupado_ese_dia(bus, fecha, excluir_id=None):
+    """Regla: un bus hace UN solo viaje por día (sin importar la hora ni el paquete).
+    Devuelve el 409 con el viaje que ya ocupa ese día, o None si el bus está libre.
+    excluir_id: al editar, el propio viaje no cuenta."""
+    otros = Viaje.objects.select_related("bus", "paquete").filter(bus=bus, fecha=fecha)
+    if excluir_id is not None:
+        otros = otros.exclude(id=excluir_id)
+    otro = otros.first()
+    if otro is None:
+        return None
+    return conflicto(
+        f"El bus {bus.placa} ya tiene un viaje el {fecha.isoformat()} ({otro.paquete.nombre}, "
+        f"{otro.hora.strftime('%H:%M')}). Un bus solo puede hacer un viaje por día",
+        otro,
+    )
+
+
+def bus_no_disponible(bus):
+    """Un bus en mantenimiento o inactivo no se programa en un viaje (400). None si está activo."""
+    if bus.estado == "activo":
+        return None
+    return Response({"message": f"El bus {bus.placa} está en {bus.estado}; solo un bus activo se puede programar"},
+                    status=status.HTTP_400_BAD_REQUEST)
+
+
 class ViajeView(APIView):
     @swagger_auto_schema(
         operation_description=(
@@ -716,7 +827,12 @@ class ViajeView(APIView):
         return Response([viaje_json(v) for v in lista])
 
     @swagger_auto_schema(
-        operation_description="Programar una salida: paquete_id, bus_id, fecha (AAAA-MM-DD), hora (HH:MM). Solo admin.",
+        operation_description=(
+            "Programar una salida: paquete_id, bus_id, fecha (AAAA-MM-DD), hora (HH:MM). Solo admin de la agencia. "
+            "Un bus solo puede tener UN viaje por día (aunque sea otra hora u otro paquete): si ya tiene uno "
+            "responde 409 con 'message' y el 'viaje' que ocupa ese día. El mismo paquete sí puede repetirse "
+            "en días distintos o con otro bus. El bus debe estar 'activo' (400 si está en mantenimiento o inactivo)."
+        ),
         request_body=openapi.Schema(type=openapi.TYPE_OBJECT, properties={
             "paquete_id": openapi.Schema(type=openapi.TYPE_INTEGER),
             "bus_id": openapi.Schema(type=openapi.TYPE_INTEGER),
@@ -735,12 +851,21 @@ class ViajeView(APIView):
                             status=status.HTTP_400_BAD_REQUEST)
         if not gestiona_agencia(yo, bus.agencia_id):
             return prohibido("Solo el administrador de la agencia programa viajes")
+        error = bus_no_disponible(bus)
+        if error:
+            return error
         fecha, hora, error = leer_fecha_hora(request.data)
         if error:
             return error
-        if Viaje.objects.filter(bus=bus, fecha=fecha, hora=hora).exists():
-            return conflicto("Ese bus ya tiene una salida en esa fecha y hora")
-        viaje = Viaje.objects.create(paquete=paquete, bus=bus, fecha=fecha, hora=hora)
+        error = bus_ocupado_ese_dia(bus, fecha)
+        if error:
+            return error
+        try:
+            with transaction.atomic():
+                viaje = Viaje.objects.create(paquete=paquete, bus=bus, fecha=fecha, hora=hora)
+        except IntegrityError:
+            # Otra petición programó ese bus ese día justo al mismo tiempo (restricción viaje_bus_fecha_unico).
+            return bus_ocupado_ese_dia(bus, fecha) or conflicto("Un bus solo puede hacer un viaje por día")
         return Response(viaje_json(viaje), status=status.HTTP_201_CREATED)
 
 
@@ -750,7 +875,18 @@ class ViajeIdView(APIView):
         viaje = get_object_or_404(viajes_visibles(usuario_de(request)), id=id)
         return Response(viaje_json(viaje))
 
-    @swagger_auto_schema(operation_description="Cambiar bus, fecha u hora de un viaje PROGRAMADO. Solo admin.")
+    @swagger_auto_schema(
+        operation_description=(
+            "Cambiar bus, fecha u hora de un viaje PROGRAMADO (campos opcionales). Solo admin de la agencia. "
+            "Si cambia el bus o la fecha y ese bus ya tiene otro viaje ese día responde 409 (el propio viaje "
+            "no cuenta, así que cambiar solo la hora nunca choca consigo mismo)."
+        ),
+        request_body=openapi.Schema(type=openapi.TYPE_OBJECT, properties={
+            "bus_id": openapi.Schema(type=openapi.TYPE_INTEGER),
+            "fecha": openapi.Schema(type=openapi.TYPE_STRING, example="2026-11-02"),
+            "hora": openapi.Schema(type=openapi.TYPE_STRING, example="06:30"),
+        }),
+    )
     def put(self, request, id):
         viaje = get_object_or_404(Viaje.objects.select_related("bus", "paquete"), id=id)
         yo = usuario_de(request)
@@ -766,16 +902,28 @@ class ViajeIdView(APIView):
             if bus.agencia_id != viaje.paquete.agencia_id:
                 return Response({"message": "El bus debe ser de la agencia del paquete"},
                                 status=status.HTTP_400_BAD_REQUEST)
+            if bus.id != viaje.bus_id:
+                error = bus_no_disponible(bus)
+                if error:
+                    return error
             if bus.tipo_bus_id != viaje.bus.tipo_bus_id and hay_ventas_en_viajes([viaje]):
                 # Las sillas vendidas son del mapa del bus actual; con otro tipo quedarían fuera del bus.
                 return conflicto("La salida ya tiene sillas vendidas; solo puede cambiar a un bus del mismo tipo", viaje)
         fecha, hora, error = leer_fecha_hora(request.data, viaje)
         if error:
             return error
-        if Viaje.objects.filter(bus=bus, fecha=fecha, hora=hora).exclude(id=viaje.id).exists():
-            return conflicto("Ese bus ya tiene una salida en esa fecha y hora")
+        # Solo se valida si cambia el bus o el día: así un viaje antiguo que ya estaba repetido
+        # se puede corregir (moverlo de día o de bus) sin que su gemelo lo bloquee.
+        if (bus.id, fecha) != (viaje.bus_id, viaje.fecha):
+            error = bus_ocupado_ese_dia(bus, fecha, excluir_id=viaje.id)
+            if error:
+                return error
         viaje.bus, viaje.fecha, viaje.hora = bus, fecha, hora
-        viaje.save()
+        try:
+            with transaction.atomic():
+                viaje.save()
+        except IntegrityError:
+            return bus_ocupado_ese_dia(bus, fecha, excluir_id=viaje.id) or conflicto("Un bus solo puede hacer un viaje por día")
         return Response(viaje_json(viaje))
 
     @swagger_auto_schema(operation_description="Eliminar un viaje PROGRAMADO sin reservas asociadas. Solo admin.")

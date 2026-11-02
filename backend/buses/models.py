@@ -26,7 +26,8 @@ class Bus(models.Model):
     tipo_bus = models.ForeignKey(TipoBus, on_delete=models.PROTECT)
     marca = models.CharField(max_length=100)
     modelo = models.CharField(max_length=100)
-    estado = models.CharField(max_length=20, default="activo")
+    # Solo un bus "activo" se puede programar en un viaje nuevo.
+    estado = models.CharField(max_length=20, choices=ESTADOS, default="activo")
     fecha_registro = models.DateTimeField()
 
     def __str__(self):
@@ -89,6 +90,11 @@ class Viaje(models.Model):
     class Meta:
         db_table = "viajes_bus"
         ordering = ["fecha", "hora", "id"]
+        # Un bus hace un solo viaje por día. La vista ya responde 409 con mensaje claro;
+        # esto lo garantiza también si llegan dos peticiones al mismo tiempo.
+        constraints = [
+            models.UniqueConstraint(fields=["bus", "fecha"], name="viaje_bus_fecha_unico"),
+        ]
 
 
 class ParadaCumplida(models.Model):
