@@ -8,7 +8,7 @@ from rest_framework import status
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 from rest_framework.response import Response
 
-from .models import Usuario, UsuarioAgencia
+from .models import Agencia, Usuario, UsuarioAgencia
 
 ROL_SUPER = 1
 ROL_ADMIN = 2
@@ -112,7 +112,47 @@ def gestiona_agencia(usuario, agencia_id):
     """Superadmin: todas. Administrador: solo las agencias a las que pertenece."""
     if es_super(usuario):
         return True
-    return es_admin(usuario) and agencia_id is not None and int(agencia_id) in agencias_de(usuario)
+    try:
+        agencia_id = int(agencia_id)
+    except (TypeError, ValueError):
+        return False  # "abc" o vacío: no es una agencia que gestione (antes daba 500)
+    return es_admin(usuario) and agencia_id in agencias_de(usuario)
+
+
+def agencia_para_guardar(usuario, pedida=None, actual=None):
+    """Agencia con la que se guarda un registro (paquete, tipo de bus...). No se confía en el body:
+    - Superadmin: la pedida (debe existir) o, al editar, la que ya tiene el registro.
+    - Admin: si envía agencia_id debe ser una de las suyas (403). Si no la envía: al editar se
+      conserva la del registro (debe ser suya) y al crear se usa la suya (si tiene varias, debe indicarla).
+    Devuelve (agencia_id, None) o (None, (codigo_http, mensaje))."""
+    if pedida in (None, ""):
+        pedida = None
+    else:
+        try:
+            pedida = int(pedida)
+        except (TypeError, ValueError):
+            return None, (status.HTTP_400_BAD_REQUEST, "agencia_id debe ser un número")
+
+    if es_super(usuario):
+        agencia_id = pedida or actual
+        if agencia_id is None or not Agencia.objects.filter(id=agencia_id).exists():
+            return None, (status.HTTP_400_BAD_REQUEST, "Indica una agencia (agencia_id) que exista")
+        return agencia_id, None
+
+    mias = agencias_de(usuario) if es_admin(usuario) else set()
+    if not mias:
+        return None, (status.HTTP_403_FORBIDDEN, "Solo el administrador de una agencia puede guardar esto")
+    if actual is not None and actual not in mias:
+        return None, (status.HTTP_403_FORBIDDEN, "Ese registro es de otra agencia")
+    if pedida is not None:
+        if pedida not in mias:
+            return None, (status.HTTP_403_FORBIDDEN, "Solo puedes usar tu agencia")
+        return pedida, None
+    if actual is not None:
+        return actual, None
+    if len(mias) == 1:
+        return next(iter(mias)), None
+    return None, (status.HTTP_400_BAD_REQUEST, "Perteneces a varias agencias: indica agencia_id de una de ellas")
 
 
 def trabaja_en_agencia(usuario, agencia_id):

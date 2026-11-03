@@ -7,9 +7,10 @@ from drf_yasg.utils import swagger_auto_schema
 
 from usuarios.paginacion import PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
 from .serializer import (
-    TipoBusEntrada, BusEntrada, AsientoEntrada, MensajeSalida, BusConductorEntrada, BusTipoBusEntrada,AsientosBusEntrada
+    TipoBusEntrada, TipoBusEditarEntrada, BusEntrada, AsientoEntrada, MensajeSalida, BusConductorEntrada, BusTipoBusEntrada,AsientosBusEntrada
 )
-from datetime import date, time
+from datetime import date, datetime, time
+from zoneinfo import ZoneInfo
 
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError, Q
@@ -21,8 +22,8 @@ from reservas.models import AsientoReserva, Reserva, marcar_vencidas, reservas_a
 from usuarios.models import Agencia, Usuario, UsuarioAgencia
 
 from usuarios.permisos import (
-    ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, agencias_de, filtrar_catalogo, es_admin, es_conductor, es_super, gestiona_agencia,
-    prohibido, usuario_de,
+    ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, agencia_para_guardar, agencias_de, filtrar_catalogo, es_admin, es_conductor,
+    es_super, gestiona_agencia, prohibido, usuario_de,
 )
 
 
@@ -52,61 +53,97 @@ def hay_ventas_en_viajes(viajes):
     return AsientoReserva.objects.filter(reserva__in=reservas_activas().filter(viaje__in=viajes)).exists()
 
 
+def tipo_bus_json(tipo):
+    return {
+        "id": tipo.id,
+        "nombre": tipo.nombre,
+        "agencia_id": tipo.agencia_id,
+        "capacidad": tipo.capacidad,
+        "descripcion": tipo.descripcion,
+    }
+
+
+def tipos_bus_visibles(yo):
+    """Admin y conductor: solo los tipos de sus agencias. Superadmin, cliente y anónimo: todos
+    (la app del cliente lee la capacidad del bus de cada salida)."""
+    lista = TipoBus.objects.all()
+    if es_admin(yo) or es_conductor(yo):
+        return lista.filter(agencia_id__in=agencias_de(yo))
+    return lista
+
+
+def error_de_datos(serializador):
+    """400 con el primer error del serializer, en el formato {"message": "campo: detalle"}."""
+    campo, errores = next(iter(serializador.errors.items()))
+    return Response({"message": f"{campo}: {errores[0]}"}, status=status.HTTP_400_BAD_REQUEST)
+
+
 class TipoBusView(VistaCatalogo):
     @swagger_auto_schema(
-        operation_description="Listar tipos de bus"
+        operation_description=(
+            "Listar tipos de bus. Admin y conductor: solo los de su agencia. Superadmin, cliente y anónimo: todos."
+        )
     )
     def get(self, request):
-        tipoBusLista = TipoBus.objects.all()
-        lista = []
-        for tipoBus in tipoBusLista:
-            lista.append({
-                "id": tipoBus.id,
-                "nombre": tipoBus.nombre,
-                "agencia_id": tipoBus.agencia_id,
-                "capacidad": tipoBus.capacidad,
-                "descripcion": tipoBus.descripcion,
-            })
-        return Response(lista)
+        lista = tipos_bus_visibles(usuario_de(request)).order_by("id")
+        return Response([tipo_bus_json(tipo) for tipo in lista])
 
     @swagger_auto_schema(
-        operation_description="Guardar tipo de bus",
-        request_body=TipoBusEntrada
+        operation_description=(
+            "Guardar tipo de bus. El admin no envía agencia_id (sale de su sesión; si la envía y no es suya: 403). "
+            "El superadmin sí la indica. capacidad > 0. Responde 201 con el tipo creado (incluye id)."
+        ),
+        request_body=TipoBusEntrada,
+        responses={201: "Tipo de bus creado", 400: "Datos inválidos", 403: "Agencia ajena"},
     )
     def post(self, request):
-        nombre = request.data.get("nombre")
-        agencia_id = request.data.get("agencia_id")
-        capacidad = request.data.get("capacidad")
-        descripcion = request.data.get("descripcion")
-        if not gestiona_agencia(usuario_de(request), agencia_id):
-            return prohibido("Solo puedes crear tipos de bus de tu agencia")
-
-        TipoBus.objects.create(
-            nombre=nombre,
+        entrada = TipoBusEntrada(data=request.data)
+        if not entrada.is_valid():
+            return error_de_datos(entrada)
+        datos = entrada.validated_data
+        agencia_id, error = agencia_para_guardar(usuario_de(request), datos.get("agencia_id"))
+        if error:
+            return Response({"message": error[1]}, status=error[0])
+        tipo = TipoBus.objects.create(
+            nombre=datos["nombre"].strip(),
             agencia_id=agencia_id,
-            capacidad=capacidad,
-            descripcion=descripcion
+            capacidad=datos["capacidad"],
+            descripcion=datos.get("descripcion") or "",
         )
-        return Response({"mensaje": "Tipo de bus almacenado correctamente"})
+        return Response({**tipo_bus_json(tipo), "mensaje": "Tipo de bus almacenado correctamente"},
+                        status=status.HTTP_201_CREATED)
 
 
 class TipoBusIdView(VistaCatalogo):
     @swagger_auto_schema(
-        operation_description="Actualizar Tipo de bus",
-        request_body=TipoBusEntrada
+        operation_description=(
+            "Actualizar tipo de bus (campos opcionales: los que no llegan se conservan). Solo el admin de su "
+            "agencia o el superadmin. Cambiar de agencia (solo superadmin) un tipo que ya usan buses: 409."
+        ),
+        request_body=TipoBusEditarEntrada,
+        responses={200: "Tipo de bus actualizado", 400: "Datos inválidos", 403: "Agencia ajena", 409: "En uso"},
     )
     def put(self, request, id):
-        tipoBusB, error = tipo_bus_de(usuario_de(request), id)
+        yo = usuario_de(request)
+        tipoBusB, error = tipo_bus_de(yo, id)
         if error:
             return error
-        if not gestiona_agencia(usuario_de(request), request.data.get("agencia_id")):
-            return prohibido("Solo puedes asignar tipos de bus a tu agencia")
-        tipoBusB.nombre = request.data.get("nombre")
-        tipoBusB.agencia_id = request.data.get("agencia_id")
-        tipoBusB.capacidad = request.data.get("capacidad")
-        tipoBusB.descripcion = request.data.get("descripcion")
+        entrada = TipoBusEditarEntrada(data=request.data)
+        if not entrada.is_valid():
+            return error_de_datos(entrada)
+        datos = entrada.validated_data
+        agencia_id, error = agencia_para_guardar(yo, datos.get("agencia_id"), actual=tipoBusB.agencia_id)
+        if error:
+            return Response({"message": error[1]}, status=error[0])
+        if agencia_id != tipoBusB.agencia_id and BusTipoBus.objects.filter(tipo_bus=tipoBusB).exists():
+            return Response({"message": "El tipo de bus ya lo usan buses de su agencia; no se puede pasar a otra"},
+                            status=status.HTTP_409_CONFLICT)
+        tipoBusB.nombre = datos.get("nombre", tipoBusB.nombre).strip()
+        tipoBusB.agencia_id = agencia_id
+        tipoBusB.capacidad = datos.get("capacidad", tipoBusB.capacidad)
+        tipoBusB.descripcion = datos.get("descripcion", tipoBusB.descripcion)
         tipoBusB.save()
-        return Response({"mensaje": "Tipo de bus actualizado"})
+        return Response({**tipo_bus_json(tipoBusB), "mensaje": "Tipo de bus actualizado"})
 
     @swagger_auto_schema(
         operation_description="Eliminar tipo de bus"
@@ -126,14 +163,8 @@ class TipoBusIdView(VistaCatalogo):
         operation_description="Listar tipo de bus por id"
     )
     def get(self, request, id):
-        registroEncontrado = get_object_or_404(TipoBus, id=id)
-        return Response({
-            "id": registroEncontrado.id,
-            "nombre": registroEncontrado.nombre,
-            "agencia_id": registroEncontrado.agencia_id,
-            "capacidad": registroEncontrado.capacidad,
-            "descripcion": registroEncontrado.descripcion,
-        })
+        registroEncontrado = get_object_or_404(tipos_bus_visibles(usuario_de(request)), id=id)
+        return Response(tipo_bus_json(registroEncontrado))
 
 
 def tipo_bus_ids_de(request, required=False):
@@ -177,7 +208,7 @@ def validar_tipos_bus_de_agencia(agencia_id, tipo_bus_ids):
 
 ##################################################################################################
 def bus_json(bus):
-    tipos_bus = list(bus.tipos_bus.all())
+    tipos_bus = list(bus.tipos_bus.order_by("id"))
     tipo_bus = tipos_bus[0] if tipos_bus else None
     return {
         "id": bus.id,
@@ -204,7 +235,7 @@ ESTADOS_BUS = dict(Bus.ESTADOS)  # activo, mantenimiento, inactivo
 def buses_visibles(yo):
     """Multitenant: superadmin ve todos; admin y conductor, solo los de su(s) agencia(s);
     cliente o sin sesión, ninguno (la app del cliente recibe placa y tipo de bus dentro de /viaje/)."""
-    base = Bus.objects.select_related("tipo_bus")
+    base = Bus.objects.prefetch_related("tipos_bus")
     if es_super(yo):
         return base
     if es_admin(yo) or es_conductor(yo):
@@ -286,23 +317,26 @@ class BusView(VistaCatalogo):
         agencia_id, error = agencia_del_bus(yo, request.data)
         if error:
             return error
-        tipo_bus_id = entero_o_none(request.data.get("tipo_bus_id"))
-        if not TipoBus.objects.filter(id=tipo_bus_id, agencia_id=agencia_id).exists():
-            return Response({"message": "El tipo de bus debe ser de la misma agencia del bus"},
-                            status=status.HTTP_400_BAD_REQUEST)
+        tipo_bus_ids, error = tipo_bus_ids_de(request, required=True)
+        if error:
+            return error
+        error = validar_tipos_bus_de_agencia(agencia_id, tipo_bus_ids)
+        if error:
+            return error
         estado, error = leer_estado_bus(request.data.get("estado"))
         if error:
             return error
 
-        bus = Bus.objects.create(
-            placa=request.data.get("placa"),
-            agencia_id=agencia_id,
-            tipo_bus_id=tipo_bus_id,
-            marca=request.data.get("marca"),
-            modelo=request.data.get("modelo"),
-            estado=estado,
-            fecha_registro=request.data.get("fecha_registro")
-        )
+        with transaction.atomic():
+            bus = Bus.objects.create(
+                placa=request.data.get("placa"),
+                agencia_id=agencia_id,
+                marca=request.data.get("marca"),
+                modelo=request.data.get("modelo"),
+                estado=estado,
+                fecha_registro=request.data.get("fecha_registro")
+            )
+            bus.tipos_bus.set(tipo_bus_ids)
         return Response({"mensaje": "Bus almacenado correctamente", "id": bus.id})
 
 
@@ -334,11 +368,15 @@ class BusIdView(VistaCatalogo):
         if agencia_id != busB.agencia_id and Viaje.objects.filter(bus=busB).exists():
             return Response({"message": "El bus tiene viajes; no se puede pasar a otra agencia"},
                             status=status.HTTP_409_CONFLICT)
-        tipo_nuevo = entero_o_none(request.data.get("tipo_bus_id")) or busB.tipo_bus_id
-        if not TipoBus.objects.filter(id=tipo_nuevo, agencia_id=agencia_id).exists():
-            return Response({"message": "El tipo de bus debe ser de la misma agencia del bus"},
-                            status=status.HTTP_400_BAD_REQUEST)
-        if tipo_nuevo != busB.tipo_bus_id and hay_ventas_en_viajes(Viaje.objects.filter(bus=busB)):
+        tipo_bus_ids, error = tipo_bus_ids_de(request)
+        if error:
+            return error
+        actuales = sorted(busB.tipos_bus.values_list("id", flat=True))
+        nuevos = sorted(tipo_bus_ids) if tipo_bus_ids is not None else actuales
+        error = validar_tipos_bus_de_agencia(agencia_id, nuevos)
+        if error:
+            return error
+        if nuevos != actuales and hay_ventas_en_viajes(Viaje.objects.filter(bus=busB)):
             # Las sillas vendidas son del mapa del tipo actual: cambiarlo dejaría esas ventas fuera del bus.
             return Response({"message": "El bus tiene sillas vendidas en sus salidas; no se puede cambiar su tipo"},
                             status=status.HTTP_409_CONFLICT)
@@ -355,14 +393,14 @@ class BusIdView(VistaCatalogo):
                 }, status=status.HTTP_409_CONFLICT)
         busB.placa = request.data.get("placa") or busB.placa
         busB.agencia_id = agencia_id
-        busB.tipo_bus_id = tipo_nuevo
         busB.marca = request.data.get("marca") or busB.marca
         busB.modelo = request.data.get("modelo") or busB.modelo
         busB.estado = estado
         busB.fecha_registro = request.data.get("fecha_registro") or busB.fecha_registro
-        busB.save()
-        if tipo_bus_ids is not None:
-            busB.tipos_bus.set(tipo_bus_ids)
+        with transaction.atomic():
+            busB.save()
+            if nuevos != actuales:
+                busB.tipos_bus.set(nuevos)
         return Response({"mensaje": "Bus actualizado"})
 
     @swagger_auto_schema(
@@ -463,9 +501,17 @@ class BusPlacaView(VistaCatalogo):
             return Response({"mensaje": "Bus no encontrado"})
         return Response(bus_json(bus))
         
+def tipo_principal(bus):
+    """Tipo de bus con el que se arma el mapa de sillas del bus: el primero (el mismo tipo_bus_id de bus_json)."""
+    return bus.tipos_bus.order_by("id").first()
+
+
 def asientos_bus_json(bus):
     """Sillas del bus. El mapa es una plantilla del tipo de bus: todos los buses de ese tipo la comparten."""
-    tipo = bus.tipo_bus
+    tipo = tipo_principal(bus)
+    if tipo is None:
+        return {"bus_id": bus.id, "placa": bus.placa, "tipo_bus_id": None, "tipo_bus_nombre": None,
+                "capacidad": 0, "cantidad": 0, "buses_mismo_tipo": 0}
     return {
         "bus_id": bus.id,
         "placa": bus.placa,
@@ -473,7 +519,7 @@ def asientos_bus_json(bus):
         "tipo_bus_nombre": tipo.nombre,
         "capacidad": tipo.capacidad,
         "cantidad": Asiento.objects.filter(tipo_bus=tipo).count(),
-        "buses_mismo_tipo": Bus.objects.filter(tipo_bus=tipo).count(),
+        "buses_mismo_tipo": tipo.buses.count(),
     }
 
 
@@ -485,7 +531,7 @@ class BusAsientosView(VistaCatalogo):
         ),
     )
     def get(self, request, id):
-        bus = get_object_or_404(Bus.objects.select_related("tipo_bus"), id=id)
+        bus = get_object_or_404(buses_visibles(usuario_de(request)), id=id)
         return Response(asientos_bus_json(bus))
 
     @swagger_auto_schema(
@@ -498,19 +544,22 @@ class BusAsientosView(VistaCatalogo):
         request_body=AsientosBusEntrada,
     )
     def post(self, request, id):
-        bus = get_object_or_404(Bus.objects.select_related("tipo_bus"), id=id)
+        bus = get_object_or_404(Bus, id=id)
         yo = usuario_de(request)
         # El tipo de bus también debe ser de la agencia: no se tocan plantillas de otra agencia.
         if not gestiona_agencia(yo, bus.agencia_id):
             return prohibido("Solo puedes cambiar las sillas de los buses de tu agencia")
-        if not gestiona_agencia(yo, bus.tipo_bus.agencia_id):
+        tipo = tipo_principal(bus)
+        if tipo is None:
+            return Response({"message": "El bus no tiene tipo de bus; asígnale uno en Editar bus"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if not gestiona_agencia(yo, tipo.agencia_id):
             return prohibido("El tipo de bus de este bus es de otra agencia; cámbialo en Editar bus por uno de tu agencia")
         entrada = AsientosBusEntrada(data=request.data)
         if not entrada.is_valid():
             return Response({"message": "La cantidad debe ser un número entre 1 y 100", "errores": entrada.errors},
                             status=status.HTTP_400_BAD_REQUEST)
         cantidad = entrada.validated_data["cantidad"]
-        tipo = bus.tipo_bus
 
         with transaction.atomic():
             sobrantes = Asiento.objects.filter(tipo_bus=tipo, numero_asiento__gt=cantidad)
@@ -687,27 +736,27 @@ class AsientoView(VistaCatalogo):
         ],
     )
     def get(self, request):
-        asientoLista = Asiento.objects.all()
-        tipo = request.query_params.get("tipo_bus_id")
-        if tipo:
-            asientoLista = asientoLista.filter(tipo_bus_id=tipo)
-        ocupados_qs = AsientoReserva.objects.exclude(reserva__estado__iexact="cancelada")
-        viaje_id = entero_query(request, "viaje_id")
-        if viaje_id:
-            viaje = Viaje.objects.filter(id=viaje_id).first()
-            if viaje:
-                ocupados_qs = ocupados_qs.filter(
-                    Q(reserva__viaje_id=viaje.id)
-                    | Q(reserva__viaje_id__isnull=True, reserva__paquete_id=viaje.paquete_id)
-                )
-                tipo_bus_ids = viaje.bus.tipos_bus.values_list("id", flat=True)
-                asientoLista = asientoLista.filter(tipo_bus_id__in=tipo_bus_ids)
-        paquete_id = request.query_params.get("paquete_id")
-        if paquete_id:
-            ocupados_qs = ocupados_qs.filter(reserva__paquete_id=paquete_id)
-        ocupados = set(ocupados_qs.values_list("asiento_id", flat=True))
+        viaje_id = request.query_params.get("viaje_id")
+        tipo = entero_query(request, "tipo_bus_id")
+        paquete_id = entero_query(request, "paquete_id")
+        marcar_vencidas()
+        if viaje_id is not None:
+            viaje = Viaje.objects.select_related("bus").filter(id=entero_o_none(viaje_id)).first()
+            if viaje is None:
+                return Response({"message": "La salida no existe"}, status=status.HTTP_404_NOT_FOUND)
+            # El mapa es el de los tipos del bus de ESA salida y la ocupación es solo de esa salida.
+            tipos = list(viaje.bus.tipos_bus.values_list("id", flat=True))
+            ocupadoras = reservas_que_ocupan(viaje.paquete_id, viaje.id)
+        elif tipo:
+            tipos = [tipo]
+            ocupadoras = reservas_que_ocupan(paquete_id) if paquete_id else reservas_activas()
+        else:
+            # Sin filtro se mezclarían los mapas de todos los buses y agencias.
+            return Response({"message": "Indica viaje_id (recomendado) o tipo_bus_id"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        ocupados = set(AsientoReserva.objects.filter(reserva__in=ocupadoras).values_list("asiento_id", flat=True))
         lista = []
-        for asiento in Asiento.objects.filter(tipo_bus_id=tipo).order_by("numero_asiento", "id"):
+        for asiento in Asiento.objects.filter(tipo_bus_id__in=tipos).order_by("numero_asiento", "id"):
             lista.append({
                 "id": asiento.id,
                 "tipo_bus_id": asiento.tipo_bus_id,
@@ -944,7 +993,8 @@ class ViajeView(APIView):
             "Programar una salida: paquete_id, bus_id, fecha (AAAA-MM-DD), hora (HH:MM). Solo admin de la agencia. "
             "Un bus solo puede tener UN viaje por día (aunque sea otra hora u otro paquete): si ya tiene uno "
             "responde 409 con 'message' y el 'viaje' que ocupa ese día. El mismo paquete sí puede repetirse "
-            "en días distintos o con otro bus. El bus debe estar 'activo' (400 si está en mantenimiento o inactivo)."
+            "en días distintos o con otro bus. El bus debe estar 'activo' (400 si está en mantenimiento o inactivo) "
+            "y el paquete también (400 si está inactivo, borrador, suspendido o agotado)."
         ),
         request_body=openapi.Schema(type=openapi.TYPE_OBJECT, properties={
             "paquete_id": openapi.Schema(type=openapi.TYPE_INTEGER),
@@ -967,6 +1017,10 @@ class ViajeView(APIView):
         error = bus_no_disponible(bus)
         if error:
             return error
+        if str(paquete.estado).lower() != "activo":
+            return Response({"message": f"El paquete {paquete.nombre} está en {paquete.estado}; "
+                                        "solo un paquete activo se puede programar"},
+                            status=status.HTTP_400_BAD_REQUEST)
         fecha, hora, error = leer_fecha_hora(request.data)
         if error:
             return error
@@ -1019,7 +1073,9 @@ class ViajeIdView(APIView):
                 error = bus_no_disponible(bus)
                 if error:
                     return error
-            if bus.tipo_bus_id != viaje.bus.tipo_bus_id and hay_ventas_en_viajes([viaje]):
+            mismos_tipos = set(bus.tipos_bus.values_list("id", flat=True)) == set(
+                viaje.bus.tipos_bus.values_list("id", flat=True))
+            if not mismos_tipos and hay_ventas_en_viajes([viaje]):
                 # Las sillas vendidas son del mapa del bus actual; con otro tipo quedarían fuera del bus.
                 return conflicto("La salida ya tiene sillas vendidas; solo puede cambiar a un bus del mismo tipo", viaje)
         fecha, hora, error = leer_fecha_hora(request.data, viaje)
