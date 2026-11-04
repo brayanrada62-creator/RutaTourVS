@@ -250,3 +250,26 @@ class ItinerarioAgenciaTest(TestCase):
         self.assertEqual(self.admin.delete(url).status_code, 403)
         self.assertTrue(Itinerario.objects.filter(id=self.parada_b.id).exists())
         self.assertEqual(self.admin.get("/api/itinerario/999999/").status_code, 404)
+
+    def test_lista_el_paquete_ordenada_por_dia_y_hora(self):
+        for dia, hora in (("10", "07:00"), ("2", "09:00"), ("2", "06:00")):
+            Itinerario.objects.create(titulo="P", paquete=self.e.paq_a, dia=dia, descripcion="", hora=hora, lugar="L")
+        lista = self.admin.get(f"/api/itinerario/?paquete_id={self.e.paq_a.id}").json()
+        self.assertEqual([(p["dia"], str(p["hora"])[:5]) for p in lista], [("2", "06:00"), ("2", "09:00"), ("10", "07:00")])
+
+    def test_datos_invalidos_responden_400(self):
+        for cambio in ({"hora": ""}, {"dia": "uno"}, {"dia": 0}, {"titulo": ""}, {"lugar": "x" * 151}):
+            r = self.admin.post("/api/itinerario/", {**self.datos(self.e.paq_a), **cambio}, format="json")
+            self.assertEqual(r.status_code, 400, cambio)
+        self.assertFalse(Itinerario.objects.filter(paquete=self.e.paq_a).exists())
+
+    def test_la_descripcion_es_opcional(self):
+        datos = self.datos(self.e.paq_a)
+        del datos["descripcion"]
+        self.assertEqual(self.admin.post("/api/itinerario/", datos, format="json").status_code, 201)
+
+    def test_editar_conserva_lo_que_no_se_envia(self):
+        id_ = self.admin.post("/api/itinerario/", self.datos(self.e.paq_a), format="json").json()["id"]
+        self.assertEqual(self.admin.put(f"/api/itinerario/{id_}/", {"titulo": "Nuevo"}, format="json").status_code, 200)
+        parada = Itinerario.objects.get(id=id_)
+        self.assertEqual((parada.titulo, parada.lugar, parada.dia), ("Nuevo", "Cocora", "1"))

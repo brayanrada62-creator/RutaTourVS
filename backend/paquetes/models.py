@@ -37,6 +37,14 @@ class PaqueteDestino(models.Model):
         db_table = "paquetes_destino"
 
 
+def ordenar_itinerario(paradas):
+    """Paradas por día y hora. dia es texto: se compara como número para que "10" vaya después de "2"."""
+    def clave(parada):
+        dia = str(parada.dia).strip()
+        return (int(dia) if dia.isdigit() else 9999, parada.hora, parada.id)
+    return sorted(paradas, key=clave)
+
+
 class Itinerario(models.Model):
     titulo = models.CharField(max_length=150)
     paquete = models.ForeignKey(Paquete, on_delete=models.CASCADE)

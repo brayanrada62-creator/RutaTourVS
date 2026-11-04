@@ -21,7 +21,7 @@ from buses.views import entero_o_none, hoy_colombia
 from .serializer import (
     PaqueteRegistrarEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida, PaqueteValidar
 )
-from .models import Paquete, PaqueteDestino, Itinerario
+from .models import Paquete, PaqueteDestino, Itinerario, ordenar_itinerario
 from usuarios.paginacion import PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
 from usuarios.permisos import (
     LecturaPublica, agencia_para_guardar, filtrar_catalogo, gestiona_agencia, prohibido, usuario_de,
@@ -624,9 +624,20 @@ class PaqueteDestinoIdView(VistaCatalogo):
 
 
 ##################################################################################################
+def leer_parada(datos, parcial=False):
+    """(datos validados, error 400). Sin esto un POST sin hora terminaba en error 500."""
+    entrada = ItinerarioEntrada(data=datos, partial=parcial)
+    if not entrada.is_valid():
+        return None, Response({"message": "Revisa título, día, hora y lugar de la parada", "errores": entrada.errors},
+                              status=status.HTTP_400_BAD_REQUEST)
+    return entrada.validated_data, None
+
+
 class ItinerarioView(VistaCatalogo):
     @swagger_auto_schema(
-        operation_description="Listar itinerarios. Opcional: ?paquete_id=, ?search=, ?page= y ?page_size=",
+        operation_description=(
+            "Listar itinerarios ordenados por día y hora. Opcional: ?paquete_id=, ?search=, ?page= y ?page_size="
+        ),
         manual_parameters=PARAMETROS_LISTA + [
             openapi.Parameter("paquete_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
         ],
@@ -653,32 +664,32 @@ class ItinerarioView(VistaCatalogo):
                 "lugar": itinerario.lugar,
             }
 
-        return Response(paginar(request, itinerarioLista.order_by("id"), itinerario_json))
+        return Response(paginar(request, ordenar_itinerario(itinerarioLista), itinerario_json))
 
     @swagger_auto_schema(
-        operation_description="Guardar itinerario",
+        operation_description=(
+            "Guardar itinerario. Solo el admin de la agencia del paquete o el superadmin (403). "
+            "400 si faltan título, día, hora o lugar, o si no son válidos."
+        ),
         request_body=ItinerarioEntrada,
-        responses={201: MensajeSalida}
+        responses={201: MensajeSalida, 400: "Datos inválidos", 403: "Paquete de otra agencia", 404: "No existe"},
     )
     def post(self, request):
-        titulo = request.data.get("titulo")
-        paquete_id = request.data.get("paquete_id")
-        dia = request.data.get("dia")
-        descripcion = request.data.get("descripcion")
-        hora = request.data.get("hora")
-        lugar = request.data.get("lugar")
         # Solo el admin de la agencia del paquete (o el superadmin) le agrega paradas.
-        paquete, error = paquete_gestionable(usuario_de(request), paquete_id)
+        paquete, error = paquete_gestionable(usuario_de(request), request.data.get("paquete_id"))
+        if error:
+            return error
+        datos, error = leer_parada(request.data)
         if error:
             return error
 
         itinerario = Itinerario.objects.create(
-            titulo=titulo,
+            titulo=datos["titulo"],
             paquete=paquete,
-            dia=dia,
-            descripcion=descripcion,
-            hora=hora,
-            lugar=lugar
+            dia=str(datos["dia"]),
+            descripcion=datos.get("descripcion", ""),
+            hora=datos["hora"],
+            lugar=datos["lugar"]
         )
         return Response({"id": itinerario.id, "mensaje": "Itinerario almacenado correctamente"},
                         status=status.HTTP_201_CREATED)
@@ -704,11 +715,11 @@ class ItinerarioIdView(VistaCatalogo):
 
     @swagger_auto_schema(
         operation_description=(
-            "Actualizar itinerario. El paquete actual y el nuevo (paquete_id) deben ser de tu agencia (403); "
-            "404 si no existe."
+            "Actualizar itinerario; los campos que no se envían se conservan. El paquete actual y el nuevo "
+            "(paquete_id) deben ser de tu agencia (403); 400 si un dato no es válido; 404 si no existe."
         ),
         request_body=ItinerarioEntrada,
-        responses={200: MensajeSalida, 403: "Paquete de otra agencia", 404: "No existe"},
+        responses={200: MensajeSalida, 400: "Datos inválidos", 403: "Paquete de otra agencia", 404: "No existe"},
     )
     def put(self, request, id):
         itinerarioB = Itinerario.objects.filter(id=id).first()
@@ -721,12 +732,15 @@ class ItinerarioIdView(VistaCatalogo):
         paquete, error = paquete_gestionable(yo, request.data.get("paquete_id", itinerarioB.paquete_id))
         if error:
             return error
-        itinerarioB.titulo = request.data.get("titulo")
+        datos, error = leer_parada(request.data, parcial=True)
+        if error:
+            return error
+        itinerarioB.titulo = datos.get("titulo", itinerarioB.titulo)
         itinerarioB.paquete = paquete
-        itinerarioB.dia = request.data.get("dia")
-        itinerarioB.descripcion = request.data.get("descripcion")
-        itinerarioB.hora = request.data.get("hora")
-        itinerarioB.lugar = request.data.get("lugar")
+        itinerarioB.dia = str(datos.get("dia", itinerarioB.dia))
+        itinerarioB.descripcion = datos.get("descripcion", itinerarioB.descripcion)
+        itinerarioB.hora = datos.get("hora", itinerarioB.hora)
+        itinerarioB.lugar = datos.get("lugar", itinerarioB.lugar)
         itinerarioB.save()
         return Response({"mensaje": "Itinerario actualizado"})
 
