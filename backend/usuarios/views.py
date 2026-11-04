@@ -41,11 +41,12 @@ from .permisos import (
     MENSAJE_AGENCIA_DESACTIVADA, ROL_ADMIN, ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, SesionVigente, SoloPersonal,
     agencia_desactivada, agencias_de, es_admin, es_super, filtrar_agencia_super, gestiona_agencia, prohibido, usuario_de,
 )
-from buses.models import Bus, TipoBus
+from buses.models import Bus, TipoBus, Viaje
 from destinos.imagenes import imagen_url
 from destinos.models import Hospedaje
 from pagos.models import Pago
 from paquetes.models import Paquete
+from reservas.models import reservas_activas
 
 
 def agencia_ids_de(usuario):
@@ -947,6 +948,57 @@ class DashboardResumenView(APIView):
 
 
 ##################################################################################################
+def resumen_de_agencia(agencia, hoy):
+    """Totales de una agencia para el inicio del superadmin."""
+    ingresos = Pago.objects.filter(estado="aprobado", reserva__paquete__agencia=agencia).aggregate(total=Sum("precio"))
+    return {
+        "id": agencia.id,
+        "nombre": agencia.nombre,
+        "correo": agencia.correo,
+        "activo": agencia.activo,
+        "buses": Bus.objects.filter(agencia=agencia).count(),
+        "conductores": UsuarioAgencia.objects.filter(agencia=agencia, usuario__rol_id=ROL_CONDUCTOR).count(),
+        "paquetes": Paquete.objects.filter(agencia=agencia).count(),
+        "viajes_mes": Viaje.objects.filter(bus__agencia=agencia, fecha__year=hoy.year, fecha__month=hoy.month).count(),
+        "reservas": reservas_activas().filter(paquete__agencia=agencia).count(),
+        "ingresos_aprobados": str(ingresos["total"] or Decimal("0.00")),
+    }
+
+
+class ResumenAgenciasView(APIView):
+    @swagger_auto_schema(
+        operation_description=(
+            "Totales de cada agencia, también las desactivadas. Solo superadmin (403). viajes_mes: viajes del mes "
+            "actual en hora de Colombia. reservas: las vigentes (ni canceladas ni vencidas). ingresos_aprobados: "
+            "suma histórica de los pagos aprobados."
+        ),
+        responses={
+            200: openapi.Response("Una fila por agencia", openapi.Schema(
+                type=openapi.TYPE_ARRAY,
+                items=openapi.Schema(type=openapi.TYPE_OBJECT, properties={
+                    "id": openapi.Schema(type=openapi.TYPE_INTEGER),
+                    "nombre": openapi.Schema(type=openapi.TYPE_STRING),
+                    "correo": openapi.Schema(type=openapi.TYPE_STRING),
+                    "activo": openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                    "buses": openapi.Schema(type=openapi.TYPE_INTEGER),
+                    "conductores": openapi.Schema(type=openapi.TYPE_INTEGER),
+                    "paquetes": openapi.Schema(type=openapi.TYPE_INTEGER),
+                    "viajes_mes": openapi.Schema(type=openapi.TYPE_INTEGER),
+                    "reservas": openapi.Schema(type=openapi.TYPE_INTEGER),
+                    "ingresos_aprobados": openapi.Schema(type=openapi.TYPE_STRING, example="150000.00"),
+                }),
+            )),
+            401: "Sin sesión",
+            403: "Solo superadmin",
+        },
+    )
+    def get(self, request):
+        if not es_super(usuario_de(request)):
+            return prohibido("Solo el superadministrador consulta el resumen de agencias")
+        hoy = timezone.localtime(timezone.now(), ZoneInfo("America/Bogota")).date()
+        return Response([resumen_de_agencia(agencia, hoy) for agencia in Agencia.objects.order_by("id")])
+
+
 def agencia_json(agencia):
     return {
         "id": agencia.id,

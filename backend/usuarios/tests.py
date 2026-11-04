@@ -604,3 +604,64 @@ class SuperadminAgenciasTest(TestCase):
     def test_destino_inexistente_da_404(self):
         self.assertEqual(self.sup.delete("/api/destino/99999/").status_code, 404)
         self.assertEqual(self.sup.get("/api/destino/99999/").status_code, 404)
+
+
+class ResumenAgenciasTest(TestCase):
+    """Paso 4D: GET /dashboard/agencias/ con los totales de cada agencia, solo para el superadmin."""
+
+    def setUp(self):
+        self.e = e = Escenario()
+        self.sup = Escenario.cliente_http(e.super)
+        hoy = hoy_colombia()
+        fuera_del_mes = hoy.replace(day=1) - timedelta(days=1)
+        self.viaje_b = Viaje.objects.create(paquete=e.paq_b, bus=e.bus_b, fecha=hoy, hora="06:00")
+        Viaje.objects.create(paquete=e.paq_b, bus=e.bus_b, fecha=fuera_del_mes, hora="06:00")
+        aprobada = self.reservar()
+        Pago.objects.create(reserva=aprobada, precio=100, fecha_pago=timezone.now(), estado="aprobado")
+        Pago.objects.create(reserva=aprobada, precio=50, fecha_pago=timezone.now(), estado="aprobado")
+        pendiente = self.reservar()
+        Pago.objects.create(reserva=pendiente, precio=999, fecha_pago=timezone.now(), estado="pendiente")
+        rechazada = self.reservar()
+        Pago.objects.create(reserva=rechazada, precio=999, fecha_pago=timezone.now(), estado="rechazado")
+        self.reservar(estado="cancelada")
+        self.reservar(vence_en=timezone.now() - timedelta(minutes=1))  # venció y nadie la marcó
+
+    def reservar(self, **extra):
+        return Reserva.objects.create(usuario=self.e.cliente, paquete=self.e.paq_b, viaje=self.viaje_b,
+                                      fecha_reserva=timezone.now(), **extra)
+
+    def fila(self, agencia):
+        respuesta = self.sup.get("/api/dashboard/agencias/")
+        self.assertEqual(respuesta.status_code, 200)
+        return next(f for f in respuesta.json() if f["id"] == agencia.id)
+
+    def test_totales_de_la_agencia(self):
+        fila = self.fila(self.e.ag_b)
+        self.assertEqual(fila["nombre"], "B")
+        self.assertTrue(fila["activo"])
+        self.assertEqual(fila["buses"], 1)
+        self.assertEqual(fila["conductores"], 1)
+        self.assertEqual(fila["paquetes"], 1)
+        self.assertEqual(fila["viajes_mes"], 1)  # el del mes pasado no cuenta
+        self.assertEqual(fila["reservas"], 3)  # sin la cancelada ni la vencida
+        self.assertEqual(float(fila["ingresos_aprobados"]), 150.0)  # solo pagos aprobados
+
+    def test_los_datos_no_se_cruzan_entre_agencias(self):
+        fila = self.fila(self.e.ag_a)
+        self.assertEqual(fila["buses"], 2)
+        self.assertEqual(fila["viajes_mes"], 0)
+        self.assertEqual(fila["reservas"], 0)
+        self.assertEqual(float(fila["ingresos_aprobados"]), 0.0)
+
+    def test_incluye_las_desactivadas_y_las_vacias(self):
+        vacia = Agencia.objects.create(nombre="V", nit="4", direccion="d", telefono="4", correo="v@v.co", activo=False)
+        fila = self.fila(vacia)
+        self.assertFalse(fila["activo"])
+        self.assertEqual(fila["buses"], 0)
+        self.assertEqual(float(fila["ingresos_aprobados"]), 0.0)
+
+    def test_solo_el_superadmin(self):
+        self.assertEqual(Escenario.cliente_http(self.e.admin_a).get("/api/dashboard/agencias/").status_code, 403)
+        self.assertEqual(Escenario.cliente_http(self.e.cond_a).get("/api/dashboard/agencias/").status_code, 403)
+        self.assertEqual(Escenario.cliente_http(self.e.cliente).get("/api/dashboard/agencias/").status_code, 403)
+        self.assertEqual(Escenario.cliente_http().get("/api/dashboard/agencias/").status_code, 401)
