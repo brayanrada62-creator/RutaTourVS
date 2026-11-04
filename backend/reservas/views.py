@@ -558,6 +558,13 @@ def reservas_del_viaje(viaje):
     )
 
 
+def documento_pasajero(r, usuario):
+    """Documento de quien viaja: el del pasajero indicado o, si viaja el titular, el del titular."""
+    if r.pasajero_nombre or r.pasajero_documento:
+        return r.pasajero_documento
+    return usuario.numero_documento if usuario else ""
+
+
 def pasajero_json(r):
     usuario = Usuario.objects.filter(id=r.usuario_id).first()
     asientos = list(AsientoReserva.objects.filter(reserva=r).values_list("asiento__numero_asiento", flat=True))
@@ -566,6 +573,7 @@ def pasajero_json(r):
     return {
         "id": r.id,
         "nombre": nombre_pasajero(r, usuario),
+        "documento": documento_pasajero(r, usuario),
         "detalle": r.paquete.nombre if r.paquete_id else "",
         "codigo": codigo_reserva(r.id),
         "asiento": ",".join(str(n) for n in asientos) or "-",
@@ -622,7 +630,7 @@ def registrar_abordaje(request, reservas_validas, viaje):
 
 
 class ViajePasajerosView(APIView):
-    @swagger_auto_schema(operation_description="Pasajeros del viaje con el estado de su pago. Conductor del bus o admin.")
+    @swagger_auto_schema(operation_description="Pasajeros del viaje con su documento y el estado de su pago. Conductor del bus o admin.")
     def get(self, request, id):
         viaje = get_object_or_404(Viaje.objects.select_related("bus"), id=id)
         yo = usuario_de(request)
@@ -635,7 +643,8 @@ class ViajeAbordarView(APIView):
     @swagger_auto_schema(
         operation_description=(
             "Registrar abordaje. Body: {codigo: 'RT-<id>-<firma>'} (QR) o {reserva_id}, y estado "
-            "ABORDO | AUSENTE | PENDIENTE. ABORDO exige el último pago aprobado (409 con 'motivo' si no)."
+            "ABORDO | AUSENTE | PENDIENTE. ABORDO exige el último pago aprobado (409 con 'motivo' si no). "
+            "Responde el pasajero: nombre, documento, detalle (paquete), asiento, pago_estado, viaje_fecha, viaje_hora."
         )
     )
     def post(self, request, id):
