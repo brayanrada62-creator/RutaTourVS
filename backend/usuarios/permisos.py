@@ -5,6 +5,7 @@ El token JWT pertenece al usuario de Django (auth.User, username = correo);
 aquí se busca el Usuario de negocio con ese correo.
 """
 from rest_framework import status
+from rest_framework.exceptions import NotAuthenticated
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 from rest_framework.response import Response
 
@@ -171,7 +172,11 @@ class Autenticado(BasePermission):
     message = "Debes iniciar sesión"
 
     def has_permission(self, request, view):
-        return usuario_activo(request) is not None
+        # 401 y no 403: un usuario suspendido conserva su access hasta que vence, y con 401
+        # Angular y Android intentan renovar, el refresh está revocado y vuelven al login.
+        if usuario_activo(request) is None:
+            raise NotAuthenticated(self.message)
+        return True
 
 
 class LecturaPublica(BasePermission):

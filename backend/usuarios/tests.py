@@ -45,13 +45,13 @@ class AutenticacionTest(TestCase):
         self.assertEqual(datos["usuario"]["rol_id"], 2)
         self.assertEqual(datos["usuario"]["agencia_id"], self.e.ag_a.id)
 
-    def test_acepta_prefijo_bearer_y_token(self):
+    def test_solo_acepta_prefijo_bearer(self):
         r = APIClient().post("/api/login/", {"correo": self.e.cliente.correo, "contrasena": CLAVE}, format="json")
         access = r.json()["token"]
-        for prefijo in ("Bearer", "Token"):
+        for prefijo, esperado in (("Bearer", 200), ("Token", 401)):
             c = APIClient()
             c.credentials(HTTP_AUTHORIZATION=f"{prefijo} {access}")
-            self.assertEqual(c.get("/api/usuario/perfil/").status_code, 200, prefijo)
+            self.assertEqual(c.get("/api/usuario/perfil/").status_code, esperado, prefijo)
 
     def test_clave_vieja_en_texto_plano_se_cifra_al_entrar(self):
         viejo = self.e.usuario("viejo@rt.co", 4, clave="plana1", cifrar=False)

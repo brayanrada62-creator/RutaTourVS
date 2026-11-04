@@ -51,12 +51,12 @@ class PaqueteDestinoEntrada(serializers.Serializer):
 
 
 class ItinerarioEntrada(serializers.Serializer):
-    titulo = serializers.CharField(max_length=100)
+    titulo = serializers.CharField(max_length=150)
     paquete_id = serializers.IntegerField()
-    dia = serializers.IntegerField()
-    descripcion = serializers.CharField(max_length=300)
+    dia = serializers.IntegerField(min_value=1, help_text="Número del día: 1, 2, 3...")
+    descripcion = serializers.CharField(max_length=300, required=False, allow_blank=True)
     hora = serializers.TimeField()
-    lugar = serializers.CharField(max_length=100)
+    lugar = serializers.CharField(max_length=150)
 
 
 class PaqueteValidar(serializers.Serializer):

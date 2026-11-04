@@ -110,7 +110,8 @@ class PagoView(APIView):
             "Guardar pago (multipart/form-data). Cliente: 'comprobante' obligatorio (JPG, PNG o WEBP, máx. 5 MB); "
             "el precio lo calcula el servidor (precio del paquete × sillas), la fecha es la del servidor y el pago "
             "queda pendiente, lo que DETIENE el plazo de 1 hora de la reserva. 409 si la reserva ya tiene un pago "
-            "pendiente o aprobado; 400 si está cancelada o vencida."
+            "pendiente o aprobado; 400 si está cancelada o vencida. La agencia tampoco registra otro pago "
+            "sobre una reserva ya pagada (409)."
         ),
         request_body=PagoEntrada,
         responses={201: MensajeSalida}
@@ -144,6 +145,8 @@ class PagoView(APIView):
             if reserva.estado in ESTADOS_QUE_LIBERAN or reserva.vencida:
                 return Response({"message": "La reserva está cancelada o venció; elige de nuevo tus sillas"},
                                 status=status.HTTP_400_BAD_REQUEST)
+            if personal and Pago.objects.filter(reserva=reserva, estado="aprobado").exists():
+                return Response({"message": "Esta reserva ya está pagada"}, status=status.HTTP_409_CONFLICT)
             if not personal:
                 previo = Pago.objects.filter(reserva=reserva, estado__in=["pendiente", "aprobado"]).order_by("-id").first()
                 if previo:
@@ -195,7 +198,8 @@ class PagoIdView(APIView):
             "Actualizar pago (solo la agencia). estado: pendiente | aprobado | rechazado. "
             "Aprobado: vende las sillas. Rechazado: el cliente tiene 1 hora para enviar otro comprobante; "
             "si no lo hace, la reserva vence y sus sillas quedan libres. Guarda quién y cuándo lo revisó. "
-            "409 si se intenta aprobar el pago de una reserva cancelada o vencida."
+            "409 si se intenta aprobar el pago de una reserva cancelada o vencida, si el pago no es el último "
+            "de la reserva o si ya estaba aprobado (un pago aprobado no cambia de estado)."
         ),
         request_body=PagoEntrada
     )
@@ -217,6 +221,16 @@ class PagoIdView(APIView):
                 # Sus sillas ya pudieron venderse a otra persona.
                 return Response({"message": "La reserva está cancelada o vencida; no se puede aprobar este pago"},
                                 status=status.HTTP_409_CONFLICT)
+            # El estado de la reserva se deduce del ÚLTIMO pago: cambiar uno viejo o deshacer una
+            # aprobación la dejaría sin pagar con un pago aprobado, y sus sillas podrían liberarse.
+            if estado != pagoB.estado:
+                if pagoB.estado == "aprobado":
+                    return Response({"message": "Un pago aprobado no se puede cambiar"},
+                                    status=status.HTTP_409_CONFLICT)
+                ultimo = Pago.objects.filter(reserva=reserva).order_by("-id").first()
+                if pagoB.id != ultimo.id:
+                    return Response({"message": "Este pago ya no es el último de la reserva; revisa el comprobante más reciente"},
+                                    status=status.HTTP_409_CONFLICT)
             if estado != pagoB.estado and estado in ("aprobado", "rechazado"):
                 pagoB.revisado_por = yo
                 pagoB.revisado_en = timezone.now()
@@ -233,7 +247,7 @@ class PagoIdView(APIView):
 
     @swagger_auto_schema(
         operation_description="Eliminar pago (solo la agencia). Si la reserva queda sin pago en revisión, "
-                              "vuelve a correr su plazo de 1 hora."
+                              "vuelve a correr su plazo de 1 hora. 409 si el pago está aprobado."
     )
     def delete(self, request, id):
         pagoEliminar = get_object_or_404(Pago, id=id)
@@ -241,6 +255,10 @@ class PagoIdView(APIView):
             return prohibido()
         with transaction.atomic():
             reserva = Reserva.objects.select_for_update().get(id=pagoEliminar.reserva_id)
+            pagoEliminar = Pago.objects.select_for_update().get(id=pagoEliminar.id)
+            if pagoEliminar.estado == "aprobado":
+                return Response({"message": "Un pago aprobado no se puede eliminar"},
+                                status=status.HTTP_409_CONFLICT)
             pagoEliminar.delete()
             ajustar_plazo(reserva)
         return Response({"mensaje": "Pago eliminado"})

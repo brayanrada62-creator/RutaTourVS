@@ -110,3 +110,43 @@ class ComprobanteTest(TestCase):
         self.e.paq_a.save()
         self.assertEqual(self.pagar(imagen()).status_code, 200)
         self.assertEqual(Pago.objects.get(reserva=self.reserva).precio, 0)
+
+    def revisar(self, pago, estado):
+        admin = Escenario.cliente_http(self.e.admin_a)
+        return admin.put(f"/api/pago/{pago}/", {"estado": estado, "motivo_rechazo": "x"}, format="json")
+
+    def test_no_se_cambia_un_pago_que_no_es_el_ultimo(self):
+        viejo = self.pagar(imagen()).json()["id"]
+        self.assertEqual(self.revisar(viejo, "rechazado").status_code, 200)
+        nuevo = self.pagar(imagen()).json()["id"]
+        self.assertEqual(self.revisar(viejo, "aprobado").status_code, 409)
+        self.assertEqual(Pago.objects.get(id=viejo).estado, "rechazado")
+        self.assertEqual(self.revisar(nuevo, "aprobado").status_code, 200)
+        self.assertEqual(self.c.get(f"/api/reserva/{self.reserva.id}/").json()["estado"], "pagada")
+
+    def test_un_pago_aprobado_no_cambia(self):
+        pago = self.pagar(imagen()).json()["id"]
+        self.assertEqual(self.revisar(pago, "aprobado").status_code, 200)
+        self.assertEqual(self.revisar(pago, "rechazado").status_code, 409)
+        self.assertEqual(self.revisar(pago, "pendiente").status_code, 409)
+        self.assertEqual(self.c.get(f"/api/reserva/{self.reserva.id}/").json()["estado"], "pagada")
+
+    def test_la_agencia_no_registra_otro_pago_sobre_una_reserva_pagada(self):
+        self.revisar(self.pagar(imagen()).json()["id"], "aprobado")
+        admin = Escenario.cliente_http(self.e.admin_a)
+        r = admin.post("/api/pago/", {"reserva_id": self.reserva.id, "precio": "1", "estado": "aprobado"})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(Pago.objects.filter(reserva=self.reserva).count(), 1)
+
+    def test_un_pago_aprobado_no_se_elimina(self):
+        pago = self.pagar(imagen()).json()["id"]
+        self.revisar(pago, "aprobado")
+        admin = Escenario.cliente_http(self.e.admin_a)
+        self.assertEqual(admin.delete(f"/api/pago/{pago}/").status_code, 409)
+        self.assertTrue(Pago.objects.filter(id=pago).exists())
+
+    def test_un_pago_pendiente_si_se_elimina(self):
+        pago = self.pagar(imagen()).json()["id"]
+        admin = Escenario.cliente_http(self.e.admin_a)
+        self.assertEqual(admin.delete(f"/api/pago/{pago}/").status_code, 200)
+        self.assertFalse(Pago.objects.filter(id=pago).exists())

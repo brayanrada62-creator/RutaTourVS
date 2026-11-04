@@ -17,7 +17,7 @@ from django.db.models import ProtectedError, Q
 from django.utils import timezone
 
 from .models import Bus_Conductor, TipoBus, Bus, BusTipoBus, Asiento, Viaje, ParadaCumplida
-from paquetes.models import Itinerario, Paquete
+from paquetes.models import Itinerario, Paquete, ordenar_itinerario
 from reservas.models import AsientoReserva, Reserva, marcar_vencidas, reservas_activas, reservas_que_ocupan
 from usuarios.models import Agencia, Usuario, UsuarioAgencia
 
@@ -1160,7 +1160,7 @@ class ViajeFinalizarView(APIView):
 def paradas_json(viaje):
     hechas = dict(ParadaCumplida.objects.filter(viaje=viaje).values_list("itinerario_id", "cumplida_en"))
     lista = []
-    for orden, it in enumerate(Itinerario.objects.filter(paquete_id=viaje.paquete_id).order_by("dia", "hora", "id"), 1):
+    for orden, it in enumerate(ordenar_itinerario(Itinerario.objects.filter(paquete_id=viaje.paquete_id)), 1):
         lista.append({
             "id": it.id, "nombre": it.titulo or it.lugar, "lugar": it.lugar, "dia": it.dia,
             "hora": it.hora.strftime("%H:%M") if it.hora else "", "orden": orden,
