@@ -13,6 +13,7 @@ from .serializer import PagoEntrada, MensajeSalida
 from .models import Pago
 from reservas.models import ESTADOS_QUE_LIBERAN, AsientoReserva, Reserva, marcar_vencidas, plazo_de_pago
 from reservas.views import codigo_reserva, total_reserva
+from destinos.imagenes import imagen_url
 from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
 from usuarios.permisos import SoloPersonal, agencias_de, es_admin, es_super, gestiona_agencia, prohibido, usuario_de
 
@@ -64,14 +65,14 @@ def pagos_visibles(yo):
     return qs.select_related("reserva__usuario", "reserva__paquete", "revisado_por")
 
 
-def pago_json(pago):
+def pago_json(pago, request=None):
     return {
         "id": pago.id,
         "precio": pago.precio,
         "reserva_id": pago.reserva_id,
         "fecha_pago": pago.fecha_pago,
         "referencia": pago.referencia,
-        "comprobante": pago.comprobante.url if pago.comprobante else None,
+        "comprobante": imagen_url(pago.comprobante, request),  # URL completa (Cloudinary o /media/ local)
         "estado": pago.estado,
         "motivo_rechazo": pago.motivo_rechazo,
         "cliente": pago.reserva.usuario.nombre_completo,
@@ -102,7 +103,7 @@ class PagoView(APIView):
                 | Q(reserva__usuario__nombre_completo__icontains=texto)
                 | Q(reserva__paquete__nombre__icontains=texto)
             )
-        return Response(paginar(request, pagoLista.order_by("id"), pago_json))
+        return Response(paginar(request, pagoLista.order_by("id"), lambda p: pago_json(p, request)))
 
     @swagger_auto_schema(
         operation_description=(
@@ -187,7 +188,7 @@ class PagoIdView(APIView):
         if not (registroEncontrado.reserva.usuario_id == yo.id
                 or gestiona_agencia(yo, registroEncontrado.reserva.paquete.agencia_id)):
             return prohibido()
-        return Response(pago_json(registroEncontrado))
+        return Response(pago_json(registroEncontrado, request))
 
     @swagger_auto_schema(
         operation_description=(
@@ -255,7 +256,7 @@ class PagoPrecioView(APIView):
         pagoLista = pagos_visibles(usuario_de(request)).filter(precio=precio)
         lista = []
         for pago in pagoLista:
-            lista.append(pago_json(pago))
+            lista.append(pago_json(pago, request))
         return Response(lista)
 
 
@@ -269,4 +270,4 @@ class PagoReferenciaView(APIView):
         pago = pagos_visibles(usuario_de(request)).filter(referencia=referencia).first()
         if not pago:
             return Response({"mensaje": "Pago no encontrado"}, status=404)
-        return Response(pago_json(pago))
+        return Response(pago_json(pago, request))

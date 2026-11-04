@@ -2,19 +2,20 @@ from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from django.shortcuts import get_object_or_404
 from django.db.models import Q
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 
 from .serializer import (
-    DestinoEntrada, HopedajeEntrada, SitioTuristicoEntrada, ImagenEntrada, MensajeSalida, DepartamentoSerializer
+    DestinoEntrada, HopedajeEntrada, HospedajeDestinoEntrada, ImagenEntrada, MensajeSalida, DepartamentoSerializer
 )
-from .models import Destino, Hospedaje, SitioTuristico, ImagenDestino, Departamento
+from .models import Destino, Hospedaje, HospedajeDestino, ImagenDestino, Departamento
 from .imagenes import (
     archivo_imagen, destino_json, guardar_imagen_destino, imagen_url, resolver_departamento,
 )
 from usuarios.permisos import (
-    LecturaPublica, agencias_de, es_admin, es_super, gestiona_agencia, prohibido, usuario_de,
+    LecturaPublica,
 )
 from usuarios.paginacion import PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
 
@@ -157,47 +158,42 @@ class DestinoNombreView(VistaCatalogo):
 
 ##################################################################################################
 def hospedaje_json(h, request=None):
+    destino_ids = [destino.id for destino in h.destinos.all()]
     return {
         "id": h.id,
         "nombre": h.nombre,
-        "destino_id": h.destino_id,
+        "destino_id": destino_ids[0] if destino_ids else None,
+        "destino_ids": destino_ids,
         "direccion": h.direccion,
         "telefono": h.telefono,
         "descripcion": h.descripcion,
-        "agencia_id": h.agencia_id,
         "imagen": imagen_url(h.imagen, request),
     }
 
 
-def hospedajes_visibles(yo):
-    lista = Hospedaje.objects.all()
-    if yo is None or es_super(yo) or not es_admin(yo):
-        return lista
-    mias = agencias_de(yo)
-    return lista.filter(Q(agencia_id__in=mias) | Q(agencia_id__isnull=True))
-
-
-def hospedaje_ajeno(yo, hospedaje):
-    if es_super(yo):
-        return False
-    if es_admin(yo):
-        return hospedaje.agencia_id is not None and hospedaje.agencia_id not in agencias_de(yo)
-    return True
-
-
-def agencia_para_hospedaje(yo, agencia_id):
-    if es_super(yo):
-        if agencia_id in (None, ""):
+def destino_ids_de(data):
+    destino_ids = data.get("destino_ids")
+    if destino_ids is None:
+        destino_id = data.get("destino_id")
+        if destino_id is None:
             return None, None
-        return int(agencia_id), None
-    if not gestiona_agencia(yo, agencia_id) and agencia_id not in (None, ""):
-        return None, prohibido("No puedes asignar un hospedaje a otra agencia")
-    if agencia_id not in (None, ""):
-        return int(agencia_id), None
-    mias = agencias_de(yo)
-    if len(mias) == 1:
-        return next(iter(mias)), None
-    return None, Response({"mensaje": "Indica agencia_id"}, status=status.HTTP_400_BAD_REQUEST)
+        destino_ids = [destino_id]
+    elif isinstance(destino_ids, str):
+        destino_ids = destino_ids.split(",")
+
+    try:
+        ids = list(dict.fromkeys(int(destino_id) for destino_id in destino_ids))
+    except (TypeError, ValueError):
+        return None, Response({"mensaje": "destino_ids debe contener IDs enteros"}, status=status.HTTP_400_BAD_REQUEST)
+
+    if any(destino_id < 1 for destino_id in ids):
+        return None, Response({"mensaje": "Los IDs de destino deben ser positivos"}, status=status.HTTP_400_BAD_REQUEST)
+    if ids:
+        existentes = set(Destino.objects.filter(id__in=ids).values_list("id", flat=True))
+        faltantes = [destino_id for destino_id in ids if destino_id not in existentes]
+        if faltantes:
+            return None, Response({"mensaje": f"No existen destinos: {faltantes}"}, status=status.HTTP_404_NOT_FOUND)
+    return ids, None
 
 
 class HospedajeView(VistaCatalogo):
@@ -205,20 +201,21 @@ class HospedajeView(VistaCatalogo):
 
     @swagger_auto_schema(
         operation_description=(
-            "Listar hospedajes con agencia_id e imagen. Un administrador solo ve los de su agencia. "
-            "Opcional: ?search=, ?page= y ?page_size="
+            "Listar hospedajes con sus destinos e imagen. Opcional: ?search=, ?destino_id=, ?page= y ?page_size="
         ),
-        manual_parameters=PARAMETROS_LISTA,
+        manual_parameters=PARAMETROS_LISTA + [
+            openapi.Parameter("destino_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+        ],
     )
     def get(self, request):
-        hospedajeLista = hospedajes_visibles(usuario_de(request))
+        hospedajeLista = Hospedaje.objects.prefetch_related("destinos")
         texto = texto_busqueda(request)
         if texto:
             hospedajeLista = hospedajeLista.filter(Q(nombre__icontains=texto) | Q(direccion__icontains=texto))
         destino_id = entero_query(request, "destino_id")
         if destino_id:
-            hospedajeLista = hospedajeLista.filter(destino_id=destino_id)
-        return Response(paginar(request, hospedajeLista.order_by("id"), lambda h: hospedaje_json(h, request)))
+            hospedajeLista = hospedajeLista.filter(destinos__id=destino_id)
+        return Response(paginar(request, hospedajeLista.distinct().order_by("id"), lambda h: hospedaje_json(h, request)))
 
     @swagger_auto_schema(
         operation_description="Guardar hospedaje",
@@ -227,23 +224,21 @@ class HospedajeView(VistaCatalogo):
     )
     def post(self, request):
         nombre = request.data.get("nombre")
-        destino_id = request.data.get("destino_id")
         direccion = request.data.get("direccion")
         telefono = request.data.get("telefono")
         descripcion = request.data.get("descripcion")
-
-        agencia_id, error = agencia_para_hospedaje(usuario_de(request), request.data.get("agencia_id"))
+        destino_ids, error = destino_ids_de(request.data)
         if error:
             return error
-        Hospedaje.objects.create(
+        hospedaje = Hospedaje.objects.create(
             nombre=nombre,
-            destino_id=destino_id,
             direccion=direccion,
             telefono=telefono,
             descripcion=descripcion,
-            agencia_id=agencia_id,
             imagen=request.FILES.get("imagen"),
         )
+        if destino_ids is not None:
+            hospedaje.destinos.set(destino_ids)
         return Response({"mensaje": "Hospedaje almacenado correctamente"})
 
 
@@ -254,7 +249,7 @@ class HospedajeIdView(VistaCatalogo):
         operation_description="Listar hospedaje por id"
     )
     def get(self, request, id):
-        registroEncontrado = Hospedaje.objects.get(id=id)
+        registroEncontrado = get_object_or_404(Hospedaje.objects.prefetch_related("destinos"), id=id)
         return Response(hospedaje_json(registroEncontrado, request))
 
     @swagger_auto_schema(
@@ -262,32 +257,25 @@ class HospedajeIdView(VistaCatalogo):
         request_body=HopedajeEntrada
     )
     def put(self, request, id):
-        hospedajeB = Hospedaje.objects.get(id=id)
-        yo = usuario_de(request)
-        if hospedaje_ajeno(yo, hospedajeB):
-            return prohibido("Solo puedes editar hospedajes de tu agencia")
-        if request.data.get("agencia_id") not in (None, ""):
-            agencia_id, error = agencia_para_hospedaje(yo, request.data.get("agencia_id"))
-            if error:
-                return error
-            hospedajeB.agencia_id = agencia_id
+        hospedajeB = get_object_or_404(Hospedaje, id=id)
+        destino_ids, error = destino_ids_de(request.data)
+        if error:
+            return error
         if request.FILES.get("imagen"):
             hospedajeB.imagen = request.FILES.get("imagen")
-        hospedajeB.nombre = request.data.get("nombre")
-        hospedajeB.destino_id = request.data.get("destino_id")
-        hospedajeB.direccion = request.data.get("direccion")
-        hospedajeB.telefono = request.data.get("telefono")
-        hospedajeB.descripcion = request.data.get("descripcion")
+        for campo in ("nombre", "direccion", "telefono", "descripcion"):
+            if request.data.get(campo) is not None:
+                setattr(hospedajeB, campo, request.data.get(campo))
         hospedajeB.save()
+        if destino_ids is not None:
+            hospedajeB.destinos.set(destino_ids)
         return Response({"mensaje": "Hospedaje actualizado"})
 
     @swagger_auto_schema(
         operation_description="Eliminar hospedaje"
     )
     def delete(self, request, id):
-        hospedajeEliminar = Hospedaje.objects.get(id=id)
-        if hospedaje_ajeno(usuario_de(request), hospedajeEliminar):
-            return prohibido("Solo puedes eliminar hospedajes de tu agencia")
+        hospedajeEliminar = get_object_or_404(Hospedaje, id=id)
         hospedajeEliminar.delete()
         return Response({"mensaje": "Hospedaje eliminado"})
 
@@ -297,114 +285,66 @@ class HospedajeNombreView(VistaCatalogo):
         operation_description="Busca hospedajes por nombre"
     )
     def get(self, request, nombre):
-        hospedajeLista = hospedajes_visibles(usuario_de(request)).filter(nombre__icontains=nombre)
+        hospedajeLista = Hospedaje.objects.prefetch_related("destinos").filter(nombre__icontains=nombre)
         return Response([hospedaje_json(h, request) for h in hospedajeLista])
 
 
-##################################################################################################
-def sitio_json(sitio):
-    return {
-        "id": sitio.id,
-        "nombre": sitio.nombre,
-        "destino_id": sitio.destino_id,
-        "descripcion": sitio.descripcion,
-        "recomendaciones": sitio.recomendaciones,
-    }
-
-
-class SitioTuristicoView(VistaCatalogo):
-    @swagger_auto_schema(
-        operation_description="Listar sitios turísticos. Opcional: ?search=, ?destino_id=, ?page= y ?page_size=",
-        manual_parameters=PARAMETROS_LISTA + [
-            openapi.Parameter("destino_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
-        ],
-    )
+class HospedajeDestinoView(VistaCatalogo):
+    @swagger_auto_schema(operation_description="Listar relaciones entre hospedajes y destinos")
     def get(self, request):
-        sitios = SitioTuristico.objects.all()
-        texto = texto_busqueda(request)
-        if texto:
-            sitios = sitios.filter(
-                Q(nombre__icontains=texto)
-                | Q(descripcion__icontains=texto)
-                | Q(recomendaciones__icontains=texto)
-            )
+        relaciones = HospedajeDestino.objects.order_by("id")
+        hospedaje_id = entero_query(request, "hospedaje_id")
         destino_id = entero_query(request, "destino_id")
+        if hospedaje_id:
+            relaciones = relaciones.filter(hospedaje_id=hospedaje_id)
         if destino_id:
-            sitios = sitios.filter(destino_id=destino_id)
-        return Response(paginar(request, sitios.order_by("id"), sitio_json))
+            relaciones = relaciones.filter(destino_id=destino_id)
+        return Response([
+            {"id": relacion.id, "hospedaje_id": relacion.hospedaje_id, "destino_id": relacion.destino_id}
+            for relacion in relaciones
+        ])
 
     @swagger_auto_schema(
-        operation_description="Guardar sitio turistico",
-        request_body=SitioTuristicoEntrada,
-        responses={201: MensajeSalida}
+        operation_description="Asociar un hospedaje a un destino",
+        request_body=HospedajeDestinoEntrada,
     )
     def post(self, request):
-        nombre = request.data.get("nombre")
-        destino_id = request.data.get("destino_id")
-        descripcion = request.data.get("descripcion")
-        recomendaciones = request.data.get("recomendaciones")
-
-        SitioTuristico.objects.create(
-            nombre=nombre,
-            destino_id=destino_id,
-            descripcion=descripcion,
-            recomendaciones=recomendaciones
+        hospedaje = get_object_or_404(Hospedaje, id=request.data.get("hospedaje_id"))
+        destino = get_object_or_404(Destino, id=request.data.get("destino_id"))
+        relacion, creada = HospedajeDestino.objects.get_or_create(hospedaje=hospedaje, destino=destino)
+        return Response(
+            {"id": relacion.id, "hospedaje_id": relacion.hospedaje_id, "destino_id": relacion.destino_id},
+            status=status.HTTP_201_CREATED if creada else status.HTTP_200_OK,
         )
-        return Response({"mensaje": "Sitio turistico almacenado correctamente"})
 
 
-class SitioTuristicoIdView(VistaCatalogo):
-    @swagger_auto_schema(
-        operation_description="Listar sitio turistico por id"
-    )
+class HospedajeDestinoIdView(VistaCatalogo):
+    @swagger_auto_schema(operation_description="Listar una relación entre hospedaje y destino")
     def get(self, request, id):
-        registroEncontrado = SitioTuristico.objects.get(id=id)
-        return Response({
-            "id": registroEncontrado.id,
-            "nombre": registroEncontrado.nombre,
-            "destino_id": registroEncontrado.destino_id,
-            "descripcion": registroEncontrado.descripcion,
-            "recomendaciones": registroEncontrado.recomendaciones,
-        })
+        relacion = get_object_or_404(HospedajeDestino, id=id)
+        return Response({"id": relacion.id, "hospedaje_id": relacion.hospedaje_id, "destino_id": relacion.destino_id})
 
     @swagger_auto_schema(
-        operation_description="Actualizar sitio turistico",
-        request_body=SitioTuristicoEntrada
+        operation_description="Actualizar una relación entre hospedaje y destino",
+        request_body=HospedajeDestinoEntrada,
     )
     def put(self, request, id):
-        sitioB = SitioTuristico.objects.get(id=id)
-        sitioB.nombre = request.data.get("nombre")
-        sitioB.destino_id = request.data.get("destino_id")
-        sitioB.descripcion = request.data.get("descripcion")
-        sitioB.recomendaciones = request.data.get("recomendaciones")
-        sitioB.save()
-        return Response({"mensaje": "Sitio turistico actualizado"})
+        relacion = get_object_or_404(HospedajeDestino, id=id)
+        hospedaje = get_object_or_404(Hospedaje, id=request.data.get("hospedaje_id"))
+        destino = get_object_or_404(Destino, id=request.data.get("destino_id"))
+        duplicada = HospedajeDestino.objects.exclude(id=id).filter(hospedaje=hospedaje, destino=destino).exists()
+        if duplicada:
+            return Response({"mensaje": "La relación ya existe"}, status=status.HTTP_409_CONFLICT)
+        relacion.hospedaje = hospedaje
+        relacion.destino = destino
+        relacion.save()
+        return Response({"id": relacion.id, "hospedaje_id": relacion.hospedaje_id, "destino_id": relacion.destino_id})
 
-    @swagger_auto_schema(
-        operation_description="Eliminar sitio turistico"
-    )
+    @swagger_auto_schema(operation_description="Eliminar una relación entre hospedaje y destino")
     def delete(self, request, id):
-        sitioEliminar = SitioTuristico.objects.get(id=id)
-        sitioEliminar.delete()
-        return Response({"mensaje": "Sitio turistico eliminado"})
-
-
-class SitioTuristicoNombreView(VistaCatalogo):
-    @swagger_auto_schema(
-        operation_description="Busca sitios turísticos por nombre"
-    )
-    def get(self, request, nombre):
-        sitioLista = SitioTuristico.objects.filter(nombre__icontains=nombre)
-        lista = []
-        for sitio in sitioLista:
-            lista.append({
-                "id": sitio.id,
-                "nombre": sitio.nombre,
-                "destino_id": sitio.destino_id,
-                "descripcion": sitio.descripcion,
-                "recomendaciones": sitio.recomendaciones,
-            })
-        return Response(lista)
+        relacion = get_object_or_404(HospedajeDestino, id=id)
+        relacion.delete()
+        return Response({"mensaje": "Relación eliminada"})
 
 
 ##################################################################################################
@@ -500,7 +440,7 @@ class ImagenUrlView(VistaCatalogo):
             return Response({"mensaje": "Imagen no encontrada"}, status=404)
         return Response({
             "id": imagen.id,
-            "url_img": imagen.url_img.url if imagen.url_img else None,
+            "url_img": imagen_url(imagen.url_img, request),
             "destino_id": imagen.destino_id,
             "descripcion": imagen.descripcion,
         })
@@ -509,7 +449,7 @@ class ImagenUrlView(VistaCatalogo):
 class BusquedaCatalogoView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description=(
-            "Búsqueda del catálogo para la app: destinos, paquetes, hospedajes y sitios. "
+            "Búsqueda del catálogo para la app: destinos, paquetes y hospedajes. "
             "Usa ?search= (obligatorio para filtrar; vacío devuelve listas vacías). "
             "Opcional: ?limite= (por tipo, por defecto 8, máximo 20)."
         ),
@@ -526,7 +466,7 @@ class BusquedaCatalogoView(VistaCatalogo):
         limite = entero_query(request, "limite") or 8
         limite = min(max(limite, 1), 20)
         if not texto:
-            return Response({"search": texto, "destinos": [], "paquetes": [], "hospedajes": [], "sitios": []})
+            return Response({"search": texto, "destinos": [], "paquetes": [], "hospedajes": []})
 
         destinos = Destino.objects.select_related("departamento").filter(
             Q(nombre__icontains=texto) | Q(descripcion__icontains=texto) | Q(departamento__nombre__icontains=texto)
@@ -536,16 +476,12 @@ class BusquedaCatalogoView(VistaCatalogo):
             | Q(descripcion__icontains=texto)
             | Q(paquetedestino__destino__nombre__icontains=texto)
         ).distinct().order_by("id")[:limite]
-        hospedajes = hospedajes_visibles(usuario_de(request)).filter(
-            Q(nombre__icontains=texto) | Q(direccion__icontains=texto) | Q(destino__nombre__icontains=texto)
-        ).order_by("id")[:limite]
-        sitios = SitioTuristico.objects.filter(
-            Q(nombre__icontains=texto) | Q(descripcion__icontains=texto)
-        ).order_by("id")[:limite]
+        hospedajes = Hospedaje.objects.prefetch_related("destinos").filter(
+            Q(nombre__icontains=texto) | Q(direccion__icontains=texto) | Q(destinos__nombre__icontains=texto)
+        ).distinct().order_by("id")[:limite]
         return Response({
             "search": texto,
             "destinos": [destino_json(d, request) for d in destinos],
             "paquetes": [paquete_json(p, request) for p in paquetes],
             "hospedajes": [hospedaje_json(h, request) for h in hospedajes],
-            "sitios": [sitio_json(s) for s in sitios],
         })

@@ -1,4 +1,16 @@
+from django.conf import settings
+from django.core.files.storage import default_storage
 from django.db import models
+
+
+def almacenamiento_pdf():
+    """Dónde se guardan los PDF: Cloudinary como resource_type "raw" (no son imágenes) si hay
+    CLOUDINARY_URL; si no, el almacenamiento local (MEDIA_ROOT). Es una función para que la
+    migración no dependa de si la variable existe en cada computador."""
+    if getattr(settings, "CLOUDINARY_ACTIVO", False):
+        from cloudinary_storage.storage import RawMediaCloudinaryStorage
+        return RawMediaCloudinaryStorage()
+    return default_storage
 
 
 class Rol(models.Model):
@@ -33,7 +45,11 @@ class Usuario(models.Model):
     correo = models.EmailField(max_length=150)
     telefono = models.CharField(max_length=20)
     contrasena = models.CharField(max_length=255)
-    licencia = models.CharField(max_length=30, blank=True, default="")
+    licencia = models.CharField(max_length=30, blank=True, default="")  # número de la licencia
+    # Copia de la licencia del conductor en PDF (máx. 5 MB). Solo la sube y la ve el admin de su
+    # agencia o el superadmin. Se guarda con nombre aleatorio para que la URL no se pueda adivinar.
+    licencia_pdf = models.FileField(upload_to="licencias/", storage=almacenamiento_pdf, max_length=255,
+                                    blank=True, null=True)
     # Suspensión: un usuario inactivo no puede iniciar sesión ni usar su token.
     activo = models.BooleanField(default=True)
 

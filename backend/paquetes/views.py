@@ -8,7 +8,7 @@ from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from django.db.models import Q
+from django.db.models import ProtectedError, Q
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from decimal import Decimal, InvalidOperation
@@ -16,14 +16,16 @@ from decimal import Decimal, InvalidOperation
 from destinos.imagenes import destino_json, guardar_imagen_destino, imagen_url, resolver_departamento
 from destinos.models import Destino
 from buses.models import Viaje
-from buses.views import hoy_colombia
+from buses.views import entero_o_none, hoy_colombia
 
 from .serializer import (
     PaqueteRegistrarEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida, PaqueteValidar
 )
 from .models import Paquete, PaqueteDestino, Itinerario
 from usuarios.paginacion import PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
-from usuarios.permisos import LecturaPublica, filtrar_catalogo, gestiona_agencia, usuario_de
+from usuarios.permisos import (
+    LecturaPublica, agencia_para_guardar, filtrar_catalogo, gestiona_agencia, prohibido, usuario_de,
+)
 
 
 class VistaCatalogo(APIView):
@@ -268,9 +270,28 @@ def validar_paquete(datos):
     return serializador.validated_data
 
 
+def paquete_gestionable(yo, paquete_id):
+    """(paquete, error). El paquete existe (404) y es de una agencia que administra quien hace la petición (403)."""
+    paquete = Paquete.objects.filter(id=entero_o_none(paquete_id)).first()
+    if paquete is None:
+        return None, Response({"mensaje": "El paquete no existe"}, status=status.HTTP_404_NOT_FOUND)
+    if not gestiona_agencia(yo, paquete.agencia_id):
+        return None, prohibido("Ese paquete es de otra agencia")
+    return paquete, None
+
+
 def crear_o_actualizar_paquete(request, paquete=None):
-    validos = validar_paquete(request.data)
     yo = usuario_de(request)
+    # La agencia no se toma a ciegas del body: el admin usa la suya (o la del paquete al editar).
+    agencia_id, error = agencia_para_guardar(yo, request.data.get("agencia_id"),
+                                             actual=paquete.agencia_id if paquete else None)
+    if error:
+        codigo, mensaje = error
+        if codigo == status.HTTP_403_FORBIDDEN:
+            raise SinPermisoAgencia(mensaje)
+        raise ValueError(mensaje)
+    campos = {campo: request.data.get(campo) for campo in ("nombre", "duracion_estimada", "precio")}
+    validos = validar_paquete({**campos, "agencia_id": agencia_id})
     agencias = {validos["agencia_id"]} | ({paquete.agencia_id} if paquete else set())
     if not all(gestiona_agencia(yo, agencia) for agencia in agencias):
         raise SinPermisoAgencia("Solo puedes guardar paquetes de tu agencia")
@@ -411,8 +432,7 @@ class PaqueteRegistrarView(VistaCatalogo):
     def post(self, request):
         if not request.data.get("nombre"):
             return Response({"mensaje": "El nombre es obligatorio"}, status=status.HTTP_400_BAD_REQUEST)
-        if not request.data.get("agencia_id"):
-            return Response({"mensaje": "La agencia es obligatoria"}, status=status.HTTP_400_BAD_REQUEST)
+        # agencia_id ya no es obligatorio: al admin se le toma de su sesión (crear_o_actualizar_paquete).
         try:
             paquete = crear_o_actualizar_paquete(request)
         except ValueError as error:
@@ -455,11 +475,21 @@ class PaqueteIdView(VistaCatalogo):
         return Response(data)
 
     @swagger_auto_schema(
-        operation_description="Eliminar paquete"
+        operation_description=(
+            "Eliminar paquete. Solo el admin de su agencia o el superadmin (403). 404 si no existe; "
+            "409 si tiene reservas (se conservan por trazabilidad: cámbialo a inactivo)."
+        ),
+        responses={200: MensajeSalida, 403: "Paquete de otra agencia", 404: "No existe", 409: "Tiene reservas"},
     )
     def delete(self, request, id):
-        paqueteEliminar = Paquete.objects.get(id=id)
-        paqueteEliminar.delete()
+        paqueteEliminar, error = paquete_gestionable(usuario_de(request), id)
+        if error:
+            return error
+        try:
+            paqueteEliminar.delete()
+        except ProtectedError:
+            return Response({"mensaje": "El paquete tiene reservas; cámbialo a inactivo en lugar de eliminarlo"},
+                            status=status.HTTP_409_CONFLICT)
         return Response({"mensaje": "Paquete eliminado"})
 
 
@@ -482,65 +512,113 @@ class PaqueteNombreView(VistaCatalogo):
 
 
 ##################################################################################################
+def paquete_destino_json(rel):
+    return {"id": rel.id, "paquete_id": rel.paquete_id, "destino_id": rel.destino_id}
+
+
+def relaciones_visibles(yo):
+    """Relaciones paquete-destino que ve el usuario: las de los paquetes de su catálogo (filtrar_catalogo)."""
+    return filtrar_catalogo(yo, PaqueteDestino.objects.all(), "paquete__agencia_id")
+
+
+def leer_paquete_destino(request):
+    """(paquete, destino, error) a partir de paquete_id y destino_id del body, con la agencia validada."""
+    entrada = PaqueteDestinoEntrada(data=request.data)
+    if not entrada.is_valid():
+        campo, errores = next(iter(entrada.errors.items()))
+        return None, None, Response({"mensaje": f"{campo}: {errores[0]}"}, status=status.HTTP_400_BAD_REQUEST)
+    paquete, error = paquete_gestionable(usuario_de(request), entrada.validated_data["paquete_id"])
+    if error:
+        return None, None, error
+    destino = Destino.objects.filter(id=entrada.validated_data["destino_id"]).first()
+    if destino is None:
+        return None, None, Response({"mensaje": "El destino no existe"}, status=status.HTTP_404_NOT_FOUND)
+    return paquete, destino, None
+
+
 class PaqueteDestinoView(VistaCatalogo):
     @swagger_auto_schema(
-        operation_description="Listar relaciones paquete-destino"
+        operation_description=(
+            "Listar relaciones paquete-destino. Opcional: ?paquete_id=. Un cliente ligado a una agencia "
+            "solo ve las de esa agencia (igual que /paquete/)."
+        ),
+        manual_parameters=[openapi.Parameter("paquete_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER)],
     )
     def get(self, request):
-        relLista = PaqueteDestino.objects.all()
-        lista = []
-        for rel in relLista:
-            lista.append({
-                "id": rel.id,
-                "paquete_id": rel.paquete_id,
-                "destino_id": rel.destino_id,
-            })
-        return Response(lista)
+        relLista = relaciones_visibles(usuario_de(request))
+        paquete_id = entero_query(request, "paquete_id")
+        if paquete_id:
+            relLista = relLista.filter(paquete_id=paquete_id)
+        return Response([paquete_destino_json(rel) for rel in relLista.order_by("id")])
 
     @swagger_auto_schema(
-        operation_description="Guardar relacion paquete-destino",
+        operation_description=(
+            "Vincular un destino existente a un paquete. Solo el admin de la agencia del paquete o el superadmin "
+            "(403). 404 si el paquete o el destino no existen; 409 si ya estaban vinculados. Responde 201 con id."
+        ),
         request_body=PaqueteDestinoEntrada,
-        responses={201: MensajeSalida}
+        responses={201: "Relación creada", 403: "Paquete de otra agencia", 404: "No existe", 409: "Ya vinculado"},
     )
     def post(self, request):
-        paquete_id = request.data.get("paquete_id")
-        destino_id = request.data.get("destino_id")
-
-        PaqueteDestino.objects.create(
-            paquete_id=paquete_id,
-            destino_id=destino_id
-        )
-        return Response({"mensaje": "Relacion paquete-destino almacenada correctamente"})
+        paquete, destino, error = leer_paquete_destino(request)
+        if error:
+            return error
+        if PaqueteDestino.objects.filter(paquete=paquete, destino=destino).exists():
+            return Response({"mensaje": "Ese destino ya está en el paquete"}, status=status.HTTP_409_CONFLICT)
+        rel = PaqueteDestino.objects.create(paquete=paquete, destino=destino)
+        return Response({**paquete_destino_json(rel), "mensaje": "Relacion paquete-destino almacenada correctamente"},
+                        status=status.HTTP_201_CREATED)
 
 
 class PaqueteDestinoIdView(VistaCatalogo):
     @swagger_auto_schema(
-        operation_description="Listar relacion paquete-destino por id"
+        operation_description="Listar relacion paquete-destino por id (404 si no existe o no es visible)"
     )
     def get(self, request, id):
-        registroEncontrado = PaqueteDestino.objects.get(id=id)
-        return Response({
-            "id": registroEncontrado.id,
-            "paquete_id": registroEncontrado.paquete_id,
-            "destino_id": registroEncontrado.destino_id,
-        })
+        registroEncontrado = relaciones_visibles(usuario_de(request)).filter(id=id).first()
+        if registroEncontrado is None:
+            return Response({"mensaje": "Relación no encontrada"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(paquete_destino_json(registroEncontrado))
 
     @swagger_auto_schema(
-        operation_description="Actualizar relacion paquete-destino",
-        request_body=PaqueteDestinoEntrada
+        operation_description=(
+            "Actualizar relacion paquete-destino. El paquete actual y el nuevo deben ser de tu agencia (403); "
+            "409 si la relación nueva ya existe."
+        ),
+        request_body=PaqueteDestinoEntrada,
+        responses={200: MensajeSalida, 403: "Paquete de otra agencia", 404: "No existe", 409: "Ya vinculado"},
     )
     def put(self, request, id):
-        relB = PaqueteDestino.objects.get(id=id)
-        relB.paquete_id = request.data.get("paquete_id")
-        relB.destino_id = request.data.get("destino_id")
+        relB = PaqueteDestino.objects.filter(id=id).first()
+        if relB is None:
+            return Response({"mensaje": "Relación no encontrada"}, status=status.HTTP_404_NOT_FOUND)
+        _, error = paquete_gestionable(usuario_de(request), relB.paquete_id)
+        if error:
+            return error
+        paquete, destino, error = leer_paquete_destino(request)
+        if error:
+            return error
+        if PaqueteDestino.objects.filter(paquete=paquete, destino=destino).exclude(id=relB.id).exists():
+            return Response({"mensaje": "Ese destino ya está en el paquete"}, status=status.HTTP_409_CONFLICT)
+        relB.paquete = paquete
+        relB.destino = destino
         relB.save()
-        return Response({"mensaje": "Relacion paquete-destino actualizada"})
+        return Response({**paquete_destino_json(relB), "mensaje": "Relacion paquete-destino actualizada"})
 
     @swagger_auto_schema(
-        operation_description="Eliminar relacion paquete-destino"
+        operation_description=(
+            "Quitar un destino de un paquete (el destino NO se borra). Solo el admin de la agencia del paquete "
+            "o el superadmin (403); 404 si no existe."
+        ),
+        responses={200: MensajeSalida, 403: "Paquete de otra agencia", 404: "No existe"},
     )
     def delete(self, request, id):
-        relEliminar = PaqueteDestino.objects.get(id=id)
+        relEliminar = PaqueteDestino.objects.filter(id=id).first()
+        if relEliminar is None:
+            return Response({"mensaje": "Relación no encontrada"}, status=status.HTTP_404_NOT_FOUND)
+        _, error = paquete_gestionable(usuario_de(request), relEliminar.paquete_id)
+        if error:
+            return error
         relEliminar.delete()
         return Response({"mensaje": "Relacion paquete-destino eliminada"})
 
@@ -589,16 +667,21 @@ class ItinerarioView(VistaCatalogo):
         descripcion = request.data.get("descripcion")
         hora = request.data.get("hora")
         lugar = request.data.get("lugar")
+        # Solo el admin de la agencia del paquete (o el superadmin) le agrega paradas.
+        paquete, error = paquete_gestionable(usuario_de(request), paquete_id)
+        if error:
+            return error
 
-        Itinerario.objects.create(
+        itinerario = Itinerario.objects.create(
             titulo=titulo,
-            paquete_id=paquete_id,
+            paquete=paquete,
             dia=dia,
             descripcion=descripcion,
             hora=hora,
             lugar=lugar
         )
-        return Response({"mensaje": "Itinerario almacenado correctamente"})
+        return Response({"id": itinerario.id, "mensaje": "Itinerario almacenado correctamente"},
+                        status=status.HTTP_201_CREATED)
 
 
 class ItinerarioIdView(VistaCatalogo):
@@ -606,7 +689,9 @@ class ItinerarioIdView(VistaCatalogo):
         operation_description="Listar itinerario por id"
     )
     def get(self, request, id):
-        registroEncontrado = Itinerario.objects.get(id=id)
+        registroEncontrado = Itinerario.objects.filter(id=id).first()
+        if registroEncontrado is None:
+            return Response({"mensaje": "Itinerario no encontrado"}, status=status.HTTP_404_NOT_FOUND)
         return Response({
             "id": registroEncontrado.id,
             "titulo": registroEncontrado.titulo,
@@ -618,13 +703,26 @@ class ItinerarioIdView(VistaCatalogo):
         })
 
     @swagger_auto_schema(
-        operation_description="Actualizar itinerario",
-        request_body=ItinerarioEntrada
+        operation_description=(
+            "Actualizar itinerario. El paquete actual y el nuevo (paquete_id) deben ser de tu agencia (403); "
+            "404 si no existe."
+        ),
+        request_body=ItinerarioEntrada,
+        responses={200: MensajeSalida, 403: "Paquete de otra agencia", 404: "No existe"},
     )
     def put(self, request, id):
-        itinerarioB = Itinerario.objects.get(id=id)
+        itinerarioB = Itinerario.objects.filter(id=id).first()
+        if itinerarioB is None:
+            return Response({"mensaje": "Itinerario no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+        yo = usuario_de(request)
+        _, error = paquete_gestionable(yo, itinerarioB.paquete_id)
+        if error:
+            return error
+        paquete, error = paquete_gestionable(yo, request.data.get("paquete_id", itinerarioB.paquete_id))
+        if error:
+            return error
         itinerarioB.titulo = request.data.get("titulo")
-        itinerarioB.paquete_id = request.data.get("paquete_id")
+        itinerarioB.paquete = paquete
         itinerarioB.dia = request.data.get("dia")
         itinerarioB.descripcion = request.data.get("descripcion")
         itinerarioB.hora = request.data.get("hora")
@@ -633,10 +731,16 @@ class ItinerarioIdView(VistaCatalogo):
         return Response({"mensaje": "Itinerario actualizado"})
 
     @swagger_auto_schema(
-        operation_description="Eliminar itinerario"
+        operation_description="Eliminar itinerario. Solo el admin de la agencia del paquete o el superadmin (403).",
+        responses={200: MensajeSalida, 403: "Paquete de otra agencia", 404: "No existe"},
     )
     def delete(self, request, id):
-        itinerarioEliminar = Itinerario.objects.get(id=id)
+        itinerarioEliminar = Itinerario.objects.filter(id=id).first()
+        if itinerarioEliminar is None:
+            return Response({"mensaje": "Itinerario no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+        _, error = paquete_gestionable(usuario_de(request), itinerarioEliminar.paquete_id)
+        if error:
+            return error
         itinerarioEliminar.delete()
         return Response({"mensaje": "Itinerario eliminado"})
 

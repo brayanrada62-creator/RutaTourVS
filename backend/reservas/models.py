@@ -29,8 +29,13 @@ class Reserva(models.Model):
     # La app la envía para que un reintento no cree una segunda reserva.
     clave_idempotencia = models.CharField(max_length=64, null=True, blank=True)
     abordado = models.CharField(max_length=20, default="PENDIENTE")
-    # Salida elegida. Las reservas anteriores (sin salida) pertenecen al paquete.
-    viaje = models.ForeignKey("buses.Viaje", null=True, blank=True, on_delete=models.SET_NULL)
+    # Salida elegida. OBLIGATORIA en toda reserva nueva (la API la exige).
+    # La columna sigue aceptando NULL solo por las reservas antiguas (anteriores a las salidas):
+    # esas bloquean sus sillas en todas las salidas del paquete hasta que la agencia les asigne
+    # una con PUT /reserva/<id>/. PROTECT: un viaje con reservas no se borra (antes SET_NULL
+    # convertía sus reservas en "antiguas" y bloqueaban sillas en todos los viajes).
+    viaje = models.ForeignKey("buses.Viaje", null=True, on_delete=models.PROTECT,
+                              help_text="Salida del paquete. Obligatoria en reservas nuevas")
     # Quién viaja, si no es el titular de la cuenta (vacío = viaja el titular).
     pasajero_nombre = models.CharField(max_length=120, blank=True, default="")
     pasajero_documento = models.CharField(max_length=15, blank=True, default="")
@@ -67,8 +72,13 @@ def marcar_vencidas():
 
 
 def reservas_que_ocupan(paquete_id, viaje_id=None):
-    """Reservas que ocupan sillas. Con salida: las de esa salida y las antiguas sin salida del mismo
-    paquete (no se sabe en cuál viajan, así que bloquean en todas). Sin salida: todas las del paquete."""
+    """Reservas que ocupan sillas.
+
+    Con salida (caso normal): las de ESA salida + las antiguas sin salida del mismo paquete.
+    Las antiguas no se sabe en qué salida viajan, así que, para no vender dos veces la misma
+    silla, siguen bloqueando en todas; dejan de hacerlo cuando la agencia les asigna su salida.
+    Reservas de OTRA salida del mismo paquete nunca cuentan.
+    Sin salida (solo reservas antiguas): todas las del paquete."""
     lista = reservas_activas().filter(paquete_id=paquete_id)
     if viaje_id:
         lista = lista.filter(models.Q(viaje_id=viaje_id) | models.Q(viaje__isnull=True))
