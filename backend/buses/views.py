@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 
-from usuarios.paginacion import PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
+from usuarios.paginacion import PARAMETRO_AGENCIA, PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
 from .serializer import (
     TipoBusEntrada, TipoBusEditarEntrada, BusEntrada, AsientoEntrada, MensajeSalida, BusConductorEntrada, BusTipoBusEntrada,AsientosBusEntrada
 )
@@ -22,8 +22,8 @@ from reservas.models import AsientoReserva, Reserva, marcar_vencidas, reservas_a
 from usuarios.models import Agencia, Usuario, UsuarioAgencia
 
 from usuarios.permisos import (
-    ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, agencia_para_guardar, agencias_de, filtrar_catalogo, es_admin, es_conductor,
-    es_super, gestiona_agencia, prohibido, usuario_de,
+    ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, agencia_para_guardar, agencias_de, filtrar_agencia_super, filtrar_catalogo,
+    es_admin, es_conductor, es_super, gestiona_agencia, prohibido, usuario_de,
 )
 
 
@@ -81,11 +81,13 @@ def error_de_datos(serializador):
 class TipoBusView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description=(
-            "Listar tipos de bus. Admin y conductor: solo los de su agencia. Superadmin, cliente y anónimo: todos."
-        )
+            "Listar tipos de bus. Admin y conductor: solo los de su agencia. Superadmin, cliente y anónimo: todos. "
+            "Superadmin: ?agencia_id= limita a esa agencia."
+        ),
+        manual_parameters=[PARAMETRO_AGENCIA],
     )
     def get(self, request):
-        lista = tipos_bus_visibles(usuario_de(request)).order_by("id")
+        lista = filtrar_agencia_super(request, tipos_bus_visibles(usuario_de(request))).order_by("id")
         return Response([tipo_bus_json(tipo) for tipo in lista])
 
     @swagger_auto_schema(
@@ -290,12 +292,13 @@ class BusView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description=(
             "Listar Buses con tipo_bus_nombre y capacidad. Superadmin: todos. Admin y conductor: solo los de "
-            "su agencia. Cliente o sin sesión: lista vacía. Opcional: ?search=, ?page= y ?page_size="
+            "su agencia. Cliente o sin sesión: lista vacía. Opcional: ?agencia_id= (solo superadmin), ?search=, "
+            "?page= y ?page_size="
         ),
-        manual_parameters=PARAMETROS_LISTA,
+        manual_parameters=PARAMETROS_LISTA + [PARAMETRO_AGENCIA],
     )
     def get(self, request):
-        busLista = buses_visibles(usuario_de(request))
+        busLista = filtrar_agencia_super(request, buses_visibles(usuario_de(request)))
         texto = texto_busqueda(request)
         if texto:
             busLista = busLista.filter(
@@ -623,10 +626,14 @@ def viaje_en_curso_en(conductor, bus_ids):
 
 class BusConductorView(APIView):
     @swagger_auto_schema(
-        operation_description="Listar asignaciones bus-conductor. Filtros opcionales: ?conductor_id= y ?bus_id=",
+        operation_description=(
+            "Listar asignaciones bus-conductor. Filtros opcionales: ?conductor_id=, ?bus_id= y "
+            "?agencia_id= (solo superadmin)"
+        ),
         manual_parameters=[
             openapi.Parameter("conductor_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
             openapi.Parameter("bus_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+            PARAMETRO_AGENCIA,
         ],
     )
     def get(self, request):
@@ -638,6 +645,7 @@ class BusConductorView(APIView):
             if yo.rol_id != 2:
                 return prohibido()
             lista = lista.filter(bus__agencia_id__in=agencias_de(yo))
+        lista = filtrar_agencia_super(request, lista, "bus__agencia_id")
         for campo in ("conductor_id", "bus_id"):
             valor = request.query_params.get(campo)
             if valor is not None:
@@ -964,18 +972,19 @@ def bus_no_disponible(bus):
 class ViajeView(APIView):
     @swagger_auto_schema(
         operation_description=(
-            "Listar viajes. Conductor: los del bus que tiene asignado. Admin: los de su agencia. "
+            "Listar viajes. Superadmin: todos. Conductor: los del bus que tiene asignado. Admin: los de su agencia. "
             "Cliente: salidas PROGRAMADAS desde hoy y las de sus reservas. "
-            "Filtros: ?estado=, ?bus_id=, ?paquete_id="
+            "Filtros: ?estado=, ?bus_id=, ?paquete_id=, ?agencia_id= (solo superadmin)"
         ),
         manual_parameters=[
             openapi.Parameter("estado", openapi.IN_QUERY, type=openapi.TYPE_STRING),
             openapi.Parameter("bus_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
             openapi.Parameter("paquete_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+            PARAMETRO_AGENCIA,
         ],
     )
     def get(self, request):
-        lista = viajes_visibles(usuario_de(request))
+        lista = filtrar_agencia_super(request, viajes_visibles(usuario_de(request)), "bus__agencia_id")
         estado = request.query_params.get("estado")
         if estado:
             lista = lista.filter(estado=estado.upper())
@@ -990,7 +999,7 @@ class ViajeView(APIView):
 
     @swagger_auto_schema(
         operation_description=(
-            "Programar una salida: paquete_id, bus_id, fecha (AAAA-MM-DD), hora (HH:MM). Solo admin de la agencia. "
+            "Programar una salida: paquete_id, bus_id, fecha (AAAA-MM-DD), hora (HH:MM). Solo el admin de la agencia o el superadmin. "
             "Un bus solo puede tener UN viaje por día (aunque sea otra hora u otro paquete): si ya tiene uno "
             "responde 409 con 'message' y el 'viaje' que ocupa ese día. El mismo paquete sí puede repetirse "
             "en días distintos o con otro bus. El bus debe estar 'activo' (400 si está en mantenimiento o inactivo) "
@@ -1044,7 +1053,7 @@ class ViajeIdView(APIView):
 
     @swagger_auto_schema(
         operation_description=(
-            "Cambiar bus, fecha u hora de un viaje PROGRAMADO (campos opcionales). Solo admin de la agencia. "
+            "Cambiar bus, fecha u hora de un viaje PROGRAMADO (campos opcionales). Solo el admin de la agencia o el superadmin. "
             "Si cambia el bus o la fecha y ese bus ya tiene otro viaje ese día responde 409 (el propio viaje "
             "no cuenta, así que cambiar solo la hora nunca choca consigo mismo)."
         ),

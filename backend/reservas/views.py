@@ -27,10 +27,10 @@ from buses.models import Asiento, Bus_Conductor
 from paquetes.models import Paquete
 from buses.models import Viaje
 from buses.views import conductor_autorizado, entero_o_none, hoy_colombia
-from usuarios.paginacion import PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
+from usuarios.paginacion import PARAMETRO_AGENCIA, PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
 from usuarios.permisos import (
     ROL_CLIENTE, SoloPersonal, agencias_de, agencias_de_catalogo, es_admin, es_cliente_de_paquete, es_cliente_de_viaje, es_conductor,
-    es_super, gestiona_agencia, prohibido, trabaja_en_agencia, usuario_de,
+    es_super, filtrar_agencia_super, gestiona_agencia, prohibido, trabaja_en_agencia, usuario_de,
 )
 
 
@@ -208,15 +208,17 @@ class ReservaView(APIView):
         operation_description=(
             "Listar reservas (superadmin: todas · admin: las de su agencia · cliente: las suyas). "
             "Cada reserva trae viaje_id, viaje_fecha, viaje_hora, paquete (nombre) y cliente_nombre. "
-            "Filtro ?viaje_id= (solo esa salida; 400 si no es un número). Opcional: ?search=, ?page= y ?page_size="
+            "Filtro ?viaje_id= (solo esa salida; 400 si no es un número). Opcional: ?agencia_id= (solo superadmin), "
+            "?search=, ?page= y ?page_size="
         ),
-        manual_parameters=PARAMETROS_LISTA + [PARAMETRO_VIAJE],
+        manual_parameters=PARAMETROS_LISTA + [PARAMETRO_VIAJE, PARAMETRO_AGENCIA],
     )
     def get(self, request):
         yo = usuario_de(request)
         if es_conductor(yo):
             return prohibido("El conductor consulta sus pasajeros desde su viaje")
         lista = reservas_visibles(yo).select_related("usuario", "paquete", "viaje__bus")
+        lista = filtrar_agencia_super(request, lista, "paquete__agencia_id")
         if "viaje_id" in request.query_params:
             viaje_id = entero_query(request, "viaje_id")
             if viaje_id is None:
@@ -250,7 +252,7 @@ class ReservaView(APIView):
         catalogo = agencias_de_catalogo(yo)
         if catalogo is not None and paquete.agencia_id not in catalogo:
             return prohibido("Ese paquete no es de tu agencia")
-        if not personal and paquete.estado != "activo":
+        if not personal and (paquete.estado != "activo" or not paquete.agencia.activo):
             return Response({"message": "Este paquete no está disponible para reservar"},
                             status=status.HTTP_400_BAD_REQUEST)
         clave = str(request.data.get("clave_idempotencia") or "").strip()[:64] or None

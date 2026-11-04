@@ -7,12 +7,15 @@ import tempfile
 from datetime import timedelta
 
 from django.test import override_settings
+from django.utils import timezone
 
 from buses.models import Asiento, Bus_Conductor, Viaje
 from buses.views import hoy_colombia
+from destinos.models import Departamento, Destino, Hospedaje, HospedajeDestino, ImagenDestino
 from pagos.models import Pago
+from paquetes.models import Itinerario, Paquete, PaqueteDestino
 from reservas.models import ChatMensaje, Reserva
-from usuarios.models import RecuperarContrasena, Usuario
+from usuarios.models import Agencia, RecuperarContrasena, Usuario, UsuarioAgencia
 from usuarios.views import hash_valor
 from pagos.tests import imagen
 from usuarios.pruebas import CLAVE, Escenario
@@ -398,3 +401,206 @@ class LicenciaPdfTest(TestCase):
         nombre = Usuario.objects.get(id=self.e.cond_a.id).licencia_pdf.name
         self.assertEqual(self.admin.delete(url).status_code, 200)
         self.assertFalse(Usuario._meta.get_field("licencia_pdf").storage.exists(nombre))
+
+
+class SuperadminAgenciasTest(TestCase):
+    """Paso 4B: el superadmin administra cualquier agencia; el admin queda limitado a la suya."""
+
+    def setUp(self):
+        self.e = e = Escenario()
+        self.sup = Escenario.cliente_http(e.super)
+        self.adm = Escenario.cliente_http(e.admin_a)
+        self.anonimo = Escenario.cliente_http()
+        fecha = timezone.localdate() + timedelta(days=5)
+        self.viaje_a = Viaje.objects.create(paquete=e.paq_a, bus=e.bus_a, fecha=fecha, hora="06:00")
+        self.viaje_b = Viaje.objects.create(paquete=e.paq_b, bus=e.bus_b, fecha=fecha, hora="06:00")
+        self.reserva_a = self.reservar(e.paq_a, self.viaje_a)
+        self.reserva_b = self.reservar(e.paq_b, self.viaje_b)
+        self.pago_b = Pago.objects.create(reserva=self.reserva_b, precio=100, fecha_pago=timezone.now(),
+                                          referencia="REF-B", estado="aprobado")
+        departamento = Departamento.objects.create(nombre="Meta")
+        self.destino_b = Destino.objects.create(nombre="Solo B", departamento=departamento, descripcion="d")
+        self.destino_libre = Destino.objects.create(nombre="Libre", departamento=departamento, descripcion="d")
+        PaqueteDestino.objects.create(paquete=e.paq_b, destino=self.destino_b)
+        self.hotel_b = Hospedaje.objects.create(nombre="Hotel B", direccion="d", telefono="1", descripcion="d")
+        self.hotel_b.destinos.add(self.destino_b)
+        self.parada_b = Itinerario.objects.create(paquete=e.paq_b, titulo="Parada B", dia=1, descripcion="d",
+                                                  hora="08:00", lugar="Lugar B")
+
+    def reservar(self, paquete, viaje):
+        return Reserva.objects.create(usuario=self.e.cliente, paquete=paquete, viaje=viaje,
+                                      fecha_reserva=timezone.now(), estado="confirmada")
+
+    def ids(self, cliente, ruta):
+        respuesta = cliente.get(ruta)
+        self.assertEqual(respuesta.status_code, 200, ruta)
+        return {fila["id"] for fila in respuesta.json()}
+
+    # ---------- Listados con ?agencia_id= ----------
+    def test_super_filtra_por_agencia_y_sin_filtro_ve_todo(self):
+        e, b = self.e, self.e.ag_b.id
+        casos = {
+            "bus": (e.bus_a.id, e.bus_b.id), "tipobus": (e.tipo_a.id, e.tipo_b.id),
+            "paquete": (e.paq_a.id, e.paq_b.id), "viaje": (self.viaje_a.id, self.viaje_b.id),
+            "reserva": (self.reserva_a.id, self.reserva_b.id), "usuario": (e.cond_a.id, e.cond_b.id),
+        }
+        for ruta, (de_a, de_b) in casos.items():
+            con_filtro = self.ids(self.sup, f"/api/{ruta}/?agencia_id={b}")
+            self.assertIn(de_b, con_filtro, ruta)
+            self.assertNotIn(de_a, con_filtro, ruta)
+            self.assertTrue({de_a, de_b} <= self.ids(self.sup, f"/api/{ruta}/"), ruta)
+        self.assertEqual(self.ids(self.sup, f"/api/pago/?agencia_id={b}"), {self.pago_b.id})
+        self.assertEqual(self.ids(self.sup, f"/api/pago/?agencia_id={e.ag_a.id}"), set())
+        self.assertEqual(self.ids(self.sup, f"/api/destino/?agencia_id={b}"), {self.destino_b.id})
+        self.assertEqual(self.ids(self.sup, f"/api/hospedaje/?agencia_id={b}"), {self.hotel_b.id})
+        self.assertEqual(self.ids(self.sup, f"/api/itinerario/?agencia_id={b}"), {self.parada_b.id})
+
+    def test_admin_ignora_agencia_id_ajeno(self):
+        e, b = self.e, self.e.ag_b.id
+        for ruta, propio, ajeno in (("bus", e.bus_a.id, e.bus_b.id), ("tipobus", e.tipo_a.id, e.tipo_b.id),
+                                    ("paquete", e.paq_a.id, e.paq_b.id), ("viaje", self.viaje_a.id, self.viaje_b.id),
+                                    ("reserva", self.reserva_a.id, self.reserva_b.id),
+                                    ("usuario", e.cond_a.id, e.cond_b.id)):
+            for url in (f"/api/{ruta}/", f"/api/{ruta}/?agencia_id={b}"):
+                visibles = self.ids(self.adm, url)
+                self.assertIn(propio, visibles, url)
+                self.assertNotIn(ajeno, visibles, url)
+        self.assertEqual(self.ids(self.adm, f"/api/pago/?agencia_id={b}"), set())
+
+    def test_admin_no_ve_detalle_ni_busqueda_de_otra_agencia(self):
+        e = self.e
+        self.assertEqual(self.adm.get(f"/api/paquete/{e.paq_b.id}/").status_code, 404)
+        self.assertEqual(self.adm.get(f"/api/agencia/{e.ag_b.id}/").status_code, 403)
+        self.assertEqual(self.ids(self.adm, "/api/agencia/"), {e.ag_a.id})
+        self.assertEqual(self.ids(self.adm, "/api/itinerario/"), set())
+        self.assertEqual(self.adm.get(f"/api/itinerario/{self.parada_b.id}/").status_code, 404)
+        self.assertEqual(self.adm.get("/api/itinerario/titulo/Parada/").json(), [])
+        self.assertEqual(self.adm.get("/api/itinerario/lugar/Lugar/").json(), [])
+        self.assertEqual(self.adm.get("/api/buscar/?search=PB").json()["paquetes"], [])
+
+    def test_admin_no_modifica_otra_agencia_y_super_si(self):
+        e = self.e
+        datos = {"nombre": "Nuevo", "nit": "9", "direccion": "x", "telefono": "9", "correo": "n@n.co"}
+        self.assertEqual(self.adm.put(f"/api/agencia/{e.ag_b.id}/", datos, format="json").status_code, 403)
+        self.assertEqual(self.adm.delete(f"/api/paquete/{e.paq_b.id}/").status_code, 403)
+        self.assertEqual(self.adm.delete(f"/api/viaje/{self.viaje_b.id}/").status_code, 403)
+        self.assertEqual(self.adm.delete(f"/api/usuario/{e.cond_b.id}/").status_code, 403)
+        self.assertEqual(self.sup.put(f"/api/agencia/{e.ag_b.id}/", datos, format="json").status_code, 200)
+        self.assertEqual(Agencia.objects.get(id=e.ag_b.id).nombre, "Nuevo")
+        self.assertEqual(self.sup.delete(f"/api/viaje/{self.viaje_b.id}/").status_code, 409)  # tiene reserva
+        self.assertEqual(self.sup.delete(f"/api/usuario/{e.cond_b.id}/").status_code, 200)
+
+    def test_listados_que_daban_500(self):
+        self.assertEqual(self.sup.get("/api/usuario/?rol_id=3").status_code, 200)
+        self.assertEqual(self.sup.get("/api/usuario/?search=admin").status_code, 200)
+        self.assertEqual(self.sup.get("/api/dashboard/resumen/").status_code, 403)
+        self.assertEqual(self.adm.get("/api/dashboard/resumen/").status_code, 200)
+
+    def test_pago_trae_agencia(self):
+        self.assertEqual(self.sup.get(f"/api/pago/{self.pago_b.id}/").json()["agencia_id"], self.e.ag_b.id)
+
+    # ---------- Datos de la agencia ----------
+    def test_validacion_de_agencia(self):
+        url = f"/api/agencia/{self.e.ag_b.id}/"
+        self.assertEqual(self.sup.post("/api/agencia/", {}, format="json").status_code, 400)
+        self.assertEqual(self.sup.put(url, {"nombre": ""}, format="json").status_code, 400)
+        self.assertEqual(self.sup.put(url, {"correo": "malo"}, format="json").status_code, 400)
+        self.assertEqual(self.sup.put(url, {"telefono": "555"}, format="json").status_code, 200)
+        agencia = Agencia.objects.get(id=self.e.ag_b.id)
+        self.assertEqual((agencia.telefono, agencia.nombre), ("555", "B"))  # lo que no se envía se conserva
+
+    def test_eliminar_agencia_con_datos_responde_409_con_totales(self):
+        respuesta = self.sup.delete(f"/api/agencia/{self.e.ag_b.id}/")
+        self.assertEqual(respuesta.status_code, 409)
+        self.assertEqual(respuesta.json()["totales"]["paquetes"], 1)
+        self.assertEqual(respuesta.json()["totales"]["usuarios"], 2)
+        self.assertTrue(Agencia.objects.filter(id=self.e.ag_b.id).exists())
+
+    def test_agencia_con_solo_paquetes_no_se_borra_en_cascada(self):
+        agencia = Agencia.objects.create(nombre="C", nit="3", direccion="d", telefono="3", correo="c@c.co")
+        paquete = Paquete.objects.create(nombre="PC", agencia=agencia, descripcion="", duracion_estimada="1",
+                                         fecha_creacion=timezone.now())
+        self.assertEqual(self.sup.delete(f"/api/agencia/{agencia.id}/").status_code, 409)
+        self.assertTrue(Paquete.objects.filter(id=paquete.id).exists())
+
+    def test_eliminar_agencia_vacia(self):
+        agencia = Agencia.objects.create(nombre="V", nit="4", direccion="d", telefono="4", correo="v@v.co")
+        self.assertEqual(self.adm.delete(f"/api/agencia/{agencia.id}/").status_code, 403)
+        self.assertEqual(self.sup.delete(f"/api/agencia/{agencia.id}/").status_code, 200)
+        self.assertFalse(Agencia.objects.filter(id=agencia.id).exists())
+
+    # ---------- Desactivar una agencia ----------
+    def desactivar_b(self):
+        respuesta = self.sup.put(f"/api/agencia/{self.e.ag_b.id}/", {"activo": False}, format="json")
+        self.assertEqual(respuesta.status_code, 200)
+
+    def test_solo_el_super_activa_o_desactiva(self):
+        respuesta = self.adm.put(f"/api/agencia/{self.e.ag_a.id}/", {"activo": False}, format="json")
+        self.assertEqual(respuesta.status_code, 403)
+        self.assertTrue(Agencia.objects.get(id=self.e.ag_a.id).activo)
+
+    def test_agencia_desactivada_bloquea_a_su_personal(self):
+        admin_b = Escenario.cliente_http(self.e.admin_b)
+        self.desactivar_b()
+        self.assertEqual(admin_b.get("/api/usuario/").status_code, 401)  # el token ya emitido deja de servir
+        renovar = self.anonimo.post("/api/token/refresh/", {"refresh": admin_b.refresh_token}, format="json")
+        self.assertEqual(renovar.status_code, 401)
+        for usuario in (self.e.admin_b, self.e.cond_b):
+            login = self.anonimo.post("/api/login/", {"correo": usuario.correo, "contrasena": CLAVE}, format="json")
+            self.assertEqual(login.status_code, 403)
+        self.assertEqual(self.sup.put(f"/api/agencia/{self.e.ag_b.id}/", {"activo": True}, format="json").status_code, 200)
+        Escenario.cliente_http(self.e.admin_b)  # reactivada: vuelve a entrar
+
+    def test_personal_con_otra_agencia_activa_sigue_entrando(self):
+        UsuarioAgencia.objects.create(usuario=self.e.admin_b, agencia=self.e.ag_a)
+        self.desactivar_b()
+        Escenario.cliente_http(self.e.admin_b)
+
+    def test_agencia_desactivada_sale_del_catalogo_y_conserva_reservas(self):
+        e = self.e
+        self.desactivar_b()
+        self.assertNotIn(e.ag_b.id, self.ids(self.anonimo, "/api/agencia/"))
+        self.assertIn(e.ag_b.id, self.ids(self.sup, "/api/agencia/"))
+        self.assertNotIn(e.paq_b.id, self.ids(self.anonimo, "/api/paquete/"))
+        self.assertEqual(self.anonimo.get(f"/api/paquete/{e.paq_b.id}/").status_code, 404)
+        self.assertEqual(self.anonimo.get("/api/buscar/?search=PB").json()["paquetes"], [])
+        self.assertIn(e.paq_b.id, self.ids(self.sup, "/api/paquete/"))
+        # El cliente que ya reservó conserva su reserva, el paquete y el itinerario.
+        cliente = Escenario.cliente_http(e.cliente)
+        self.assertIn(self.reserva_b.id, self.ids(cliente, "/api/reserva/"))
+        self.assertEqual(cliente.get(f"/api/paquete/{e.paq_b.id}/").status_code, 200)
+        self.assertIn(self.parada_b.id, self.ids(cliente, f"/api/itinerario/?paquete_id={e.paq_b.id}"))
+        # ...pero nadie nuevo reserva allí.
+        Paquete.objects.filter(id=e.paq_b.id).update(estado="activo")  # el 400 debe venir de la agencia
+        otro = Escenario.cliente_http(e.otro_cliente)
+        nueva = otro.post("/api/reserva/", {"paquete_id": e.paq_b.id, "viaje_id": self.viaje_b.id}, format="json")
+        self.assertEqual(nueva.status_code, 400)
+        self.assertNotIn(self.viaje_b.id, self.ids(otro, "/api/viaje/"))
+
+    # ---------- Destinos y hoteles compartidos ----------
+    def test_admin_no_toca_catalogo_usado_por_otra_agencia(self):
+        d = self.destino_b.id
+        self.assertEqual(self.adm.delete(f"/api/destino/{d}/").status_code, 409)
+        self.assertEqual(self.adm.put(f"/api/destino/{d}/", {"nombre": "X"}, format="json").status_code, 409)
+        self.assertEqual(self.adm.patch(f"/api/destino/{d}/", {"nombre": "X"}, format="json").status_code, 409)
+        h = self.hotel_b.id
+        self.assertEqual(self.adm.put(f"/api/hospedaje/{h}/", {"nombre": "X"}, format="json").status_code, 409)
+        self.assertEqual(self.adm.delete(f"/api/hospedaje/{h}/").status_code, 409)
+        relacion = HospedajeDestino.objects.get(hospedaje=self.hotel_b, destino=self.destino_b)
+        self.assertEqual(self.adm.delete(f"/api/hospedaje-destino/{relacion.id}/").status_code, 409)
+        imagen = ImagenDestino.objects.create(destino=self.destino_b, url_img="destinos/x.jpg", descripcion="i")
+        self.assertEqual(self.adm.delete(f"/api/imagen/{imagen.id}/").status_code, 409)
+        self.assertEqual(Destino.objects.get(id=d).nombre, "Solo B")
+        self.assertEqual(Hospedaje.objects.get(id=h).nombre, "Hotel B")
+        self.assertTrue(PaqueteDestino.objects.filter(paquete=self.e.paq_b, destino_id=d).exists())
+
+    def test_catalogo_propio_o_libre_se_edita_y_el_super_siempre(self):
+        libre = self.destino_libre.id
+        self.assertEqual(self.adm.put(f"/api/destino/{libre}/", {"nombre": "Editado"}, format="json").status_code, 200)
+        self.assertEqual(self.adm.delete(f"/api/destino/{libre}/").status_code, 200)
+        self.assertEqual(self.sup.put(f"/api/destino/{self.destino_b.id}/", {"nombre": "Por super"}, format="json").status_code, 200)
+        self.assertEqual(self.sup.delete(f"/api/hospedaje/{self.hotel_b.id}/").status_code, 200)
+
+    def test_destino_inexistente_da_404(self):
+        self.assertEqual(self.sup.delete("/api/destino/99999/").status_code, 404)
+        self.assertEqual(self.sup.get("/api/destino/99999/").status_code, 404)

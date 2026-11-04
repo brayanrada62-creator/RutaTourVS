@@ -15,6 +15,7 @@ ROL_SUPER = 1
 ROL_ADMIN = 2
 ROL_CONDUCTOR = 3
 ROL_CLIENTE = 4
+MENSAJE_AGENCIA_DESACTIVADA = "Tu agencia está desactivada. Comunícate con el superadministrador"
 
 
 class EsSuperadministrador(BasePermission):
@@ -101,12 +102,33 @@ def es_personal(usuario):
     return es_super(usuario) or es_admin(usuario)
 
 
+def agencias_inactivas():
+    return set(Agencia.objects.filter(activo=False).values_list("id", flat=True))
+
+
+def agencia_desactivada(usuario):
+    """Administrador o conductor cuyas agencias están todas desactivadas (el cliente no se bloquea)."""
+    if usuario is None or usuario.rol_id not in (ROL_ADMIN, ROL_CONDUCTOR):
+        return False
+    estados = list(UsuarioAgencia.objects.filter(usuario=usuario).values_list("agencia__activo", flat=True))
+    return bool(estados) and not any(estados)
+
+
 def usuario_activo(request):
-    """Usuario de negocio del token, solo si existe y no está suspendido."""
+    """Usuario de negocio del token, solo si existe, no está suspendido y su agencia sigue activa."""
     usuario = usuario_de(request)
-    if usuario is not None and usuario.activo:
+    if usuario is not None and usuario.activo and not agencia_desactivada(usuario):
         return usuario
     return None
+
+
+def filtrar_agencia_super(request, lista, campo="agencia_id"):
+    """Aplica ?agencia_id= solo si quien consulta es superadmin. Para los demás roles se ignora:
+    su límite ya lo puso el listado, así que no pueden pedir datos de otra agencia."""
+    valor = str(request.query_params.get("agencia_id", ""))
+    if not valor.isdigit() or not es_super(usuario_de(request)):
+        return lista
+    return lista.filter(**{campo: int(valor)}).distinct()
 
 
 def gestiona_agencia(usuario, agencia_id):
@@ -179,11 +201,23 @@ class Autenticado(BasePermission):
         return True
 
 
-class LecturaPublica(BasePermission):
+class SesionVigente(BasePermission):
+    """Vistas públicas: sin sesión se puede pasar, pero un token de un usuario suspendido o de una
+    agencia desactivada responde 401 (igual que Autenticado) para que vuelva al login."""
+    message = "Debes iniciar sesión"
+
+    def has_permission(self, request, view):
+        if usuario_de(request) is not None and usuario_activo(request) is None:
+            raise NotAuthenticated(self.message)
+        return True
+
+
+class LecturaPublica(SesionVigente):
     """Catálogo: cualquiera puede leer; escribir solo administrador o superadministrador."""
     message = "Solo un administrador puede modificar el catálogo"
 
     def has_permission(self, request, view):
+        super().has_permission(request, view)
         if request.method in SAFE_METHODS:
             return True
         return es_personal(usuario_activo(request))
@@ -198,17 +232,34 @@ class SoloPersonal(BasePermission):
 
 
 def agencias_de_catalogo(usuario):
-    """Agencias cuyo catálogo ve el usuario. Un cliente registrado por una agencia queda ligado a ella:
-    solo ve y reserva lo suyo. None = sin restricción (cliente independiente, anónimo o personal)."""
+    """Agencias cuyo catálogo ve el usuario. El admin solo ve las suyas. Un cliente registrado por una
+    agencia queda ligado a ella: solo ve y reserva lo suyo. None = sin restricción (cliente independiente,
+    anónimo, conductor o superadmin)."""
+    if es_admin(usuario):
+        return agencias_de(usuario)
     if usuario is None or usuario.rol_id != ROL_CLIENTE:
         return None
     return agencias_de(usuario) or None
 
 
 def filtrar_catalogo(usuario, lista, campo="agencia_id"):
-    """Aplica agencias_de_catalogo a un QuerySet (campo = ruta hasta el id de la agencia)."""
+    """Aplica agencias_de_catalogo a un QuerySet (campo = ruta hasta el id de la agencia).
+    Las agencias desactivadas salen del catálogo; el superadmin y el admin siguen viendo lo que gestionan."""
     agencias = agencias_de_catalogo(usuario)
-    return lista if agencias is None else lista.filter(**{f"{campo}__in": agencias})
+    if agencias is not None:
+        lista = lista.filter(**{f"{campo}__in": agencias})
+    if not es_personal(usuario):
+        lista = lista.exclude(**{f"{campo}__in": agencias_inactivas()})
+    return lista
+
+
+def paquetes_reservados(usuario):
+    """Ids de los paquetes con reserva vigente del cliente: los conserva aunque su agencia se desactive."""
+    from reservas.models import Reserva  # import local para evitar ciclos entre apps
+
+    if usuario is None or usuario.rol_id != ROL_CLIENTE:
+        return []
+    return Reserva.objects.filter(usuario=usuario).exclude(estado__in=("cancelada", "vencida")).values("paquete_id")
 
 
 def es_cliente_de_viaje(usuario, viaje):

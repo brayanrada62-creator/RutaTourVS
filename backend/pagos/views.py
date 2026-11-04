@@ -14,8 +14,10 @@ from .models import Pago
 from reservas.models import ESTADOS_QUE_LIBERAN, AsientoReserva, Reserva, marcar_vencidas, plazo_de_pago
 from reservas.views import codigo_reserva, total_reserva
 from destinos.imagenes import imagen_url
-from usuarios.paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
-from usuarios.permisos import SoloPersonal, agencias_de, es_admin, es_super, gestiona_agencia, prohibido, usuario_de
+from usuarios.paginacion import PARAMETRO_AGENCIA, PARAMETROS_LISTA, paginar, texto_busqueda
+from usuarios.permisos import (
+    SoloPersonal, agencias_de, es_admin, es_super, filtrar_agencia_super, gestiona_agencia, prohibido, usuario_de,
+)
 
 
 COMPROBANTE_MAX_BYTES = 5 * 1024 * 1024
@@ -78,6 +80,7 @@ def pago_json(pago, request=None):
         "cliente": pago.reserva.usuario.nombre_completo,
         "correo": pago.reserva.usuario.correo,
         "paquete": pago.reserva.paquete.nombre,
+        "agencia_id": pago.reserva.paquete.agencia_id,
         "codigo": codigo_reserva(pago.reserva_id),
         "revisado_por": pago.revisado_por.nombre_completo if pago.revisado_por else None,
         "revisado_en": pago.revisado_en,
@@ -89,13 +92,14 @@ def pago_json(pago, request=None):
 class PagoView(APIView):
     @swagger_auto_schema(
         operation_description=(
-            "Listar pagos con cliente, correo, paquete y código de la reserva. "
-            "Opcional: ?search=, ?page= y ?page_size="
+            "Listar pagos con cliente, correo, paquete, agencia_id y código de la reserva. "
+            "Superadmin: todos. Admin: los de su agencia. Cliente: los suyos. "
+            "Opcional: ?agencia_id= (solo superadmin), ?search=, ?page= y ?page_size="
         ),
-        manual_parameters=PARAMETROS_LISTA,
+        manual_parameters=PARAMETROS_LISTA + [PARAMETRO_AGENCIA],
     )
     def get(self, request):
-        pagoLista = pagos_visibles(usuario_de(request))
+        pagoLista = filtrar_agencia_super(request, pagos_visibles(usuario_de(request)), "reserva__paquete__agencia_id")
         texto = texto_busqueda(request)
         if texto:
             pagoLista = pagoLista.filter(

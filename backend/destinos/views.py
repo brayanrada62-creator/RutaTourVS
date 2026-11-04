@@ -15,9 +15,26 @@ from .imagenes import (
     archivo_imagen, destino_json, guardar_imagen_destino, imagen_url, resolver_departamento,
 )
 from usuarios.permisos import (
-    LecturaPublica,
+    LecturaPublica, agencias_de, es_super, filtrar_agencia_super, filtrar_catalogo, usuario_de,
 )
-from usuarios.paginacion import PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
+from usuarios.paginacion import PARAMETRO_AGENCIA, PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
+
+AVISO_COMPARTIDO = "Admin: 409 si lo usan paquetes de otra agencia. Superadmin: sin esa restricción."
+
+
+def catalogo_compartido(request, destino_ids):
+    """Destinos y hoteles no tienen agencia: son un catálogo compartido. Devuelve un 409 si un admin
+    intenta cambiar algo que usan paquetes de otra agencia; None si puede hacerlo."""
+    from paquetes.models import PaqueteDestino  # import local para evitar ciclos entre apps
+
+    yo = usuario_de(request)
+    if es_super(yo):
+        return None
+    usado = PaqueteDestino.objects.filter(destino_id__in=destino_ids).exclude(paquete__agencia_id__in=agencias_de(yo))
+    if usado.exists():
+        return Response({"message": "Lo usan paquetes de otra agencia; solo el superadministrador puede cambiarlo"},
+                        status=status.HTTP_409_CONFLICT)
+    return None
 
 
 class VistaCatalogo(APIView):
@@ -46,16 +63,19 @@ class DestinoView(VistaCatalogo):
 
     @swagger_auto_schema(
         operation_description=(
-            "Listar destinos con su imagen. Opcional: ?search=, ?departamento= (id o nombre), "
-            "?page= y ?page_size=."
+            "Listar destinos con su imagen (catálogo compartido entre agencias). Opcional: ?search=, "
+            "?departamento= (id o nombre), ?agencia_id= (solo superadmin: los que usan sus paquetes), "
+            "?page= y ?page_size="
         ),
         manual_parameters=PARAMETROS_LISTA + [
             openapi.Parameter("departamento", openapi.IN_QUERY, type=openapi.TYPE_STRING,
                               description="Id o nombre del departamento"),
+            PARAMETRO_AGENCIA,
         ],
     )
     def get(self, request):
-        destinos = Destino.objects.select_related("departamento")
+        destinos = filtrar_agencia_super(request, Destino.objects.select_related("departamento"),
+                                         "paquetedestino__paquete__agencia_id")
         texto = texto_busqueda(request)
         if texto:
             destinos = destinos.filter(
@@ -97,10 +117,14 @@ class DestinoIdView(VistaCatalogo):
         operation_description="Listar destino por id"
     )
     def get(self, request, id):
-        registroEncontrado = Destino.objects.get(id=id)
+        registroEncontrado = get_object_or_404(Destino, id=id)
         return Response(destino_json(registroEncontrado, request))
 
-    def _guardar(self, request, destino):
+    def _guardar(self, request, id):
+        destino = get_object_or_404(Destino, id=id)
+        error = catalogo_compartido(request, [destino.id])
+        if error:
+            return error
         if request.data.get("nombre") is not None:
             destino.nombre = request.data.get("nombre")
         if request.data.get("departamento") is not None:
@@ -114,20 +138,23 @@ class DestinoIdView(VistaCatalogo):
         return Response(data)
 
     @swagger_auto_schema(
-        operation_description="Actualizar destino e imagen",
+        operation_description="Actualizar destino e imagen. " + AVISO_COMPARTIDO,
         request_body=DestinoEntrada
     )
     def put(self, request, id):
-        return self._guardar(request, Destino.objects.get(id=id))
+        return self._guardar(request, id)
 
     def patch(self, request, id):
-        return self._guardar(request, Destino.objects.get(id=id))
+        return self._guardar(request, id)
 
     @swagger_auto_schema(
-        operation_description="Eliminar destino"
+        operation_description="Eliminar destino. " + AVISO_COMPARTIDO
     )
     def delete(self, request, id):
-        destinoEliminar = Destino.objects.get(id=id)
+        destinoEliminar = get_object_or_404(Destino, id=id)
+        error = catalogo_compartido(request, [destinoEliminar.id])
+        if error:
+            return error
         destinoEliminar.delete()
         return Response({"mensaje": "Destino eliminado"})
 
@@ -201,14 +228,17 @@ class HospedajeView(VistaCatalogo):
 
     @swagger_auto_schema(
         operation_description=(
-            "Listar hospedajes con sus destinos e imagen. Opcional: ?search=, ?destino_id=, ?page= y ?page_size="
+            "Listar hospedajes con sus destinos e imagen (catálogo compartido entre agencias). Opcional: ?search=, "
+            "?destino_id=, ?agencia_id= (solo superadmin: los de los destinos de sus paquetes), ?page= y ?page_size="
         ),
         manual_parameters=PARAMETROS_LISTA + [
             openapi.Parameter("destino_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+            PARAMETRO_AGENCIA,
         ],
     )
     def get(self, request):
-        hospedajeLista = Hospedaje.objects.prefetch_related("destinos")
+        hospedajeLista = filtrar_agencia_super(request, Hospedaje.objects.prefetch_related("destinos"),
+                                               "destinos__paquetedestino__paquete__agencia_id")
         texto = texto_busqueda(request)
         if texto:
             hospedajeLista = hospedajeLista.filter(Q(nombre__icontains=texto) | Q(direccion__icontains=texto))
@@ -253,11 +283,14 @@ class HospedajeIdView(VistaCatalogo):
         return Response(hospedaje_json(registroEncontrado, request))
 
     @swagger_auto_schema(
-        operation_description="Actualizar hospedaje",
+        operation_description="Actualizar hospedaje. " + AVISO_COMPARTIDO,
         request_body=HopedajeEntrada
     )
     def put(self, request, id):
         hospedajeB = get_object_or_404(Hospedaje, id=id)
+        error = catalogo_compartido(request, list(hospedajeB.destinos.values_list("id", flat=True)))
+        if error:
+            return error
         destino_ids, error = destino_ids_de(request.data)
         if error:
             return error
@@ -272,10 +305,13 @@ class HospedajeIdView(VistaCatalogo):
         return Response({"mensaje": "Hospedaje actualizado"})
 
     @swagger_auto_schema(
-        operation_description="Eliminar hospedaje"
+        operation_description="Eliminar hospedaje. " + AVISO_COMPARTIDO
     )
     def delete(self, request, id):
         hospedajeEliminar = get_object_or_404(Hospedaje, id=id)
+        error = catalogo_compartido(request, list(hospedajeEliminar.destinos.values_list("id", flat=True)))
+        if error:
+            return error
         hospedajeEliminar.delete()
         return Response({"mensaje": "Hospedaje eliminado"})
 
@@ -325,11 +361,14 @@ class HospedajeDestinoIdView(VistaCatalogo):
         return Response({"id": relacion.id, "hospedaje_id": relacion.hospedaje_id, "destino_id": relacion.destino_id})
 
     @swagger_auto_schema(
-        operation_description="Actualizar una relación entre hospedaje y destino",
+        operation_description="Actualizar una relación entre hospedaje y destino. " + AVISO_COMPARTIDO,
         request_body=HospedajeDestinoEntrada,
     )
     def put(self, request, id):
         relacion = get_object_or_404(HospedajeDestino, id=id)
+        error = catalogo_compartido(request, [relacion.destino_id])
+        if error:
+            return error
         hospedaje = get_object_or_404(Hospedaje, id=request.data.get("hospedaje_id"))
         destino = get_object_or_404(Destino, id=request.data.get("destino_id"))
         duplicada = HospedajeDestino.objects.exclude(id=id).filter(hospedaje=hospedaje, destino=destino).exists()
@@ -340,9 +379,12 @@ class HospedajeDestinoIdView(VistaCatalogo):
         relacion.save()
         return Response({"id": relacion.id, "hospedaje_id": relacion.hospedaje_id, "destino_id": relacion.destino_id})
 
-    @swagger_auto_schema(operation_description="Eliminar una relación entre hospedaje y destino")
+    @swagger_auto_schema(operation_description="Eliminar una relación entre hospedaje y destino. " + AVISO_COMPARTIDO)
     def delete(self, request, id):
         relacion = get_object_or_404(HospedajeDestino, id=id)
+        error = catalogo_compartido(request, [relacion.destino_id])
+        if error:
+            return error
         relacion.delete()
         return Response({"mensaje": "Relación eliminada"})
 
@@ -400,7 +442,7 @@ class ImagenIdView(VistaCatalogo):
         operation_description="Listar imagen por id"
     )
     def get(self, request, id):
-        registroEncontrado = ImagenDestino.objects.get(id=id)
+        registroEncontrado = get_object_or_404(ImagenDestino, id=id)
         return Response({
             "id": registroEncontrado.id,
             "url_img": imagen_url(registroEncontrado.url_img, request),
@@ -409,11 +451,14 @@ class ImagenIdView(VistaCatalogo):
         })
 
     @swagger_auto_schema(
-        operation_description="Actualizar imagen",
+        operation_description="Actualizar imagen. " + AVISO_COMPARTIDO,
         request_body=ImagenEntrada
     )
     def put(self, request, id):
-        imagenB = ImagenDestino.objects.get(id=id)
+        imagenB = get_object_or_404(ImagenDestino, id=id)
+        error = catalogo_compartido(request, [imagenB.destino_id])
+        if error:
+            return error
         if request.data.get("url_img"):
             imagenB.url_img = request.data.get("url_img")
         imagenB.destino_id = request.data.get("destino_id")
@@ -422,10 +467,13 @@ class ImagenIdView(VistaCatalogo):
         return Response({"mensaje": "Imagen actualizada"})
 
     @swagger_auto_schema(
-        operation_description="Eliminar imagen"
+        operation_description="Eliminar imagen. " + AVISO_COMPARTIDO
     )
     def delete(self, request, id):
-        imagenEliminar = ImagenDestino.objects.get(id=id)
+        imagenEliminar = get_object_or_404(ImagenDestino, id=id)
+        error = catalogo_compartido(request, [imagenEliminar.destino_id])
+        if error:
+            return error
         imagenEliminar.delete()
         return Response({"mensaje": "Imagen eliminada"})
 
@@ -471,7 +519,7 @@ class BusquedaCatalogoView(VistaCatalogo):
         destinos = Destino.objects.select_related("departamento").filter(
             Q(nombre__icontains=texto) | Q(descripcion__icontains=texto) | Q(departamento__nombre__icontains=texto)
         ).order_by("id")[:limite]
-        paquetes = Paquete.objects.filter(
+        paquetes = filtrar_catalogo(usuario_de(request), Paquete.objects.all()).filter(
             Q(nombre__icontains=texto)
             | Q(descripcion__icontains=texto)
             | Q(paquetedestino__destino__nombre__icontains=texto)

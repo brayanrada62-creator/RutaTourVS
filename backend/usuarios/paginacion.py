@@ -12,6 +12,12 @@ PARAMETROS_LISTA = [
 ]
 
 
+PARAMETRO_AGENCIA = openapi.Parameter(
+    "agencia_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER,
+    description="Solo superadmin: limita el listado a esa agencia. Para los demás roles se ignora.",
+)
+
+
 def texto_busqueda(request):
     return (request.query_params.get("search") or "").strip()
 
