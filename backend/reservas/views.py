@@ -180,7 +180,7 @@ def tomar_sillas(reserva, asiento_ids, excluir_asiento_reserva=None, excluir_res
         return None, Response({"message": "Alguna silla no existe"}, status=status.HTTP_400_BAD_REQUEST)
     for silla in sillas:
         if reserva.viaje_id:
-            propia = silla.tipo_bus_id == reserva.viaje.bus.tipo_bus_id
+            propia = reserva.viaje.bus.tipos_bus.filter(id=silla.tipo_bus_id).exists()
         else:
             propia = silla.tipo_bus.agencia_id == reserva.paquete.agencia_id
         if not propia:

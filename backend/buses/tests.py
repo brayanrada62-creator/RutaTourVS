@@ -94,7 +94,8 @@ class BusTipoBusCrudTest(TestCase):
             200,
         )
         self.assertEqual(self.c.delete(f"/api/bus-tipo-bus/{relacion_id}/").status_code, 200)
-        self.assertEqual(self.c.get("/api/bus-tipo-bus/").json(), [])
+        # Los buses del escenario ya traen su tipo: se comprueba que ESTA relación ya no existe.
+        self.assertEqual(self.c.get(f"/api/bus-tipo-bus/{relacion_id}/").status_code, 404)
 
     def test_bus_acepta_el_campo_legacy_tipo_bus_id(self):
         respuesta = self.c.post(
@@ -512,3 +513,57 @@ class BusMultitenantTest(TestCase):
                                         format="json").status_code, 200)
         self.assertEqual(self.admin.put(url, {"estado": "mantenimiento"}, format="json").status_code, 200)
         self.assertTrue(Viaje.objects.filter(id=pasado.id).exists())
+
+
+class TipoBusAgenciaTest(TestCase):
+    """/tipobus/: agencia desde la sesión, datos validados, id en la respuesta y lista por agencia."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.admin = Escenario.cliente_http(self.e.admin_a)
+
+    def test_admin_crea_sin_agencia_201_con_id(self):
+        r = self.admin.post("/api/tipobus/", {"nombre": "Buseta", "capacidad": 20}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        tipo = TipoBus.objects.get(id=r.json()["id"])
+        self.assertEqual((tipo.agencia_id, tipo.capacidad, tipo.descripcion), (self.e.ag_a.id, 20, ""))
+
+    def test_datos_invalidos_400(self):
+        for datos in ({"capacidad": 20}, {"nombre": "X", "capacidad": 0}, {"nombre": "X", "capacidad": "abc"}):
+            self.assertEqual(self.admin.post("/api/tipobus/", datos, format="json").status_code, 400, datos)
+
+    def test_lista_del_admin_solo_su_agencia_y_anonimo_todas(self):
+        ids_admin = {t["id"] for t in self.admin.get("/api/tipobus/").json()}
+        self.assertEqual(ids_admin, {self.e.tipo_a.id})
+        ids_anonimo = {t["id"] for t in APIClient().get("/api/tipobus/").json()}
+        self.assertTrue({self.e.tipo_a.id, self.e.tipo_b.id} <= ids_anonimo)
+        self.assertEqual(self.admin.get(f"/api/tipobus/{self.e.tipo_b.id}/").status_code, 404)
+
+    def test_put_parcial_conserva_y_no_cambia_de_agencia(self):
+        r = self.admin.put(f"/api/tipobus/{self.e.tipo_a.id}/", {"capacidad": 30}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.e.tipo_a.refresh_from_db()
+        self.assertEqual((self.e.tipo_a.nombre, self.e.tipo_a.capacidad), ("T", 30))
+        r = self.admin.put(f"/api/tipobus/{self.e.tipo_a.id}/", {"agencia_id": self.e.ag_b.id}, format="json")
+        self.assertEqual(r.status_code, 403)
+        sup = Escenario.cliente_http(self.e.super)
+        r = sup.put(f"/api/tipobus/{self.e.tipo_a.id}/", {"agencia_id": self.e.ag_b.id}, format="json")
+        self.assertEqual(r.status_code, 409)  # bus_a ya usa ese tipo
+
+
+class ViajePaqueteActivoTest(TestCase):
+    """Solo un paquete 'activo' se programa en un viaje."""
+
+    def test_paquete_inactivo_400(self):
+        e = Escenario()
+        e.paq_a.estado = "inactivo"
+        e.paq_a.save()
+        admin = Escenario.cliente_http(e.admin_a)
+        manana = (hoy_colombia() + timedelta(days=1)).isoformat()
+        datos = {"paquete_id": e.paq_a.id, "bus_id": e.bus_a.id, "fecha": manana, "hora": "06:30"}
+        r = admin.post("/api/viaje/", datos, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("activo", r.json()["message"])
+        e.paq_a.estado = "activo"
+        e.paq_a.save()
+        self.assertEqual(admin.post("/api/viaje/", datos, format="json").status_code, 201)

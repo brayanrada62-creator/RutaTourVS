@@ -11,9 +11,17 @@ class MensajeSalida(serializers.Serializer):
 
 class TipoBusEntrada(serializers.Serializer):
     nombre = serializers.CharField(max_length=100)
-    agencia_id = serializers.IntegerField()
-    capacidad = serializers.IntegerField()
-    descripcion = serializers.CharField(max_length=300)
+    agencia_id = serializers.IntegerField(required=False, allow_null=True,
+                                          help_text="Solo superadmin. Al admin se le toma de su sesión")
+    capacidad = serializers.IntegerField(min_value=1, help_text="Número de sillas (mayor que 0)")
+    descripcion = serializers.CharField(max_length=300, required=False, allow_blank=True, default="")
+
+
+class TipoBusEditarEntrada(TipoBusEntrada):
+    """PUT /tipobus/<id>/: todos opcionales; los campos que no llegan se conservan."""
+    nombre = serializers.CharField(max_length=100, required=False)
+    capacidad = serializers.IntegerField(min_value=1, required=False)
+    descripcion = serializers.CharField(max_length=300, required=False, allow_blank=True)
 
 
 class BusEntrada(serializers.Serializer):

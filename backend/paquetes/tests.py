@@ -149,3 +149,104 @@ class GuardarPaqueteTest(TestCase):
         Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a2, fecha=dia, hora="06:30")
         self.assertEqual(self.admin.get(f"/api/paquete/{self.e.paq_a.id}/").json()["proxima_salida"],
                          {"fecha": dia.isoformat(), "hora": "06:30"})
+
+
+from destinos.models import Departamento, Destino
+from paquetes.models import Itinerario, PaqueteDestino
+
+
+class PaqueteAgenciaSesionTest(TestCase):
+    """El admin ya no envía agencia_id: sale de su sesión. Si la envía y no es suya: 403."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.admin = Escenario.cliente_http(self.e.admin_a)
+        self.datos = {"nombre": "Salento", "descripcion": "x", "duracion_estimada": "1 día", "precio": "90000"}
+
+    def test_admin_crea_sin_agencia_y_queda_en_la_suya(self):
+        r = self.admin.post("/api/paquete/", self.datos, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(Paquete.objects.get(id=r.json()["id"]).agencia_id, self.e.ag_a.id)
+
+    def test_admin_edita_sin_agencia_y_la_conserva(self):
+        r = self.admin.put(f"/api/paquete/{self.e.paq_a.id}/", self.datos, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.e.paq_a.refresh_from_db()
+        self.assertEqual(self.e.paq_a.agencia_id, self.e.ag_a.id)
+
+    def test_superadmin_sin_agencia_400(self):
+        r = Escenario.cliente_http(self.e.super).post("/api/paquete/", self.datos, format="json")
+        self.assertEqual(r.status_code, 400)
+
+    def test_eliminar_paquete_de_otra_agencia_403_y_inexistente_404(self):
+        self.assertEqual(self.admin.delete(f"/api/paquete/{self.e.paq_b.id}/").status_code, 403)
+        self.assertTrue(Paquete.objects.filter(id=self.e.paq_b.id).exists())
+        self.assertEqual(self.admin.delete("/api/paquete/999999/").status_code, 404)
+        self.assertEqual(self.admin.delete(f"/api/paquete/{self.e.paq_a.id}/").status_code, 200)
+
+
+class PaqueteDestinoAgenciaTest(TestCase):
+    """/paquetedestino/: solo el admin de la agencia del paquete vincula o quita destinos."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.admin = Escenario.cliente_http(self.e.admin_a)
+        depto = Departamento.objects.create(nombre="Quindío")
+        self.destino = Destino.objects.create(nombre="Salento", departamento=depto, descripcion="x")
+        self.rel_b = PaqueteDestino.objects.create(paquete=self.e.paq_b, destino=self.destino)
+
+    def test_vincular_en_paquete_propio_201_con_id_y_repetido_409(self):
+        datos = {"paquete_id": self.e.paq_a.id, "destino_id": self.destino.id}
+        r = self.admin.post("/api/paquetedestino/", datos, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertTrue(PaqueteDestino.objects.filter(id=r.json()["id"], paquete=self.e.paq_a).exists())
+        self.assertEqual(self.admin.post("/api/paquetedestino/", datos, format="json").status_code, 409)
+
+    def test_no_toca_paquetes_de_otra_agencia(self):
+        r = self.admin.post("/api/paquetedestino/", {"paquete_id": self.e.paq_b.id, "destino_id": self.destino.id},
+                            format="json")
+        self.assertEqual(r.status_code, 403)
+        r = self.admin.put(f"/api/paquetedestino/{self.rel_b.id}/",
+                           {"paquete_id": self.e.paq_a.id, "destino_id": self.destino.id}, format="json")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(self.admin.delete(f"/api/paquetedestino/{self.rel_b.id}/").status_code, 403)
+        self.assertTrue(PaqueteDestino.objects.filter(id=self.rel_b.id).exists())
+
+    def test_inexistentes_404_y_anonimo_no_escribe(self):
+        r = self.admin.post("/api/paquetedestino/", {"paquete_id": self.e.paq_a.id, "destino_id": 999999},
+                            format="json")
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(self.admin.delete("/api/paquetedestino/999999/").status_code, 404)
+        anonimo = APIClient()
+        self.assertEqual(anonimo.get("/api/paquetedestino/").status_code, 200)
+        self.assertEqual(anonimo.delete(f"/api/paquetedestino/{self.rel_b.id}/").status_code, 401)
+
+    def test_quitar_destino_no_borra_el_destino(self):
+        rel = PaqueteDestino.objects.create(paquete=self.e.paq_a, destino=self.destino)
+        self.assertEqual(self.admin.delete(f"/api/paquetedestino/{rel.id}/").status_code, 200)
+        self.assertTrue(Destino.objects.filter(id=self.destino.id).exists())
+
+
+class ItinerarioAgenciaTest(TestCase):
+    """/itinerario/: las paradas de un paquete solo las cambia el admin de su agencia."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.admin = Escenario.cliente_http(self.e.admin_a)
+        self.parada_b = Itinerario.objects.create(titulo="P", paquete=self.e.paq_b, dia="1", descripcion="d",
+                                                  hora="08:00", lugar="L")
+
+    def datos(self, paquete):
+        return {"titulo": "Mirador", "paquete_id": paquete.id, "dia": "1", "descripcion": "d", "hora": "09:00",
+                "lugar": "Cocora"}
+
+    def test_crea_en_su_paquete_y_no_en_otro(self):
+        self.assertEqual(self.admin.post("/api/itinerario/", self.datos(self.e.paq_a), format="json").status_code, 201)
+        self.assertEqual(self.admin.post("/api/itinerario/", self.datos(self.e.paq_b), format="json").status_code, 403)
+
+    def test_no_edita_ni_borra_paradas_de_otra_agencia(self):
+        url = f"/api/itinerario/{self.parada_b.id}/"
+        self.assertEqual(self.admin.put(url, self.datos(self.e.paq_a), format="json").status_code, 403)
+        self.assertEqual(self.admin.delete(url).status_code, 403)
+        self.assertTrue(Itinerario.objects.filter(id=self.parada_b.id).exists())
+        self.assertEqual(self.admin.get("/api/itinerario/999999/").status_code, 404)
