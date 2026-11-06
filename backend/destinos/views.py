@@ -58,6 +58,18 @@ class DepartamentoView(VistaCatalogo):
     
 ##########################################################################################3
 
+def error_destino(datos, creando=False):
+    """Mensaje si el nombre viene vacío o el departamento no existe; None si sirven."""
+    if (creando or datos.get("nombre") is not None) and not str(datos.get("nombre") or "").strip():
+        return "El nombre es obligatorio"
+    valor = str(datos.get("departamento") or "").strip()
+    if valor:
+        por_id = Q(id=int(valor)) if valor.isdigit() else Q(pk__in=[])
+        if not Departamento.objects.filter(por_id | Q(nombre__iexact=valor)).exists():
+            return "El departamento no existe"
+    return None
+
+
 class DestinoView(VistaCatalogo):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
@@ -97,6 +109,9 @@ class DestinoView(VistaCatalogo):
         responses={201: MensajeSalida}
     )
     def post(self, request):
+        error = error_destino(request.data, creando=True)
+        if error:
+            return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
         nombre = request.data.get("nombre")
         descripcion = request.data.get("descripcion") or ""
         destino = Destino.objects.create(
@@ -125,6 +140,9 @@ class DestinoIdView(VistaCatalogo):
         error = catalogo_compartido(request, [destino.id])
         if error:
             return error
+        error = error_destino(request.data)
+        if error:
+            return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
         if request.data.get("nombre") is not None:
             destino.nombre = request.data.get("nombre")
         if request.data.get("departamento") is not None:
@@ -254,6 +272,8 @@ class HospedajeView(VistaCatalogo):
     )
     def post(self, request):
         nombre = request.data.get("nombre")
+        if not str(nombre or "").strip():
+            return Response({"message": "El nombre es obligatorio"}, status=status.HTTP_400_BAD_REQUEST)
         direccion = request.data.get("direccion")
         telefono = request.data.get("telefono")
         descripcion = request.data.get("descripcion")
@@ -294,6 +314,8 @@ class HospedajeIdView(VistaCatalogo):
         destino_ids, error = destino_ids_de(request.data)
         if error:
             return error
+        if request.data.get("nombre") is not None and not str(request.data.get("nombre")).strip():
+            return Response({"message": "El nombre es obligatorio"}, status=status.HTTP_400_BAD_REQUEST)
         if request.FILES.get("imagen"):
             hospedajeB.imagen = request.FILES.get("imagen")
         for campo in ("nombre", "direccion", "telefono", "descripcion"):

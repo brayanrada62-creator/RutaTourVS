@@ -63,3 +63,26 @@ class HospedajeDestinoCrudTest(TestCase):
     def test_busqueda_no_incluye_sitios_turisticos(self):
         respuesta = self.c.get("/api/buscar/?search=hotel").json()
         self.assertEqual(set(respuesta), {"search", "destinos", "paquetes", "hospedajes"})
+
+
+class ValidacionCatalogoTest(TestCase):
+    """Destinos y hospedajes: el nombre es obligatorio y el departamento debe existir."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.admin = Escenario.cliente_http(self.e.admin_a)
+        self.depto = Departamento.objects.create(nombre="Boyacá")
+
+    def test_destino_invalido(self):
+        datos = {"nombre": "Villa", "departamento": self.depto.id, "descripcion": "d"}
+        self.assertEqual(self.admin.post("/api/destino/", {**datos, "nombre": " "}, format="json").status_code, 400)
+        r = self.admin.post("/api/destino/", {**datos, "departamento": 999999}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertFalse(Departamento.objects.filter(nombre="999999").exists())
+        self.assertEqual(self.admin.post("/api/destino/", datos, format="json").status_code, 201)
+        por_nombre = {**datos, "nombre": "Paipa", "departamento": "boyacá"}
+        self.assertEqual(self.admin.post("/api/destino/", por_nombre, format="json").status_code, 201)
+
+    def test_hospedaje_sin_nombre(self):
+        datos = {"nombre": "", "direccion": "d", "telefono": "1", "descripcion": "d"}
+        self.assertEqual(self.admin.post("/api/hospedaje/", datos, format="json").status_code, 400)

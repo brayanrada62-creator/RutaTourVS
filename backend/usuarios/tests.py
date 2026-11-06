@@ -665,3 +665,53 @@ class ResumenAgenciasTest(TestCase):
         self.assertEqual(Escenario.cliente_http(self.e.cond_a).get("/api/dashboard/agencias/").status_code, 403)
         self.assertEqual(Escenario.cliente_http(self.e.cliente).get("/api/dashboard/agencias/").status_code, 403)
         self.assertEqual(Escenario.cliente_http().get("/api/dashboard/agencias/").status_code, 401)
+
+
+class ValidacionUsuariosTest(TestCase):
+    """Datos inválidos del personal: responden 400 y no dejan nada guardado a medias."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.sup = Escenario.cliente_http(self.e.super)
+
+    def datos(self, **extra):
+        return {"nombre_completo": "Nuevo", "rol_id": 2, "agencia_id": self.e.ag_a.id, "tipo_documento": "CC",
+                "numero_documento": "70000001", "correo": "nuevo.val@rt.co", "telefono": "3001234567",
+                "contrasena": "clave-segura", **extra}
+
+    def test_agencia_inexistente_no_crea_el_usuario(self):
+        r = self.sup.post("/api/usuario/", self.datos(agencia_id=999999), format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertFalse(Usuario.objects.filter(correo="nuevo.val@rt.co").exists())
+
+    def test_correo_y_clave_invalidos(self):
+        self.assertEqual(self.sup.post("/api/usuario/", self.datos(correo="malo"), format="json").status_code, 400)
+        self.assertEqual(self.sup.post("/api/usuario/", self.datos(contrasena="1"), format="json").status_code, 400)
+
+    def test_editar_con_datos_repetidos_no_cambia_nada(self):
+        objetivo, otro = self.e.cond_a, self.e.cond_b
+        ruta = f"/api/usuario/{objetivo.id}/"
+        for cambio in ({"correo": otro.correo}, {"numero_documento": otro.numero_documento},
+                       {"correo": "malo"}, {"rol_id": 99}, {"agencia_id": 999999}):
+            self.assertEqual(self.sup.put(ruta, cambio, format="json").status_code, 400, cambio)
+        guardado = Usuario.objects.get(id=objetivo.id)
+        self.assertEqual(guardado.correo, objetivo.correo)
+        self.assertEqual(guardado.numero_documento, objetivo.numero_documento)
+
+    def test_eliminar_libera_el_correo(self):
+        creado = self.sup.post("/api/usuario/", self.datos(), format="json").json()["id"]
+        self.assertEqual(self.sup.delete(f"/api/usuario/{creado}/").status_code, 200)
+        self.assertEqual(self.sup.post("/api/usuario/", self.datos(), format="json").status_code, 200)
+
+    def test_nit_repetido(self):
+        agencia = {"nombre": "Otra", "nit": self.e.ag_a.nit, "direccion": "d", "telefono": "1", "correo": "o@rt.co"}
+        self.assertEqual(self.sup.post("/api/agencia/", agencia, format="json").status_code, 400)
+        r = self.sup.put(f"/api/agencia/{self.e.ag_b.id}/", {"nit": self.e.ag_a.nit}, format="json")
+        self.assertEqual(r.status_code, 400)
+
+    @override_settings(DEBUG=True)
+    def test_recuperar_nunca_devuelve_el_codigo(self):
+        r = Escenario.cliente_http().post("/api/password/reset/", {"correo": self.e.cliente.correo}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn("codigo", r.json())
+        self.assertNotIn("token", r.json())

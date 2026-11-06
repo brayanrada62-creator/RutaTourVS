@@ -150,3 +150,21 @@ class ComprobanteTest(TestCase):
         admin = Escenario.cliente_http(self.e.admin_a)
         self.assertEqual(admin.delete(f"/api/pago/{pago}/").status_code, 200)
         self.assertFalse(Pago.objects.filter(id=pago).exists())
+
+    def test_el_superadmin_no_revisa_pagos(self):
+        pago = self.pagar(imagen()).json()["id"]
+        sup = Escenario.cliente_http(self.e.super)
+        self.assertEqual(sup.put(f"/api/pago/{pago}/", {"estado": "aprobado"}, format="json").status_code, 403)
+        self.assertEqual(sup.delete(f"/api/pago/{pago}/").status_code, 403)
+        self.assertEqual(Pago.objects.get(id=pago).estado, "pendiente")
+
+    def test_rechazar_exige_motivo(self):
+        pago = self.pagar(imagen()).json()["id"]
+        admin = Escenario.cliente_http(self.e.admin_a)
+        self.assertEqual(admin.put(f"/api/pago/{pago}/", {"estado": "rechazado"}, format="json").status_code, 400)
+        self.assertEqual(Pago.objects.get(id=pago).estado, "pendiente")
+
+    def test_precio_invalido(self):
+        pago = self.pagar(imagen()).json()["id"]
+        admin = Escenario.cliente_http(self.e.admin_a)
+        self.assertEqual(admin.put(f"/api/pago/{pago}/", {"precio": "abc"}, format="json").status_code, 400)
