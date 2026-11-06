@@ -715,3 +715,36 @@ class ValidacionUsuariosTest(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertNotIn("codigo", r.json())
         self.assertNotIn("token", r.json())
+
+
+class UsuarioAgenciaRutasTest(TestCase):
+    """Asociaciones: sin duplicados, el admin no quita a otro admin y las rutas no terminan en error 500."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.sup = Escenario.cliente_http(self.e.super)
+        self.admin = Escenario.cliente_http(self.e.admin_a)
+
+    def test_repetir_no_duplica(self):
+        datos = {"usuario_id": self.e.cliente.id, "agencia_id": self.e.ag_a.id}
+        primero = self.sup.post("/api/usuario-agencia/", datos, format="json")
+        segundo = self.sup.post("/api/usuario-agencia/", datos, format="json")
+        self.assertEqual((primero.status_code, segundo.status_code), (201, 200))
+        self.assertEqual(primero.json()["id"], segundo.json()["id"])
+        self.assertEqual(UsuarioAgencia.objects.filter(usuario=self.e.cliente, agencia=self.e.ag_a).count(), 1)
+
+    def test_el_admin_no_quita_a_un_admin(self):
+        propia = UsuarioAgencia.objects.get(usuario=self.e.admin_a, agencia=self.e.ag_a)
+        self.assertEqual(self.admin.delete(f"/api/usuario-agencia/{propia.id}/").status_code, 403)
+        self.assertTrue(UsuarioAgencia.objects.filter(id=propia.id).exists())
+
+    def test_el_admin_quita_a_un_conductor_y_el_super_a_un_admin(self):
+        conductor = UsuarioAgencia.objects.get(usuario=self.e.cond_a, agencia=self.e.ag_a)
+        admin = UsuarioAgencia.objects.get(usuario=self.e.admin_b, agencia=self.e.ag_b)
+        self.assertEqual(self.admin.delete(f"/api/usuario-agencia/{conductor.id}/").status_code, 200)
+        self.assertEqual(self.sup.delete(f"/api/usuario-agencia/{admin.id}/").status_code, 200)
+
+    def test_metodos_no_validos_responden_405(self):
+        self.assertEqual(self.sup.delete("/api/usuario-agencia/").status_code, 405)
+        self.assertEqual(self.sup.get("/api/usuario-agencia/1/").status_code, 405)
+        self.assertEqual(self.sup.post("/api/usuario-agencia/1/", {}, format="json").status_code, 405)
