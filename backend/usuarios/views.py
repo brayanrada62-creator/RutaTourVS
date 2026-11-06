@@ -1257,14 +1257,18 @@ class UsuarioAgenciaView(APIView):
             not es_super(yo) and objetivo is not None and objetivo.rol_id not in (ROL_CONDUCTOR, ROL_CLIENTE)
         ):
             return prohibido()
-        asociacion = UsuarioAgencia.objects.create(**datos)
+        # Repetir la asociación devuelve la que ya existe: no se duplica.
+        asociacion = UsuarioAgencia.objects.filter(**datos).first()
+        creada = asociacion is None
+        if creada:
+            asociacion = UsuarioAgencia.objects.create(**datos)
         return Response(
             {
                 'id': asociacion.id,
                 'usuario_id': asociacion.usuario_id,
                 'agencia_id': asociacion.agencia_id,
             },
-            status=status.HTTP_201_CREATED,
+            status=status.HTTP_201_CREATED if creada else status.HTTP_200_OK,
         )
     
     @swagger_auto_schema(
@@ -1288,13 +1292,22 @@ class UsuarioAgenciaView(APIView):
             })
         return Response(lista_asociaciones)
     
+
+
+class UsuarioAgenciaIdView(APIView):
     @swagger_auto_schema(
-        operation_description="Elimina una asociación de usuario y agencia por su ID",
+        operation_description=(
+            "Elimina una asociación de usuario y agencia por su ID. "
+            "El admin solo quita conductores y clientes de su agencia (403)."
+        ),
         responses={200: MensajeSalida}
     )
     def delete(self, request, id):
-        asociacion = get_object_or_404(UsuarioAgencia, id=id)
-        if not gestiona_agencia(usuario_de(request), asociacion.agencia_id):
+        asociacion = get_object_or_404(UsuarioAgencia.objects.select_related("usuario"), id=id)
+        yo = usuario_de(request)
+        if not gestiona_agencia(yo, asociacion.agencia_id) or (
+            not es_super(yo) and asociacion.usuario.rol_id not in (ROL_CONDUCTOR, ROL_CLIENTE)
+        ):
             return prohibido()
         asociacion.delete()
         return Response({'message': 'Asociación de usuario y agencia eliminada exitosamente'})

@@ -22,7 +22,7 @@ from reservas.models import AsientoReserva, Reserva, marcar_vencidas, reservas_a
 from usuarios.models import Agencia, Usuario, UsuarioAgencia
 
 from usuarios.permisos import (
-    ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, agencia_para_guardar, agencias_de, filtrar_agencia_super, filtrar_catalogo,
+    ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, agencia_para_guardar, agencias_de, agencias_de_catalogo, filtrar_agencia_super, filtrar_catalogo,
     es_admin, es_conductor, es_super, gestiona_agencia, prohibido, usuario_de,
 )
 
@@ -754,12 +754,19 @@ class BusConductorIdView(APIView):
         return Response({"mensaje": "Asociación de bus y conductor eliminada"})
 
 ##################################################################################################
+def agencias_de_sillas(yo):
+    """Agencias cuyas sillas ve el usuario. Admin, conductor y cliente ligado a una agencia: solo las suyas.
+    None = sin restricción (superadmin, cliente independiente y sin sesión: el mapa es parte del catálogo)."""
+    return agencias_de(yo) if es_conductor(yo) else agencias_de_catalogo(yo)
+
+
 class AsientoView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description=(
             "Listar asientos. ?viaje_id= devuelve las sillas del bus de esa salida con 'ocupado' calculado "
             "para esa salida (recomendado para la app). ?tipo_bus_id= (y opcional ?paquete_id=) se mantiene. "
-            "Sin viaje_id ni tipo_bus_id responde 400. Las reservas canceladas o vencidas no ocupan."
+            "Sin viaje_id ni tipo_bus_id responde 400. Las reservas canceladas o vencidas no ocupan. "
+            "Admin, conductor y cliente ligado a una agencia solo ven las sillas de la suya (404)."
         ),
         manual_parameters=[
             openapi.Parameter("viaje_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
@@ -771,15 +778,19 @@ class AsientoView(VistaCatalogo):
         viaje_id = request.query_params.get("viaje_id")
         tipo = entero_query(request, "tipo_bus_id")
         paquete_id = entero_query(request, "paquete_id")
+        mias = agencias_de_sillas(usuario_de(request))
         marcar_vencidas()
         if viaje_id is not None:
             viaje = Viaje.objects.select_related("bus").filter(id=entero_o_none(viaje_id)).first()
-            if viaje is None:
+            if viaje is None or (mias is not None and viaje.bus.agencia_id not in mias):
                 return Response({"message": "La salida no existe"}, status=status.HTTP_404_NOT_FOUND)
             # El mapa es el de los tipos del bus de ESA salida y la ocupación es solo de esa salida.
             tipos = list(viaje.bus.tipos_bus.values_list("id", flat=True))
             ocupadoras = reservas_que_ocupan(viaje.paquete_id, viaje.id)
         elif tipo:
+            agencia_id = TipoBus.objects.filter(id=tipo).values_list("agencia_id", flat=True).first()
+            if mias is not None and agencia_id is not None and agencia_id not in mias:
+                return Response({"message": "El tipo de bus no existe"}, status=status.HTTP_404_NOT_FOUND)
             tipos = [tipo]
             ocupadoras = reservas_que_ocupan(paquete_id) if paquete_id else reservas_activas()
         else:
@@ -820,7 +831,10 @@ class AsientoIdView(VistaCatalogo):
         operation_description="Listar asiento por id"
     )
     def get(self, request, id):
-        registroEncontrado = get_object_or_404(Asiento, id=id)
+        registroEncontrado = get_object_or_404(Asiento.objects.select_related("tipo_bus"), id=id)
+        mias = agencias_de_sillas(usuario_de(request))
+        if mias is not None and registroEncontrado.tipo_bus.agencia_id not in mias:
+            return Response({"message": "La silla no existe"}, status=status.HTTP_404_NOT_FOUND)
         return Response({
             "id": registroEncontrado.id,
             "tipo_bus_id": registroEncontrado.tipo_bus_id,
@@ -873,6 +887,9 @@ class AsientoNumeroView(VistaCatalogo):
     )
     def get(self, request, numero_asiento):
         asientoLista = Asiento.objects.filter(numero_asiento=numero_asiento)
+        mias = agencias_de_sillas(usuario_de(request))
+        if mias is not None:
+            asientoLista = asientoLista.filter(tipo_bus__agencia_id__in=mias)
         lista = []
         for asiento in asientoLista:
             lista.append({

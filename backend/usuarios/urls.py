@@ -8,7 +8,7 @@ from .views import (
     PasswordResetView,
     PasswordResetConfirmarView,
     UsuarioView, UsuarioIdView, UsuarioDocumentoView, RolView,
-    UsuarioAgenciaView,
+    UsuarioAgenciaView, UsuarioAgenciaIdView,
     DashboardResumenView, ResumenAgenciasView,
     AgenciaView, AgenciaIdView, AgenciaNitView, AgenciaDireccionView,
 )
@@ -31,7 +31,7 @@ urlpatterns = [
     path('usuario/perfil/', UsuarioPerfilView.as_view(), name='usuario-perfil'),
     path('usuarios/documento/<str:numero_documento>/', UsuarioDocumentoView.as_view(), name='usuario-documento'),
     path('usuario-agencia/', UsuarioAgenciaView.as_view(), name='usuario-agencia'),
-    path('usuario-agencia/<int:id>/', UsuarioAgenciaView.as_view(), name='usuario-agencia-id'),
+    path('usuario-agencia/<int:id>/', UsuarioAgenciaIdView.as_view(), name='usuario-agencia-id'),
 
     # Rol
     path('rol/', RolView.as_view(), name='rol'),

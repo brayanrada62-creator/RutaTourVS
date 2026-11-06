@@ -9,7 +9,7 @@ from rest_framework.test import APIClient
 from usuarios.pruebas import Escenario
 
 from usuarios.models import Agencia, Rol, Usuario, UsuarioAgencia
-from buses.models import Bus, Bus_Conductor, TipoBus
+from buses.models import Asiento, Bus, Bus_Conductor, TipoBus
 from buses.views import hoy_colombia
 
 # Fechas futuras relativas a hoy: la programación rechaza el pasado (HU-W-21).
@@ -618,3 +618,28 @@ class PlacaBusTest(TestCase):
         ruta = f"/api/bus/{self.e.bus_a.id}/"
         self.assertEqual(self.admin.put(ruta, {"placa": self.e.bus_a2.placa}, format="json").status_code, 400)
         self.assertEqual(self.admin.put(ruta, {"placa": self.e.bus_a.placa}, format="json").status_code, 200)
+
+
+class AislamientoSillasTest(TestCase):
+    """Las sillas de otra agencia no se ven; el mapa sigue abierto para clientes y visitantes."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.silla = Asiento.objects.create(tipo_bus=self.e.tipo_a, numero_asiento=90)
+        self.viaje = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a,
+                                          fecha=timezone.localdate() + timedelta(days=5), hora="06:00")
+        self.rutas = (f"/api/asiento/{self.silla.id}/", f"/api/asiento/?tipo_bus_id={self.e.tipo_a.id}",
+                      f"/api/asiento/?viaje_id={self.viaje.id}")
+
+    def test_otra_agencia_recibe_404(self):
+        for usuario in (self.e.admin_b, self.e.cond_b):
+            cliente = Escenario.cliente_http(usuario)
+            for ruta in self.rutas:
+                self.assertEqual(cliente.get(ruta).status_code, 404, ruta)
+            self.assertEqual(cliente.get("/api/asiento/numero/90/").json(), [])
+
+    def test_su_agencia_y_el_catalogo_si_ven(self):
+        for usuario in (self.e.admin_a, self.e.cliente, self.e.super, None):
+            cliente = Escenario.cliente_http(usuario) if usuario else Escenario.cliente_http()
+            for ruta in self.rutas:
+                self.assertEqual(cliente.get(ruta).status_code, 200, ruta)
