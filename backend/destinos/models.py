@@ -28,7 +28,7 @@ class Hospedaje(models.Model):
     destinos = models.ManyToManyField(Destino, through="HospedajeDestino", related_name="hospedajes")
     direccion = models.CharField(max_length=255)
     telefono = models.CharField(max_length=20)
-    descripcion = models.CharField(max_length=300)
+    descripcion = models.CharField(max_length=2000)
     imagen = models.ImageField(upload_to="hospedajes/", max_length=255, blank=True, null=True)
 
     def __str__(self):

@@ -122,3 +122,26 @@ class LimitesTextoDestinoTest(TestCase):
         destino = self.crear().json()["id"]
         r = self.admin.patch(f"/api/destino/{destino}/", {"descripcion": "x" * 2001}, format="json")
         self.assertEqual(r.status_code, 400)
+
+
+class LimitesTextoHospedajeTest(TestCase):
+    """Los textos largos del hospedaje responden 400 con su motivo, no un error 500."""
+
+    def setUp(self):
+        self.admin = Escenario.cliente_http(Escenario().admin_a)
+
+    def crear(self, **cambios):
+        datos = {"nombre": "Hotel", "direccion": "d", "telefono": "1", "descripcion": "d", **cambios}
+        return self.admin.post("/api/hospedaje/", datos, format="json")
+
+    def test_limites(self):
+        for cambio in ({"nombre": "x" * 151}, {"direccion": "x" * 256}, {"telefono": "1" * 21},
+                       {"descripcion": "x" * 2001}):
+            self.assertEqual(self.crear(**cambio).status_code, 400, cambio)
+        self.assertEqual(self.crear(descripcion="x" * 2000).status_code, 200)
+
+    def test_editar_con_texto_largo(self):
+        self.crear()
+        hospedaje = Hospedaje.objects.get(nombre="Hotel")
+        r = self.admin.put(f"/api/hospedaje/{hospedaje.id}/", {"descripcion": "x" * 2001}, format="json")
+        self.assertEqual(r.status_code, 400)

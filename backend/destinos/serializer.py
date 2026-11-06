@@ -19,12 +19,12 @@ class DestinoEntrada(serializers.Serializer):
 
 
 class HopedajeEntrada(serializers.Serializer):
-    nombre = serializers.CharField(max_length=100)
+    nombre = serializers.CharField(max_length=150)
     destino_id = serializers.IntegerField(required=False)
     destino_ids = serializers.ListField(child=serializers.IntegerField(), required=False)
     direccion = serializers.CharField(max_length=255)
     telefono = serializers.CharField(max_length=20)
-    descripcion = serializers.CharField(max_length=300)
+    descripcion = serializers.CharField(max_length=2000)
     imagen = serializers.ImageField(required=False)
 
 
