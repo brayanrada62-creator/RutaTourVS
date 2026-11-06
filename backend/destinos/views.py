@@ -59,9 +59,13 @@ class DepartamentoView(VistaCatalogo):
 ##########################################################################################3
 
 def error_destino(datos, creando=False):
-    """Mensaje si el nombre viene vacío o el departamento no existe; None si sirven."""
+    """Mensaje si el nombre o la descripción no sirven o el departamento no existe; None si todo está bien."""
     if (creando or datos.get("nombre") is not None) and not str(datos.get("nombre") or "").strip():
         return "El nombre es obligatorio"
+    if len(str(datos.get("nombre") or "")) > 150:
+        return "El nombre admite máximo 150 caracteres"
+    if len(str(datos.get("descripcion") or "")) > 2000:
+        return "La descripción admite máximo 2000 caracteres"
     valor = str(datos.get("departamento") or "").strip()
     if valor:
         por_id = Q(id=int(valor)) if valor.isdigit() else Q(pk__in=[])

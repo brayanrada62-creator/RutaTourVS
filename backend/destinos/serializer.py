@@ -13,9 +13,9 @@ class MensajeSalida(serializers.Serializer):
 
 
 class DestinoEntrada(serializers.Serializer):
-    nombre = serializers.CharField(max_length=100)
+    nombre = serializers.CharField(max_length=150)
     departamento = serializers.CharField(max_length=100)
-    descripcion = serializers.CharField(max_length=300)
+    descripcion = serializers.CharField(max_length=2000)
 
 
 class HopedajeEntrada(serializers.Serializer):
@@ -36,4 +36,4 @@ class HospedajeDestinoEntrada(serializers.Serializer):
 class ImagenEntrada(serializers.Serializer):
     url_img = serializers.ImageField(max_length=225)
     destino_id = serializers.IntegerField()
-    descripcion = serializers.CharField(max_length=300)
+    descripcion = serializers.CharField(max_length=2000)

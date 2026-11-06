@@ -14,7 +14,7 @@ class Departamento(models.Model):
 class Destino(models.Model):
     nombre = models.CharField(max_length=150)
     departamento = models.ForeignKey(Departamento, on_delete=models.CASCADE)
-    descripcion = models.CharField(max_length=300)
+    descripcion = models.CharField(max_length=2000)
 
     def __str__(self):
         return self.nombre
@@ -52,7 +52,7 @@ class HospedajeDestino(models.Model):
 class ImagenDestino(models.Model):
     url_img = models.ImageField(upload_to="destinos/", max_length=255)
     destino = models.ForeignKey(Destino, on_delete=models.CASCADE)
-    descripcion = models.CharField(max_length=255)
+    descripcion = models.CharField(max_length=2000)
 
     def __str__(self):
         return self.descripcion
