@@ -567,3 +567,54 @@ class ViajePaqueteActivoTest(TestCase):
         e.paq_a.estado = "activo"
         e.paq_a.save()
         self.assertEqual(admin.post("/api/viaje/", datos, format="json").status_code, 201)
+
+
+class ConductorVariasAgenciasTest(TestCase):
+    """Un conductor tiene un bus por agencia: asignarle otro en una agencia no toca las demás."""
+
+    def setUp(self):
+        self.e = Escenario()
+        UsuarioAgencia.objects.create(usuario=self.e.cond_a, agencia=self.e.ag_b)
+        self.admin_a = Escenario.cliente_http(self.e.admin_a)
+        self.admin_b = Escenario.cliente_http(self.e.admin_b)
+
+    def asignar(self, cliente, bus):
+        return cliente.post("/api/bus-conductor/", {"bus_id": bus.id, "conductor_id": self.e.cond_a.id}, format="json")
+
+    def test_conserva_el_bus_de_cada_agencia(self):
+        self.assertEqual(self.asignar(self.admin_a, self.e.bus_a).status_code, 201)
+        r = self.asignar(self.admin_b, self.e.bus_b)
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["reemplazadas"], 0)
+        buses = set(Bus_Conductor.objects.filter(conductor=self.e.cond_a).values_list("bus_id", flat=True))
+        self.assertEqual(buses, {self.e.bus_a.id, self.e.bus_b.id})
+
+    def test_cada_admin_ve_solo_el_bus_de_su_agencia(self):
+        self.asignar(self.admin_a, self.e.bus_a)
+        self.asignar(self.admin_b, self.e.bus_b)
+        for cliente, bus in ((self.admin_a, self.e.bus_a), (self.admin_b, self.e.bus_b)):
+            fila = [u for u in cliente.get("/api/usuario/?rol_id=3").json() if u["id"] == self.e.cond_a.id][0]
+            self.assertEqual(fila["placa"], bus.placa)
+
+
+class PlacaBusTest(TestCase):
+    """La placa no se repite y no puede quedar vacía."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.admin = Escenario.cliente_http(self.e.admin_a)
+
+    def crear(self, placa):
+        return self.admin.post("/api/bus/", {"placa": placa, "tipo_bus_id": self.e.tipo_a.id, "marca": "m",
+                                             "modelo": "m", "fecha_registro": "2026-01-01"}, format="json")
+
+    def test_placa_repetida_o_vacia(self):
+        self.assertEqual(self.crear(self.e.bus_a.placa.lower()).status_code, 400)
+        self.assertEqual(self.crear(self.e.bus_b.placa).status_code, 400)
+        self.assertEqual(self.crear("").status_code, 400)
+        self.assertEqual(self.crear("NUE999").status_code, 200)
+
+    def test_editar_placa(self):
+        ruta = f"/api/bus/{self.e.bus_a.id}/"
+        self.assertEqual(self.admin.put(ruta, {"placa": self.e.bus_a2.placa}, format="json").status_code, 400)
+        self.assertEqual(self.admin.put(ruta, {"placa": self.e.bus_a.placa}, format="json").status_code, 200)

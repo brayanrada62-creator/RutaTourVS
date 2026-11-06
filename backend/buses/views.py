@@ -288,6 +288,17 @@ def agencia_del_bus(yo, datos, bus=None):
                           status=status.HTTP_400_BAD_REQUEST)
 
 
+def error_placa(placa, bus=None):
+    """Mensaje si la placa está vacía o ya la usa otro bus; None si sirve."""
+    placa = str(placa or "").strip()
+    if not placa:
+        return "La placa es obligatoria"
+    repetidas = Bus.objects.filter(placa__iexact=placa)
+    if bus is not None:
+        repetidas = repetidas.exclude(id=bus.id)
+    return "Ya existe un bus con esa placa" if repetidas.exists() else None
+
+
 class BusView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description=(
@@ -329,6 +340,9 @@ class BusView(VistaCatalogo):
         estado, error = leer_estado_bus(request.data.get("estado"))
         if error:
             return error
+        error = error_placa(request.data.get("placa"))
+        if error:
+            return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
             bus = Bus.objects.create(
@@ -394,6 +408,10 @@ class BusIdView(VistaCatalogo):
                                f"cámbialos a otro bus o elimínalos antes de pasarlo a {estado}",
                     "viajes": [viaje_json(v) for v in pendientes],
                 }, status=status.HTTP_409_CONFLICT)
+        if request.data.get("placa"):
+            error = error_placa(request.data.get("placa"), busB)
+            if error:
+                return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
         busB.placa = request.data.get("placa") or busB.placa
         busB.agencia_id = agencia_id
         busB.marca = request.data.get("marca") or busB.marca
@@ -656,7 +674,11 @@ class BusConductorView(APIView):
         return Response([bus_conductor_json(a) for a in lista])
 
     @swagger_auto_schema(
-        operation_description="Asignar un bus a un conductor. Si la asignación ya existe, la devuelve sin duplicarla.",
+        operation_description=(
+            "Asignar un bus a un conductor. Si la asignación ya existe, la devuelve sin duplicarla. "
+            "El conductor tiene un bus por agencia: asignar otro de la misma agencia reemplaza el anterior "
+            "(409 si tiene un viaje en curso en él) y no toca sus buses de otras agencias."
+        ),
         request_body=BusConductorEntrada,
         responses={201: MensajeSalida}
     )
@@ -668,9 +690,11 @@ class BusConductorView(APIView):
             return error
         if not gestiona_agencia(usuario_de(request), bus.agencia_id):
             return prohibido("Solo el administrador de la agencia del bus puede asignarlo")
-        # Regla: un conductor tiene UN bus. Asignar otro reemplaza el anterior,
-        # salvo que tenga un viaje en curso en ese bus anterior.
-        anteriores = Bus_Conductor.objects.filter(conductor=conductor).exclude(bus=bus)
+        # Regla: un conductor tiene UN bus por agencia. Asignar otro de la misma agencia reemplaza
+        # el anterior, salvo que tenga un viaje en curso en él. Sus buses de otras agencias no se tocan.
+        anteriores = Bus_Conductor.objects.filter(
+            conductor=conductor, bus__agencia_id=bus.agencia_id,
+        ).exclude(bus=bus)
         if viaje_en_curso_en(conductor, [a.bus_id for a in anteriores]):
             return Response(
                 {"message": "El conductor tiene un viaje en curso; debe finalizarlo antes de cambiar de bus"},

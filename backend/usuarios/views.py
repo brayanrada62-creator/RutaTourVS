@@ -12,6 +12,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
+from django.db import transaction
 from django.db.models import Count, ProtectedError, Q, Sum
 from django.db.models.functions import TruncDate
 from django.core.validators import validate_email
@@ -243,6 +244,25 @@ def error_registro(nombre, correo, documento, telefono, clave):
     return None
 
 
+def error_correo_clave(correo, clave):
+    """Mismas reglas del registro público para el correo y la contraseña que escribe el personal."""
+    try:
+        validate_email(str(correo or ""))
+    except ValidationError:
+        return "Escribe un correo válido"
+    if clave and len(str(clave)) < CLAVE_MINIMA:
+        return f"La contraseña debe tener al menos {CLAVE_MINIMA} caracteres"
+    return None
+
+
+def existe_por_id(modelo, valor):
+    """True si el id es un número y existe (un id como "abc" antes terminaba en error 500)."""
+    try:
+        return modelo.objects.filter(id=int(valor)).exists()
+    except (TypeError, ValueError):
+        return False
+
+
 def rol_cliente():
     rol = Rol.objects.filter(rol__iexact="cliente").first()
     if rol:
@@ -424,9 +444,6 @@ class PasswordResetView(APIView):
         except Exception:
             pass
 
-        if settings.DEBUG:
-            respuesta["codigo"] = codigo
-            respuesta["token"] = token
         return Response(respuesta)
 
 
@@ -544,14 +561,18 @@ class LoginGoogleView(APIView):
         return Response(emitir_sesion(usuario))
 
 ##################################################################################################
-def datos_conductores(usuarios):
-    """bus_id, placa y viajes_pendientes (programados o en curso) de cada conductor."""
+def datos_conductores(usuarios, agencias=None):
+    """bus_id, placa y viajes_pendientes (programados o en curso) de cada conductor.
+    agencias: solo mira los buses de esas agencias (un admin no ve el bus que tiene en otra agencia)."""
     from buses.models import Bus_Conductor, Viaje  # import local para evitar ciclos entre apps
 
     ids = list(usuarios.values_list("id", flat=True))
     datos = {i: {"bus_id": None, "placa": None, "viajes_pendientes": 0} for i in ids}
     buses = {}
-    for asignacion in Bus_Conductor.objects.filter(conductor_id__in=ids).select_related("bus").order_by("id"):
+    asignaciones = Bus_Conductor.objects.filter(conductor_id__in=ids).select_related("bus").order_by("id")
+    if agencias is not None:
+        asignaciones = asignaciones.filter(bus__agencia_id__in=agencias)
+    for asignacion in asignaciones:
         buses[asignacion.conductor_id] = asignacion.bus
     pendientes = {
         fila["bus_id"]: fila["n"]
@@ -569,6 +590,29 @@ class RolView(APIView):
     @swagger_auto_schema(operation_description="Listar roles: [{id, nombre}]")
     def get(self, request):
         return Response([{"id": rol.id, "nombre": rol.rol} for rol in Rol.objects.order_by("id")])
+
+
+def error_edicion_usuario(usuario, datos, rol_nuevo, agencia_nueva):
+    """Mensaje si los datos de un PUT no se pueden guardar; None si sirven. Se revisa antes de cambiar nada."""
+    if str(rol_nuevo) != str(usuario.rol_id) and not existe_por_id(Rol, rol_nuevo):
+        return "El rol seleccionado no existe"
+    if agencia_nueva not in (None, "") and not existe_por_id(Agencia, agencia_nueva):
+        return "La agencia seleccionada no existe"
+    correo = datos.get('correo', usuario.correo)
+    if str(correo).lower() != str(usuario.correo).lower():
+        error = error_correo_clave(correo, None)
+        if error:
+            return error
+        if Usuario.objects.filter(correo__iexact=correo).exclude(id=usuario.id).exists() or \
+                User.objects.filter(username__iexact=correo).exists():
+            return "Ya existe un usuario con ese correo"
+    documento = datos.get('numero_documento', usuario.numero_documento)
+    if Usuario.objects.filter(numero_documento=documento).exclude(id=usuario.id).exists():
+        return "Ya existe un usuario con ese documento"
+    clave = datos.get('contrasena')
+    if clave and len(str(clave)) < CLAVE_MINIMA:
+        return f"La contraseña debe tener al menos {CLAVE_MINIMA} caracteres"
+    return None
 
 
 class UsuarioView(APIView):
@@ -633,36 +677,42 @@ class UsuarioView(APIView):
         if not correo or not numero_documento or not contrasena:
             return Response({'message': 'Correo, documento y contraseña son obligatorios'},
                             status=status.HTTP_400_BAD_REQUEST)
+        error = error_correo_clave(correo, contrasena)
+        if error:
+            return Response({'message': error}, status=status.HTTP_400_BAD_REQUEST)
+        if agencia_id not in (None, "") and not existe_por_id(Agencia, agencia_id):
+            return Response({'message': 'La agencia seleccionada no existe'}, status=status.HTTP_400_BAD_REQUEST)
         if Usuario.objects.filter(correo__iexact=correo).exists() or \
                 Usuario.objects.filter(numero_documento=numero_documento).exists() or \
                 User.objects.filter(username__iexact=correo).exists():
             return Response({'message': 'Ya existe un usuario con ese correo o documento'},
                             status=status.HTTP_400_BAD_REQUEST)
-        try:
-            rol = Rol.objects.get(id=rol_id)
-        except Rol.DoesNotExist:
+        if not existe_por_id(Rol, rol_id):
             return Response(
                 {"mensaje": "El rol seleccionado no existe"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        rol = Rol.objects.get(id=int(rol_id))
 
-        usuario = Usuario.objects.create(
-            nombre_completo=nombre_completo,
-            rol=rol,
-            tipo_documento=tipo_documento,
-            numero_documento=numero_documento,
-            correo=correo,
-            telefono=telefono,
-            contrasena=make_password(contrasena),
-            licencia=licencia,
-            licencia_pdf=licencia_pdf,
-        )
-        auth_user = User.objects.create_user(
-            username=correo,
-            email=correo,
-            password=contrasena,
-        )
-        asociar_agencia(usuario, agencia_id)
+        # Todo o nada: si algo falla no queda un usuario a medio crear.
+        with transaction.atomic():
+            usuario = Usuario.objects.create(
+                nombre_completo=nombre_completo,
+                rol=rol,
+                tipo_documento=tipo_documento,
+                numero_documento=numero_documento,
+                correo=correo,
+                telefono=telefono,
+                contrasena=make_password(contrasena),
+                licencia=licencia,
+                licencia_pdf=licencia_pdf,
+            )
+            auth_user = User.objects.create_user(
+                username=correo,
+                email=correo,
+                password=contrasena,
+            )
+            asociar_agencia(usuario, agencia_id)
         if registro_publico:
             return Response(datos_sesion(usuario, auth_user, "Registro correcto"), status=status.HTTP_201_CREATED)
         return Response({'message': 'Usuario creado exitosamente', 'id': usuario.id})
@@ -700,7 +750,9 @@ class UsuarioView(APIView):
                 Q(nombre_completo__icontains=texto) | Q(correo__icontains=texto) | Q(numero_documento__icontains=texto)
             )
         usuariolista = usuariolista.order_by("id")
-        extras = datos_conductores(usuariolista) if str(params.get("rol_id")) == str(ROL_CONDUCTOR) else {}
+        extras = {}
+        if str(params.get("rol_id")) == str(ROL_CONDUCTOR):
+            extras = datos_conductores(usuariolista, agencias_de(yo) if es_admin(yo) else None)
         return Response(paginar(request, usuariolista, lambda u: {**usuario_json(u, request), **extras.get(u.id, {})}))
 
 
@@ -756,6 +808,9 @@ class UsuarioIdView(APIView):
             error = validar_licencia_pdf(licencia_pdf)
             if error:
                 return Response({'message': error}, status=status.HTTP_400_BAD_REQUEST)
+        error = error_edicion_usuario(usuario, datos, rol_nuevo, agencia_nueva)
+        if error:
+            return Response({'message': error}, status=status.HTTP_400_BAD_REQUEST)
         correo_anterior = usuario.correo
         usuario.nombre_completo = datos.get('nombre_completo', usuario.nombre_completo)
         usuario.rol_id = rol_nuevo
@@ -775,8 +830,10 @@ class UsuarioIdView(APIView):
             if mismo and nuevo_activo != usuario.activo:
                 return prohibido("No puedes suspenderte a ti mismo")
             usuario.activo = nuevo_activo
-        usuario.save()
-        sincronizar_auth_user(correo_anterior, usuario)
+        # Todo o nada: el usuario de negocio y el de sesión siempre quedan con el mismo correo.
+        with transaction.atomic():
+            usuario.save()
+            sincronizar_auth_user(correo_anterior, usuario)
         auth_user = User.objects.filter(username=usuario.correo).first()
         if auth_user and not usuario.activo:
             for token_guardado in OutstandingToken.objects.filter(user=auth_user):
@@ -802,6 +859,7 @@ class UsuarioIdView(APIView):
         if yo.id == usuario.id or not (es_super(yo) or (es_admin(yo) and puede_ver_usuario(yo, usuario))):
             return prohibido()
         archivo_pdf = usuario.licencia_pdf.name if usuario.licencia_pdf else None
+        correo = usuario.correo
         try:
             usuario.delete()
         except ProtectedError:
@@ -810,6 +868,9 @@ class UsuarioIdView(APIView):
                             status=status.HTTP_409_CONFLICT)
         if archivo_pdf:
             Usuario._meta.get_field("licencia_pdf").storage.delete(archivo_pdf)
+        # El usuario de sesión también se va: si no, ese correo no se podría registrar otra vez.
+        if not Usuario.objects.filter(correo__iexact=correo).exists():
+            User.objects.filter(username__iexact=correo).delete()
         return Response({'message': 'Usuario eliminado exitosamente'})
 
 
@@ -1043,6 +1104,8 @@ class AgenciaView(APIView):
         datos, error = leer_agencia(request.data)
         if error:
             return error
+        if Agencia.objects.filter(nit=datos["nit"]).exists():
+            return Response({"message": "Ya existe una agencia con ese NIT"}, status=status.HTTP_400_BAD_REQUEST)
         Agencia.objects.create(**datos)
         return Response({'message': 'Agencia creada exitosamente'})
 
@@ -1084,6 +1147,8 @@ class AgenciaIdView(APIView):
             return error
         if "activo" in datos and not es_super(yo):
             return prohibido("Solo el superadministrador activa o desactiva agencias")
+        if "nit" in datos and Agencia.objects.filter(nit=datos["nit"]).exclude(id=agenciaB.id).exists():
+            return Response({"message": "Ya existe una agencia con ese NIT"}, status=status.HTTP_400_BAD_REQUEST)
         se_desactiva = agenciaB.activo and datos.get("activo") is False
         for campo, valor in datos.items():
             setattr(agenciaB, campo, valor)

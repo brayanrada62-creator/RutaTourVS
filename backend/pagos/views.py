@@ -3,6 +3,8 @@ from rest_framework.response import Response
 from django.db.models import Q
 from drf_yasg.utils import swagger_auto_schema
 
+from decimal import Decimal, InvalidOperation
+
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -42,6 +44,20 @@ def error_comprobante(archivo):
 
 
 ESTADOS_PAGO = dict(Pago.ESTADOS)
+
+
+def precio_valido(valor):
+    """True si es un número mayor o igual a 0 (un texto como "abc" antes terminaba en error 500)."""
+    try:
+        numero = Decimal(str(valor))
+    except InvalidOperation:
+        return False
+    return numero.is_finite() and numero >= 0
+
+
+def es_de_la_agencia(yo, agencia_id):
+    """Aprobar, rechazar o borrar pagos es tarea del admin de la agencia; el superadmin no gestiona tiquetes."""
+    return es_admin(yo) and gestiona_agencia(yo, agencia_id)
 
 
 def ajustar_plazo(reserva):
@@ -133,9 +149,11 @@ class PagoView(APIView):
         reserva = Reserva.objects.filter(id=reserva_id).select_related("paquete").first()
         if reserva is None:
             return Response({"message": "La reserva no existe"}, status=status.HTTP_404_NOT_FOUND)
-        personal = gestiona_agencia(yo, reserva.paquete.agencia_id)
+        personal = es_de_la_agencia(yo, reserva.paquete.agencia_id)
         if not personal and reserva.usuario_id != yo.id:
             return prohibido("Esa reserva no es tuya")
+        if personal and not precio_valido(precio):
+            return Response({"message": "El precio no es válido"}, status=status.HTTP_400_BAD_REQUEST)
         if comprobante:
             error = error_comprobante(comprobante)
             if error:
@@ -210,13 +228,18 @@ class PagoIdView(APIView):
     def put(self, request, id):
         pagoB = get_object_or_404(Pago.objects.select_related("reserva__paquete"), id=id)
         yo = usuario_de(request)
-        if not gestiona_agencia(yo, pagoB.reserva.paquete.agencia_id):
+        if not es_de_la_agencia(yo, pagoB.reserva.paquete.agencia_id):
             return prohibido("Solo la agencia puede aprobar o rechazar pagos")
         if request.data.get("reserva_id") not in (None, "") and str(request.data.get("reserva_id")) != str(pagoB.reserva_id):
             return Response({"message": "Un pago no se cambia de reserva"}, status=status.HTTP_400_BAD_REQUEST)
         estado = request.data.get("estado", pagoB.estado)
         if estado not in ESTADOS_PAGO:
             return Response({"message": "Estado de pago no válido"}, status=status.HTTP_400_BAD_REQUEST)
+        if "precio" in request.data and not precio_valido(request.data.get("precio")):
+            return Response({"message": "El precio no es válido"}, status=status.HTTP_400_BAD_REQUEST)
+        motivo = request.data.get("motivo_rechazo", pagoB.motivo_rechazo)
+        if estado == "rechazado" and not str(motivo or "").strip():
+            return Response({"message": "Escribe el motivo del rechazo"}, status=status.HTTP_400_BAD_REQUEST)
         marcar_vencidas()
         with transaction.atomic():
             reserva = Reserva.objects.select_for_update().get(id=pagoB.reserva_id)
@@ -255,7 +278,7 @@ class PagoIdView(APIView):
     )
     def delete(self, request, id):
         pagoEliminar = get_object_or_404(Pago, id=id)
-        if not gestiona_agencia(usuario_de(request), pagoEliminar.reserva.paquete.agencia_id):
+        if not es_de_la_agencia(usuario_de(request), pagoEliminar.reserva.paquete.agencia_id):
             return prohibido()
         with transaction.atomic():
             reserva = Reserva.objects.select_for_update().get(id=pagoEliminar.reserva_id)
