@@ -113,10 +113,10 @@ def resolver_destino(item, archivo=None):
         destino = Destino.objects.create(
             nombre=nombre[:150],
             departamento=resolver_departamento(item.get("departamento") or item.get("departamento_id")),
-            descripcion=str(descripcion)[:300],
+            descripcion=str(descripcion)[:2000],
         )
     elif descripcion and not destino.descripcion:
-        destino.descripcion = str(descripcion)[:300]
+        destino.descripcion = str(descripcion)[:2000]
         destino.save(update_fields=["descripcion"])
     guardar_imagen_destino(destino, archivo, item.get("descripcion_imagen") or "")
     return destino
@@ -305,6 +305,9 @@ def crear_o_actualizar_paquete(request, paquete=None):
 
     if destinos_enviados and not destinos:
         raise ValueError("No se pudieron leer los destinos. Envíalos como destinos o destino_ids.")
+
+    if len(str(request.data.get("descripcion") or "")) > 10000:
+        raise ValueError("La descripción admite máximo 10000 caracteres")
 
     estado = str(request.data.get("estado") or "activo").strip().lower()
     estados_validos = [valor for valor, _ in Paquete.ESTADOS]

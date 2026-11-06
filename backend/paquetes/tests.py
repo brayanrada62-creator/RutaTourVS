@@ -273,3 +273,12 @@ class ItinerarioAgenciaTest(TestCase):
         self.assertEqual(self.admin.put(f"/api/itinerario/{id_}/", {"titulo": "Nuevo"}, format="json").status_code, 200)
         parada = Itinerario.objects.get(id=id_)
         self.assertEqual((parada.titulo, parada.lugar, parada.dia), ("Nuevo", "Cocora", "1"))
+
+
+class LimiteDescripcionPaqueteTest(TestCase):
+    def test_descripcion_larga_responde_400(self):
+        e = Escenario()
+        datos = {"nombre": "Largo", "duracion_estimada": "1 dia", "precio": "1000", "descripcion": "x" * 10001}
+        r = Escenario.cliente_http(e.admin_a).post("/api/paquete/", datos, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("10000", r.json()["mensaje"])

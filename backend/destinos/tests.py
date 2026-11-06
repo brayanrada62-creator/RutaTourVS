@@ -97,3 +97,28 @@ class MigracionBogotaTest(TestCase):
         migracion.agregar_bogota(apps, None)
         migracion.agregar_bogota(apps, None)
         self.assertEqual(Departamento.objects.filter(nombre="Bogotá D.C.").count(), 1)
+
+
+class LimitesTextoDestinoTest(TestCase):
+    """Los textos largos responden 400 con su motivo, no un error 500."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.admin = Escenario.cliente_http(self.e.admin_a)
+        self.depto = Departamento.objects.create(nombre="Caldas")
+
+    def crear(self, **cambios):
+        datos = {"nombre": "Villa", "departamento": self.depto.id, "descripcion": "d", **cambios}
+        return self.admin.post("/api/destino/", datos, format="json")
+
+    def test_limites(self):
+        self.assertEqual(self.crear(nombre="x" * 151).status_code, 400)
+        r = self.crear(descripcion="x" * 2001)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("2000", r.json()["message"])
+        self.assertEqual(self.crear(descripcion="x" * 2000).status_code, 201)
+
+    def test_editar_con_texto_largo(self):
+        destino = self.crear().json()["id"]
+        r = self.admin.patch(f"/api/destino/{destino}/", {"descripcion": "x" * 2001}, format="json")
+        self.assertEqual(r.status_code, 400)
