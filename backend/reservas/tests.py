@@ -121,6 +121,18 @@ class AbordajeTest(TestCase):
         self.assertEqual(sorted(p["pago_estado"] for p in lista), ["aprobado", "pendiente"])
         self.assertEqual(sum(p["puede_abordar"] for p in lista), 1)
 
+    def test_documento_de_quien_viaja(self):
+        titular = self.reserva("aprobado")
+        otra_persona = self.reserva("aprobado")
+        otra_persona.pasajero_nombre, otra_persona.pasajero_documento = "Ana Pérez", "1234567"
+        otra_persona.save()
+        self.assertEqual(self.abordar(codigo=codigo_reserva(titular.id)).json()["documento"],
+                         self.e.cliente.numero_documento)
+        self.assertEqual(self.abordar(codigo=codigo_reserva(otra_persona.id)).json()["documento"], "1234567")
+        rechazada = self.reserva("pendiente")
+        self.assertEqual(self.abordar(codigo=codigo_reserva(rechazada.id)).json()["pasajero"]["documento"],
+                         self.e.cliente.numero_documento)
+
     def test_por_paquete_tambien_exige_pago_y_es_solo_personal(self):
         r = self.reserva("pendiente")
         admin = Escenario.cliente_http(self.e.admin_a)
