@@ -245,6 +245,16 @@ def destino_ids_de(data):
     return ids, None
 
 
+def error_hospedaje(datos):
+    """Mensaje si un texto del hospedaje supera su límite; None si todos sirven."""
+    limites = (("nombre", "El nombre", 150), ("direccion", "La dirección", 255),
+               ("telefono", "El teléfono", 20), ("descripcion", "La descripción", 2000))
+    for campo, etiqueta, maximo in limites:
+        if len(str(datos.get(campo) or "")) > maximo:
+            return f"{etiqueta} admite máximo {maximo} caracteres"
+    return None
+
+
 class HospedajeView(VistaCatalogo):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
@@ -278,6 +288,9 @@ class HospedajeView(VistaCatalogo):
         nombre = request.data.get("nombre")
         if not str(nombre or "").strip():
             return Response({"message": "El nombre es obligatorio"}, status=status.HTTP_400_BAD_REQUEST)
+        error = error_hospedaje(request.data)
+        if error:
+            return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
         direccion = request.data.get("direccion")
         telefono = request.data.get("telefono")
         descripcion = request.data.get("descripcion")
@@ -320,6 +333,9 @@ class HospedajeIdView(VistaCatalogo):
             return error
         if request.data.get("nombre") is not None and not str(request.data.get("nombre")).strip():
             return Response({"message": "El nombre es obligatorio"}, status=status.HTTP_400_BAD_REQUEST)
+        error = error_hospedaje(request.data)
+        if error:
+            return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
         if request.FILES.get("imagen"):
             hospedajeB.imagen = request.FILES.get("imagen")
         for campo in ("nombre", "direccion", "telefono", "descripcion"):
