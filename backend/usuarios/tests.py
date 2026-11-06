@@ -105,6 +105,19 @@ class AutenticacionTest(TestCase):
         cliente = Escenario.cliente_http(self.e.cliente)
         self.assertEqual(cliente.post("/api/tipobus/", {"nombre": "x"}, format="json").status_code, 403)
 
+    def test_cuenta_bancaria_solo_con_sesion(self):
+        admin = Escenario.cliente_http(self.e.admin_a)
+        r = admin.put(f"/api/agencia/{self.e.ag_a.id}/", {"banco": "Banco", "tipo_cuenta": "Ahorros",
+                                                          "numero_cuenta": "123", "titular": "Agencia"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        cliente = Escenario.cliente_http(self.e.cliente)
+        mia = next(a for a in cliente.get("/api/agencia/").json() if a["id"] == self.e.ag_a.id)
+        self.assertEqual(mia["numero_cuenta"], "123")
+        self.assertEqual(mia["titular"], "Agencia")
+        for agencia in APIClient().get("/api/agencia/").json():
+            self.assertNotIn("numero_cuenta", agencia)
+        self.assertNotIn("numero_cuenta", APIClient().get(f"/api/agencia/{self.e.ag_a.id}/").json())
+
 
 class UsuariosTest(TestCase):
     def setUp(self):

@@ -35,6 +35,8 @@ class BusEntrada(serializers.Serializer):
                                      help_text="activo (por defecto), inactivo o mantenimiento")
     fecha_registro = serializers.DateField()
     conductor_id = serializers.IntegerField(required=False, allow_null=True)
+    sillas = serializers.IntegerField(required=False, min_value=1, max_value=100,
+                                      help_text="Sillas del bus (1 a 100). Se guardan en su tipo de bus")
     
 class BusConductorEntrada(serializers.Serializer):
     bus_id = serializers.IntegerField()

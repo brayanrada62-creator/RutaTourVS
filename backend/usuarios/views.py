@@ -1065,8 +1065,9 @@ class ResumenAgenciasView(APIView):
         return Response([resumen_de_agencia(agencia, hoy) for agencia in Agencia.objects.order_by("id")])
 
 
-def agencia_json(agencia):
-    return {
+def agencia_json(agencia, con_cuenta=False):
+    """con_cuenta: los datos bancarios solo salen con sesión; /agencia/ también es público."""
+    datos = {
         "id": agencia.id,
         "nombre": agencia.nombre,
         "nit": agencia.nit,
@@ -1075,6 +1076,14 @@ def agencia_json(agencia):
         "correo": agencia.correo,
         "activo": agencia.activo,
     }
+    if con_cuenta:
+        datos.update({
+            "banco": agencia.banco,
+            "tipo_cuenta": agencia.tipo_cuenta,
+            "numero_cuenta": agencia.numero_cuenta,
+            "titular": agencia.titular,
+        })
+    return datos
 
 
 def leer_agencia(datos, parcial=False):
@@ -1127,7 +1136,7 @@ class AgenciaView(APIView):
             agenciaLista = agenciaLista.filter(id__in=agencias_de(yo))
         elif not es_super(yo):
             agenciaLista = agenciaLista.filter(activo=True)
-        return Response([agencia_json(agencia) for agencia in agenciaLista])
+        return Response([agencia_json(agencia, con_cuenta=yo is not None) for agencia in agenciaLista])
 
 
 class AgenciaIdView(APIView):
@@ -1198,7 +1207,7 @@ class AgenciaIdView(APIView):
         yo = usuario_de(request)
         if es_admin(yo) and not gestiona_agencia(yo, registroEncontrado.id):
             return prohibido()
-        return Response(agencia_json(registroEncontrado))
+        return Response(agencia_json(registroEncontrado, con_cuenta=usuario_de(request) is not None))
 
 
 class AgenciaNitView(APIView):
