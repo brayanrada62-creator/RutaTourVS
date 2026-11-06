@@ -213,8 +213,10 @@ EMAIL_BACKEND = os.environ.get(
     'EMAIL_BACKEND',
     'django.core.mail.backends.console.EmailBackend',
 )
-# Render gratis bloquea SMTP: en producción EMAIL_BACKEND=usuarios.correo.ResendBackend.
+# Render gratis bloquea SMTP: en producción EMAIL_BACKEND=usuarios.correo.ResendBackend o MailjetBackend.
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
+MAILJET_API_KEY = os.environ.get('MAILJET_API_KEY', '')
+MAILJET_SECRET_KEY = os.environ.get('MAILJET_SECRET_KEY', '')
 EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
 EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')

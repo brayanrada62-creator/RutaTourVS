@@ -775,3 +775,37 @@ class ResendBackendTest(TestCase):
             r = Escenario.cliente_http().post("/api/password/reset/", {"correo": e.cliente.correo}, format="json")
         self.assertEqual(r.status_code, 200)
         self.assertTrue(urlopen.called)
+
+
+@override_settings(EMAIL_BACKEND="usuarios.correo.MailjetBackend", MAILJET_API_KEY="k", MAILJET_SECRET_KEY="s")
+class MailjetBackendTest(TestCase):
+    """El correo sale por HTTPS a Mailjet; aquí se simula la respuesta, no se envía nada."""
+
+    def respuesta(self, urlopen, estado):
+        urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(
+            {"Messages": [{"Status": estado}]}
+        ).encode("utf-8")
+
+    @patch("usuarios.correo.urllib.request.urlopen")
+    def test_envia_a_la_api(self, urlopen):
+        self.respuesta(urlopen, "success")
+        self.assertEqual(send_mail("Asunto", "Cuerpo", "RutaTour <no@rt.co>", ["cliente@rt.co"]), 1)
+        peticion = urlopen.call_args.args[0]
+        self.assertEqual(peticion.full_url, "https://api.mailjet.com/v3.1/send")
+        self.assertEqual(peticion.get_header("Authorization"), "Basic azpz")
+        self.assertEqual(json.loads(peticion.data), {"Messages": [{
+            "From": {"Email": "no@rt.co", "Name": "RutaTour"}, "To": [{"Email": "cliente@rt.co"}],
+            "Subject": "Asunto", "TextPart": "Cuerpo",
+        }]})
+
+    @patch("usuarios.correo.urllib.request.urlopen")
+    def test_remitente_sin_nombre(self, urlopen):
+        self.respuesta(urlopen, "success")
+        send_mail("Asunto", "Cuerpo", "no@rt.co", ["cliente@rt.co"])
+        self.assertEqual(json.loads(urlopen.call_args.args[0].data)["Messages"][0]["From"], {"Email": "no@rt.co"})
+
+    @patch("usuarios.correo.urllib.request.urlopen")
+    def test_mensaje_rechazado_es_un_fallo(self, urlopen):
+        self.respuesta(urlopen, "error")
+        with self.assertRaises(RuntimeError):
+            send_mail("Asunto", "Cuerpo", "no@rt.co", ["cliente@rt.co"])
