@@ -71,6 +71,10 @@ class AgenciaEntrada(serializers.Serializer):
     telefono = serializers.CharField(max_length=20)
     correo = serializers.EmailField(max_length=150)
     activo = serializers.BooleanField(required=False, help_text="Solo el superadministrador lo cambia")
+    banco = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    tipo_cuenta = serializers.CharField(max_length=30, required=False, allow_blank=True)
+    numero_cuenta = serializers.CharField(max_length=40, required=False, allow_blank=True)
+    titular = serializers.CharField(max_length=150, required=False, allow_blank=True)
 
 class UsuarioAgenciaEntrada(serializers.Serializer):
     usuario_id = serializers.PrimaryKeyRelatedField(

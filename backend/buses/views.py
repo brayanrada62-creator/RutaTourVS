@@ -343,6 +343,13 @@ class BusView(VistaCatalogo):
         error = error_placa(request.data.get("placa"))
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
+        sillas, error = leer_sillas(request.data)
+        if error:
+            return error
+        tipo = TipoBus.objects.get(id=min(tipo_bus_ids))
+        error = error_reducir_sillas(tipo, sillas)
+        if error:
+            return error
 
         with transaction.atomic():
             bus = Bus.objects.create(
@@ -354,6 +361,7 @@ class BusView(VistaCatalogo):
                 fecha_registro=request.data.get("fecha_registro")
             )
             bus.tipos_bus.set(tipo_bus_ids)
+            guardar_sillas(tipo, sillas)
         return Response({"mensaje": "Bus almacenado correctamente", "id": bus.id})
 
 
@@ -412,6 +420,13 @@ class BusIdView(VistaCatalogo):
             error = error_placa(request.data.get("placa"), busB)
             if error:
                 return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
+        sillas, error = leer_sillas(request.data)
+        if error:
+            return error
+        tipo = TipoBus.objects.filter(id__in=nuevos).order_by("id").first()
+        error = error_reducir_sillas(tipo, sillas)
+        if error:
+            return error
         busB.placa = request.data.get("placa") or busB.placa
         busB.agencia_id = agencia_id
         busB.marca = request.data.get("marca") or busB.marca
@@ -422,6 +437,7 @@ class BusIdView(VistaCatalogo):
             busB.save()
             if nuevos != actuales:
                 busB.tipos_bus.set(nuevos)
+            guardar_sillas(tipo, sillas)
         return Response({"mensaje": "Bus actualizado"})
 
     @swagger_auto_schema(
@@ -527,6 +543,45 @@ def tipo_principal(bus):
     return bus.tipos_bus.order_by("id").first()
 
 
+def leer_sillas(datos):
+    """(sillas o None si no llegan, error 400). Es opcional para no romper a otros clientes del API."""
+    valor = datos.get("sillas")
+    if valor in (None, ""):
+        return None, None
+    entrada = AsientosBusEntrada(data={"cantidad": valor})
+    if not entrada.is_valid():
+        return None, Response({"message": "Las sillas deben ser un número entre 1 y 100"},
+                              status=status.HTTP_400_BAD_REQUEST)
+    return entrada.validated_data["cantidad"], None
+
+
+def error_reducir_sillas(tipo, cantidad):
+    """409 si quitar sillas tocaría alguna ya reservada; None si se puede guardar."""
+    if cantidad is None or tipo is None:
+        return None
+    reservadas = AsientoReserva.objects.filter(
+        asiento__tipo_bus=tipo, asiento__numero_asiento__gt=cantidad
+    ).values_list("asiento__numero_asiento", flat=True).distinct()
+    if reservadas:
+        numeros = ", ".join(str(n) for n in sorted(reservadas))
+        return Response({"message": f"No se puede reducir: las sillas {numeros} ya están reservadas"},
+                        status=status.HTTP_409_CONFLICT)
+    return None
+
+
+def guardar_sillas(tipo, cantidad):
+    """Deja las sillas 1..cantidad del tipo de bus. Son las que usa la app móvil para reservar."""
+    if cantidad is None or tipo is None:
+        return
+    Asiento.objects.filter(tipo_bus=tipo, numero_asiento__gt=cantidad).delete()
+    existentes = set(Asiento.objects.filter(tipo_bus=tipo).values_list("numero_asiento", flat=True))
+    Asiento.objects.bulk_create([
+        Asiento(tipo_bus=tipo, numero_asiento=n) for n in range(1, cantidad + 1) if n not in existentes
+    ])
+    tipo.capacidad = cantidad
+    tipo.save(update_fields=["capacidad"])
+
+
 def asientos_bus_json(bus):
     """Sillas del bus. El mapa es una plantilla del tipo de bus: todos los buses de ese tipo la comparten."""
     tipo = tipo_principal(bus)
@@ -582,21 +637,11 @@ class BusAsientosView(VistaCatalogo):
                             status=status.HTTP_400_BAD_REQUEST)
         cantidad = entrada.validated_data["cantidad"]
 
+        error = error_reducir_sillas(tipo, cantidad)
+        if error:
+            return error
         with transaction.atomic():
-            sobrantes = Asiento.objects.filter(tipo_bus=tipo, numero_asiento__gt=cantidad)
-            reservadas = AsientoReserva.objects.filter(asiento__in=sobrantes).values_list(
-                "asiento__numero_asiento", flat=True).distinct()
-            if reservadas:
-                numeros = ", ".join(str(n) for n in sorted(reservadas))
-                return Response({"message": f"No se puede reducir: las sillas {numeros} ya están reservadas"},
-                                status=status.HTTP_409_CONFLICT)
-            sobrantes.delete()
-            existentes = set(Asiento.objects.filter(tipo_bus=tipo).values_list("numero_asiento", flat=True))
-            Asiento.objects.bulk_create([
-                Asiento(tipo_bus=tipo, numero_asiento=n) for n in range(1, cantidad + 1) if n not in existentes
-            ])
-            tipo.capacidad = cantidad
-            tipo.save(update_fields=["capacidad"])
+            guardar_sillas(tipo, cantidad)
 
         respuesta = asientos_bus_json(bus)
         respuesta["mensaje"] = f"El bus {bus.placa} quedó con {cantidad} sillas"

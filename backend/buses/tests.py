@@ -318,6 +318,42 @@ class InicioSimultaneoTest(TransactionTestCase):
         self.assertEqual(Viaje.objects.get(id=v["id"]).estado, "EN_CURSO")
 
 
+class SillasEnElFormularioDelBusTest(TestCase):
+    """POST y PUT /bus/ guardan las sillas de una vez, sin pasar por otra pantalla."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.c = Escenario.cliente_http(self.e.admin_a)
+        self.tipo = TipoBus.objects.create(nombre="Sillas", agencia=self.e.ag_a, capacidad=5)
+
+    def crear(self, **extra):
+        datos = {"placa": "SIL123", "tipo_bus_id": self.tipo.id, "marca": "M", "modelo": "2026",
+                 "estado": "activo", "fecha_registro": "2026-11-06"}
+        return self.c.post("/api/bus/", {**datos, **extra}, format="json")
+
+    def test_crear_bus_guarda_las_sillas(self):
+        r = self.crear(sillas=12)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(Asiento.objects.filter(tipo_bus=self.tipo).count(), 12)
+        self.tipo.refresh_from_db()
+        self.assertEqual(self.tipo.capacidad, 12)
+
+    def test_sin_sillas_sigue_funcionando(self):
+        self.assertEqual(self.crear().status_code, 200)
+        self.assertEqual(Asiento.objects.filter(tipo_bus=self.tipo).count(), 0)
+
+    def test_sillas_invalidas_no_crean_el_bus(self):
+        for malo in (0, 101, "x"):
+            self.assertEqual(self.crear(sillas=malo).status_code, 400, malo)
+        self.assertFalse(Bus.objects.filter(placa="SIL123").exists())
+
+    def test_editar_bus_cambia_las_sillas(self):
+        bus_id = self.crear(sillas=12).json()["id"]
+        r = self.c.put(f"/api/bus/{bus_id}/", {"sillas": 8}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(Asiento.objects.filter(tipo_bus=self.tipo).count(), 8)
+
+
 class AsientosBusTest(TestCase):
     """POST /bus/<id>/asientos/ genera las sillas del tipo de bus (plantilla compartida por tipo)."""
 

@@ -136,6 +136,8 @@ def reserva_json(reserva):
         "asientos": ",".join(str(n) for n in asientos),
         "codigo": codigo_reserva(reserva.id),
         "pago_estado": pago.estado if pago else "",
+        # Por qué la agencia rechazó el último pago ("" si no está rechazado).
+        "pago_motivo": pago.motivo_rechazo if pago and pago.estado == "rechazado" else "",
         "viaje_id": reserva.viaje_id,
         # Hasta cuándo se guardan las sillas sin comprobante (null = plazo detenido).
         "vence_en": reserva.vence_en,

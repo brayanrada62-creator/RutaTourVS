@@ -115,6 +115,15 @@ class ComprobanteTest(TestCase):
         admin = Escenario.cliente_http(self.e.admin_a)
         return admin.put(f"/api/pago/{pago}/", {"estado": estado, "motivo_rechazo": "x"}, format="json")
 
+    def test_la_reserva_trae_el_motivo_del_rechazo(self):
+        pago = self.pagar(imagen()).json()["id"]
+        self.assertEqual(self.c.get(f"/api/reserva/{self.reserva.id}/").json()["pago_motivo"], "")
+        self.assertEqual(self.revisar(pago, "rechazado").status_code, 200)
+        self.assertEqual(self.c.get(f"/api/reserva/{self.reserva.id}/").json()["pago_motivo"], "x")
+        nuevo = self.pagar(imagen()).json()["id"]
+        self.assertEqual(self.revisar(nuevo, "aprobado").status_code, 200)
+        self.assertEqual(self.c.get(f"/api/reserva/{self.reserva.id}/").json()["pago_motivo"], "")
+
     def test_no_se_cambia_un_pago_que_no_es_el_ultimo(self):
         viejo = self.pagar(imagen()).json()["id"]
         self.assertEqual(self.revisar(viejo, "rechazado").status_code, 200)

@@ -31,6 +31,11 @@ class Agencia(models.Model):
     correo = models.EmailField(max_length=150)
     # Desactivada: su personal no entra y sus paquetes salen del catálogo; las reservas se conservan.
     activo = models.BooleanField(default=True)
+    # Cuenta donde el cliente transfiere. La app solo la muestra si tiene banco, número y titular.
+    banco = models.CharField(max_length=100, blank=True, default="")
+    tipo_cuenta = models.CharField(max_length=30, blank=True, default="")
+    numero_cuenta = models.CharField(max_length=40, blank=True, default="")
+    titular = models.CharField(max_length=150, blank=True, default="")
 
     def __str__(self):
         return self.nombre
