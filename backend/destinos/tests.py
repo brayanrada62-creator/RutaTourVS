@@ -86,3 +86,14 @@ class ValidacionCatalogoTest(TestCase):
     def test_hospedaje_sin_nombre(self):
         datos = {"nombre": "", "direccion": "d", "telefono": "1", "descripcion": "d"}
         self.assertEqual(self.admin.post("/api/hospedaje/", datos, format="json").status_code, 400)
+
+
+class MigracionBogotaTest(TestCase):
+    def test_agrega_bogota_una_sola_vez(self):
+        from django.apps import apps
+        from importlib import import_module
+
+        migracion = import_module("destinos.migrations.0007_departamento_bogota")
+        migracion.agregar_bogota(apps, None)
+        migracion.agregar_bogota(apps, None)
+        self.assertEqual(Departamento.objects.filter(nombre="Bogotá D.C.").count(), 1)
