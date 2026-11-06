@@ -12,7 +12,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
-from django.db.models import ProtectedError, Sum
+from django.db.models import Count, ProtectedError, Q, Sum
 from django.db.models.functions import TruncDate
 from django.core.validators import validate_email
 from django.utils import timezone
@@ -27,7 +27,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from drf_yasg import openapi
 
 from .serializer import (
@@ -36,16 +36,17 @@ from .serializer import (
     ConfirmarContrasenaEntrada, LoginGoogleEntrada,
 )
 from .models import Usuario, Agencia, Rol, UsuarioAgencia, RecuperarContrasena
-from .paginacion import PARAMETROS_LISTA, paginar, texto_busqueda
+from .paginacion import PARAMETRO_AGENCIA, PARAMETROS_LISTA, paginar, texto_busqueda
 from .permisos import (
-    ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, SoloPersonal,
-    agencias_de, es_admin, es_super, gestiona_agencia, prohibido, usuario_de,
+    MENSAJE_AGENCIA_DESACTIVADA, ROL_ADMIN, ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, SesionVigente, SoloPersonal,
+    agencia_desactivada, agencias_de, es_admin, es_super, filtrar_agencia_super, gestiona_agencia, prohibido, usuario_de,
 )
-from buses.models import Bus
+from buses.models import Bus, TipoBus, Viaje
 from destinos.imagenes import imagen_url
 from destinos.models import Hospedaje
 from pagos.models import Pago
 from paquetes.models import Paquete
+from reservas.models import reservas_activas
 
 
 def agencia_ids_de(usuario):
@@ -291,6 +292,9 @@ class LoginView(APIView):
                  "mensaje": "Usuario suspendido. Comunícate con tu agencia"},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if agencia_desactivada(usuario_negocio):
+            return Response({"message": MENSAJE_AGENCIA_DESACTIVADA, "mensaje": MENSAJE_AGENCIA_DESACTIVADA},
+                            status=status.HTTP_403_FORBIDDEN)
 
         auth_user = User.objects.filter(username__iexact=usuario_negocio.correo).first()
         if auth_user is None:
@@ -535,6 +539,8 @@ class LoginGoogleView(APIView):
         if not usuario.activo:
             return Response({'message': 'Usuario suspendido. Comunícate con tu agencia'},
                             status=status.HTTP_403_FORBIDDEN)
+        if agencia_desactivada(usuario):
+            return Response({'message': MENSAJE_AGENCIA_DESACTIVADA}, status=status.HTTP_403_FORBIDDEN)
         return Response(emitir_sesion(usuario))
 
 ##################################################################################################
@@ -567,7 +573,7 @@ class RolView(APIView):
 
 class UsuarioView(APIView):
     # El registro desde la app es público (queda como cliente); el resto se revisa por rol.
-    permission_classes = [AllowAny]
+    permission_classes = [SesionVigente]
     # JSON como siempre, o multipart/form-data cuando el conductor trae su licencia en PDF.
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
@@ -665,12 +671,13 @@ class UsuarioView(APIView):
         operation_description=(
             "Obtiene los usuarios visibles para quien consulta. Filtros opcionales: "
             "?rol_id= (3 conductores, 2 administradores; con 3 cada conductor trae bus_id, placa y viajes_pendientes), "
-            "?agencia_id=, ?search=, ?page= y ?page_size=. Cada usuario trae tiene_licencia_pdf y "
+            "?agencia_id= (solo superadmin; para el admin se ignora), ?search=, ?page= y ?page_size=. "
+            "Cada usuario trae tiene_licencia_pdf y "
             "licencia_pdf_url (solo visible para el superadmin o el admin de su agencia; si no, null)."
         ),
         manual_parameters=[
             openapi.Parameter("rol_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
-            openapi.Parameter("agencia_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+            PARAMETRO_AGENCIA,
         ] + PARAMETROS_LISTA,
         responses={200: UsuarioEntrada()}
     )
@@ -686,9 +693,7 @@ class UsuarioView(APIView):
         params = request.query_params
         if str(params.get("rol_id", "")).isdigit():
             usuariolista = usuariolista.filter(rol_id=params["rol_id"])
-        if str(params.get("agencia_id", "")).isdigit():
-            de_la_agencia = UsuarioAgencia.objects.filter(agencia_id=params["agencia_id"]).values_list("usuario_id", flat=True)
-            usuariolista = usuariolista.filter(id__in=de_la_agencia)
+        usuariolista = filtrar_agencia_super(request, usuariolista, "usuarioagencia__agencia_id")
         texto = texto_busqueda(request)
         if texto:
             usuariolista = usuariolista.filter(
@@ -857,7 +862,7 @@ class DashboardResumenView(APIView):
         cantidad_paquetes = Paquete.objects.filter(agencia_id__in=agencia_ids).count()
         cantidad_buses = Bus.objects.filter(agencia_id__in=agencia_ids).count()
         cantidad_hospedajes = Hospedaje.objects.filter(
-            destino__paquetedestino__paquete__agencia_id__in=agencia_ids
+            destinos__paquetedestino__paquete__agencia_id__in=agencia_ids
         ).distinct().count()
 
         zona_horaria = ZoneInfo("America/Bogota")
@@ -943,105 +948,187 @@ class DashboardResumenView(APIView):
 
 
 ##################################################################################################
+def resumen_de_agencia(agencia, hoy):
+    """Totales de una agencia para el inicio del superadmin."""
+    ingresos = Pago.objects.filter(estado="aprobado", reserva__paquete__agencia=agencia).aggregate(total=Sum("precio"))
+    return {
+        "id": agencia.id,
+        "nombre": agencia.nombre,
+        "correo": agencia.correo,
+        "activo": agencia.activo,
+        "buses": Bus.objects.filter(agencia=agencia).count(),
+        "conductores": UsuarioAgencia.objects.filter(agencia=agencia, usuario__rol_id=ROL_CONDUCTOR).count(),
+        "paquetes": Paquete.objects.filter(agencia=agencia).count(),
+        "viajes_mes": Viaje.objects.filter(bus__agencia=agencia, fecha__year=hoy.year, fecha__month=hoy.month).count(),
+        "reservas": reservas_activas().filter(paquete__agencia=agencia).count(),
+        "ingresos_aprobados": str(ingresos["total"] or Decimal("0.00")),
+    }
+
+
+class ResumenAgenciasView(APIView):
+    @swagger_auto_schema(
+        operation_description=(
+            "Totales de cada agencia, también las desactivadas. Solo superadmin (403). viajes_mes: viajes del mes "
+            "actual en hora de Colombia. reservas: las vigentes (ni canceladas ni vencidas). ingresos_aprobados: "
+            "suma histórica de los pagos aprobados."
+        ),
+        responses={
+            200: openapi.Response("Una fila por agencia", openapi.Schema(
+                type=openapi.TYPE_ARRAY,
+                items=openapi.Schema(type=openapi.TYPE_OBJECT, properties={
+                    "id": openapi.Schema(type=openapi.TYPE_INTEGER),
+                    "nombre": openapi.Schema(type=openapi.TYPE_STRING),
+                    "correo": openapi.Schema(type=openapi.TYPE_STRING),
+                    "activo": openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                    "buses": openapi.Schema(type=openapi.TYPE_INTEGER),
+                    "conductores": openapi.Schema(type=openapi.TYPE_INTEGER),
+                    "paquetes": openapi.Schema(type=openapi.TYPE_INTEGER),
+                    "viajes_mes": openapi.Schema(type=openapi.TYPE_INTEGER),
+                    "reservas": openapi.Schema(type=openapi.TYPE_INTEGER),
+                    "ingresos_aprobados": openapi.Schema(type=openapi.TYPE_STRING, example="150000.00"),
+                }),
+            )),
+            401: "Sin sesión",
+            403: "Solo superadmin",
+        },
+    )
+    def get(self, request):
+        if not es_super(usuario_de(request)):
+            return prohibido("Solo el superadministrador consulta el resumen de agencias")
+        hoy = timezone.localtime(timezone.now(), ZoneInfo("America/Bogota")).date()
+        return Response([resumen_de_agencia(agencia, hoy) for agencia in Agencia.objects.order_by("id")])
+
+
+def agencia_json(agencia):
+    return {
+        "id": agencia.id,
+        "nombre": agencia.nombre,
+        "nit": agencia.nit,
+        "direccion": agencia.direccion,
+        "telefono": agencia.telefono,
+        "correo": agencia.correo,
+        "activo": agencia.activo,
+    }
+
+
+def leer_agencia(datos, parcial=False):
+    """(datos validados, error 400). Sin esto un POST o PUT incompleto terminaba en error 500."""
+    entrada = AgenciaEntrada(data=datos, partial=parcial)
+    if entrada.is_valid():
+        return entrada.validated_data, None
+    campo, errores = next(iter(entrada.errors.items()))
+    return None, Response({"message": f"{campo}: {errores[0]}"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+def cerrar_sesiones_de_agencia(agencia):
+    """Al desactivar: revoca los refresh de su personal que ya no tenga otra agencia activa."""
+    for relacion in UsuarioAgencia.objects.filter(agencia=agencia).select_related("usuario"):
+        if agencia_desactivada(relacion.usuario):
+            auth_user = User.objects.filter(username__iexact=relacion.usuario.correo).first()
+            if auth_user:
+                revocar_sesiones(auth_user)
+
+
 class AgenciaView(APIView):
     permission_classes = [LecturaPublica]
 
     @swagger_auto_schema(
-        operation_description="Crea una nueva agencia",
+        operation_description="Crea una nueva agencia. Solo superadmin (403). 400 si falta un dato o no es válido.",
         request_body=AgenciaEntrada,
-        responses={201: MensajeSalida}
+        responses={200: MensajeSalida, 400: "Datos inválidos", 403: "Solo superadmin"}
     )
     def post(self, request):
         if not es_super(usuario_de(request)):
             return prohibido("Solo el superadministrador crea agencias")
-        nombre = request.data.get('nombre')
-        nit = request.data.get('nit')
-        direccion = request.data.get('direccion')
-        telefono = request.data.get('telefono')
-        correo = request.data.get('correo')
-
-        Agencia.objects.create(
-            nombre=nombre,
-            nit=nit,
-            direccion=direccion,
-            telefono=telefono,
-            correo=correo
-        )
+        datos, error = leer_agencia(request.data)
+        if error:
+            return error
+        Agencia.objects.create(**datos)
         return Response({'message': 'Agencia creada exitosamente'})
 
     @swagger_auto_schema(
-        operation_description="Listar Agencias"
+        operation_description=(
+            "Listar agencias. Superadmin: todas, también las desactivadas. Admin: solo las suyas. "
+            "Cliente, conductor y sin sesión: solo las activas."
+        )
     )
     def get(self, request):
-        agenciaLista = Agencia.objects.all()
-        lista = []
-        for agencia in agenciaLista:
-            lista.append({
-                "id": agencia.id,
-                "nombre": agencia.nombre,
-                "nit": agencia.nit,
-                "direccion": agencia.direccion,
-                "telefono": agencia.telefono,
-                "correo": agencia.correo,
-            })
-        return Response(lista)
+        yo = usuario_de(request)
+        agenciaLista = Agencia.objects.order_by("id")
+        if es_admin(yo):
+            agenciaLista = agenciaLista.filter(id__in=agencias_de(yo))
+        elif not es_super(yo):
+            agenciaLista = agenciaLista.filter(activo=True)
+        return Response([agencia_json(agencia) for agencia in agenciaLista])
 
 
 class AgenciaIdView(APIView):
     permission_classes = [LecturaPublica]
 
     @swagger_auto_schema(
-        operation_description="Actualizar Agencia",
-        request_body=AgenciaEntrada
+        operation_description=(
+            "Actualizar agencia; los campos que no se envían se conservan. Superadmin: cualquiera. "
+            "Admin: solo la suya (403) y sin cambiar 'activo' (403). Con activo=false su personal no puede "
+            "entrar, se cierran sus sesiones y sus paquetes salen del catálogo; las reservas se conservan."
+        ),
+        request_body=AgenciaEntrada,
+        responses={200: MensajeSalida, 400: "Datos inválidos", 403: "Sin permiso", 404: "No existe"}
     )
     def put(self, request, id):
         agenciaB = get_object_or_404(Agencia, id=id)
-        if not gestiona_agencia(usuario_de(request), agenciaB.id):
+        yo = usuario_de(request)
+        if not gestiona_agencia(yo, agenciaB.id):
             return prohibido()
-        agenciaB.nombre = request.data.get("nombre")
-        agenciaB.nit = request.data.get("nit")
-        agenciaB.direccion = request.data.get("direccion")
-        agenciaB.telefono = request.data.get("telefono")
-        agenciaB.correo = request.data.get("correo")
+        datos, error = leer_agencia(request.data, parcial=True)
+        if error:
+            return error
+        if "activo" in datos and not es_super(yo):
+            return prohibido("Solo el superadministrador activa o desactiva agencias")
+        se_desactiva = agenciaB.activo and datos.get("activo") is False
+        for campo, valor in datos.items():
+            setattr(agenciaB, campo, valor)
         agenciaB.save()
+        if se_desactiva:
+            cerrar_sesiones_de_agencia(agenciaB)
         return Response({"mensaje": "Agencia actualizada"})
 
     @swagger_auto_schema(
-        operation_description="Eliminar agencia"
+        operation_description=(
+            "Eliminar agencia. Solo superadmin (403) y solo si está vacía: si tiene buses, tipos de bus, paquetes "
+            "o usuarios responde 409 con 'totales' y no borra nada. Para retirarla usa PUT con activo=false."
+        ),
+        responses={200: MensajeSalida, 403: "Solo superadmin", 404: "No existe", 409: "La agencia tiene datos"}
     )
     def delete(self, request, id):
         agenciaEliminar = get_object_or_404(Agencia, id=id)
         if not es_super(usuario_de(request)):
             return prohibido("Solo el superadministrador elimina agencias")
-        try:
-            agenciaEliminar.delete()
-        except ProtectedError:
-            from buses.models import Bus  # imports locales para evitar ciclos entre apps
-            from paquetes.models import Paquete
-
-            paquetes = Paquete.objects.filter(agencia=agenciaEliminar).count()
-            buses = Bus.objects.filter(agencia=agenciaEliminar).count()
-            usuarios = UsuarioAgencia.objects.filter(agencia=agenciaEliminar).count()
+        totales = {
+            "buses": Bus.objects.filter(agencia=agenciaEliminar).count(),
+            "tipos_bus": TipoBus.objects.filter(agencia=agenciaEliminar).count(),
+            "paquetes": Paquete.objects.filter(agencia=agenciaEliminar).count(),
+            "usuarios": UsuarioAgencia.objects.filter(agencia=agenciaEliminar).count(),
+        }
+        if any(totales.values()):
             return Response(
-                {"message": f"La agencia tiene {paquetes} paquetes, {buses} buses y {usuarios} usuarios con datos asociados "
-                            "(por ejemplo reservas); elimínalos primero."},
+                {"message": f"La agencia tiene {totales['buses']} buses, {totales['tipos_bus']} tipos de bus, "
+                            f"{totales['paquetes']} paquetes y {totales['usuarios']} usuarios. "
+                            "Desactívala en lugar de eliminarla.",
+                 "totales": totales},
                 status=status.HTTP_409_CONFLICT,
             )
+        agenciaEliminar.delete()
         return Response({"mensaje": "Agencia eliminada"})
 
     @swagger_auto_schema(
-        operation_description="Listar Agencia"
+        operation_description="Consultar agencia. Admin: solo la suya (403). Los demás roles: cualquiera."
     )
     def get(self, request, id):
         registroEncontrado = get_object_or_404(Agencia, id=id)
-        return Response({
-            "id": registroEncontrado.id,
-            "nombre": registroEncontrado.nombre,
-            "nit": registroEncontrado.nit,
-            "direccion": registroEncontrado.direccion,
-            "telefono": registroEncontrado.telefono,
-            "correo": registroEncontrado.correo,
-        })
+        yo = usuario_de(request)
+        if es_admin(yo) and not gestiona_agencia(yo, registroEncontrado.id):
+            return prohibido()
+        return Response(agencia_json(registroEncontrado))
 
 
 class AgenciaNitView(APIView):

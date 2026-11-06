@@ -70,7 +70,8 @@ class AgenciaEntrada(serializers.Serializer):
     direccion = serializers.CharField(max_length=255)
     telefono = serializers.CharField(max_length=20)
     correo = serializers.EmailField(max_length=150)
-    
+    activo = serializers.BooleanField(required=False, help_text="Solo el superadministrador lo cambia")
+
 class UsuarioAgenciaEntrada(serializers.Serializer):
     usuario_id = serializers.PrimaryKeyRelatedField(
         source='usuario',

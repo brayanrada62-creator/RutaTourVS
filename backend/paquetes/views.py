@@ -22,9 +22,10 @@ from .serializer import (
     PaqueteRegistrarEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida, PaqueteValidar
 )
 from .models import Paquete, PaqueteDestino, Itinerario, ordenar_itinerario
-from usuarios.paginacion import PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
+from usuarios.paginacion import PARAMETRO_AGENCIA, PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
 from usuarios.permisos import (
-    LecturaPublica, agencia_para_guardar, filtrar_catalogo, gestiona_agencia, prohibido, usuario_de,
+    LecturaPublica, agencia_para_guardar, es_admin, es_cliente_de_paquete, filtrar_agencia_super, filtrar_catalogo,
+    gestiona_agencia, paquetes_reservados, prohibido, usuario_de,
 )
 
 
@@ -349,21 +350,24 @@ class PaqueteView(VistaCatalogo):
 
     @swagger_auto_schema(
         operation_description=(
-            "Listar paquetes con destinos e imagen. Un cliente registrado por una agencia "
-            "solo ve los de esa agencia. Opcional: ?search=, ?destino_id=, ?estado=, ?agencia_id=, "
+            "Listar paquetes con destinos e imagen. Superadmin: todos. Admin: solo los de su agencia "
+            "(su ?agencia_id= se ignora). Un cliente registrado por una agencia solo ve los de esa agencia. "
+            "Las agencias desactivadas salen del catálogo. Opcional: ?search=, ?destino_id=, ?estado=, ?agencia_id=, "
             "?precio_min=, ?precio_max=, ?fecha= (AAAA-MM-DD, desde hoy), ?page= y ?page_size="
         ),
         manual_parameters=PARAMETROS_LISTA + [
             openapi.Parameter("fecha", openapi.IN_QUERY, type=openapi.TYPE_STRING, example="2026-11-02"),
             openapi.Parameter("destino_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
             openapi.Parameter("estado", openapi.IN_QUERY, type=openapi.TYPE_STRING),
-            openapi.Parameter("agencia_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+            openapi.Parameter("agencia_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER,
+                              description="Filtra por agencia. Para el admin se ignora."),
             openapi.Parameter("precio_min", openapi.IN_QUERY, type=openapi.TYPE_NUMBER),
             openapi.Parameter("precio_max", openapi.IN_QUERY, type=openapi.TYPE_NUMBER),
         ],
     )
     def get(self, request):
-        paqueteLista = filtrar_catalogo(usuario_de(request), Paquete.objects.all())
+        yo = usuario_de(request)
+        paqueteLista = filtrar_catalogo(yo, Paquete.objects.all())
         texto = texto_busqueda(request)
         if texto:
             paqueteLista = paqueteLista.filter(
@@ -378,7 +382,7 @@ class PaqueteView(VistaCatalogo):
         if estado:
             paqueteLista = paqueteLista.filter(estado__iexact=estado)
         agencia_id = entero_query(request, "agencia_id")
-        if agencia_id:
+        if agencia_id and not es_admin(yo):
             paqueteLista = paqueteLista.filter(agencia_id=agencia_id)
         for campo, lookup in (("precio_min", "precio__gte"), ("precio_max", "precio__lte")):
             crudo = request.query_params.get(campo)
@@ -448,10 +452,16 @@ class PaqueteIdView(VistaCatalogo):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     @swagger_auto_schema(
-        operation_description="Listar paquete por id, con destinos e imágenes"
+        operation_description=(
+            "Listar paquete por id, con destinos e imágenes. Admin: solo los de su agencia (404). "
+            "El cliente con reserva lo sigue viendo aunque la agencia se desactive."
+        )
     )
     def get(self, request, id):
-        registroEncontrado = filtrar_catalogo(usuario_de(request), Paquete.objects.filter(id=id)).first()
+        yo = usuario_de(request)
+        registroEncontrado = filtrar_catalogo(yo, Paquete.objects.filter(id=id)).first()
+        if not registroEncontrado and es_cliente_de_paquete(yo, id):
+            registroEncontrado = Paquete.objects.filter(id=id).first()
         if not registroEncontrado:
             return Response({"mensaje": "Paquete no encontrado"}, status=status.HTTP_404_NOT_FOUND)
         return Response(paquete_json(registroEncontrado, request))
@@ -539,13 +549,14 @@ def leer_paquete_destino(request):
 class PaqueteDestinoView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description=(
-            "Listar relaciones paquete-destino. Opcional: ?paquete_id=. Un cliente ligado a una agencia "
-            "solo ve las de esa agencia (igual que /paquete/)."
+            "Listar relaciones paquete-destino. Opcional: ?paquete_id= y ?agencia_id= (solo superadmin). "
+            "El admin y el cliente ligado a una agencia solo ven las de esa agencia (igual que /paquete/)."
         ),
-        manual_parameters=[openapi.Parameter("paquete_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER)],
+        manual_parameters=[openapi.Parameter("paquete_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+                           PARAMETRO_AGENCIA],
     )
     def get(self, request):
-        relLista = relaciones_visibles(usuario_de(request))
+        relLista = filtrar_agencia_super(request, relaciones_visibles(usuario_de(request)), "paquete__agencia_id")
         paquete_id = entero_query(request, "paquete_id")
         if paquete_id:
             relLista = relLista.filter(paquete_id=paquete_id)
@@ -633,17 +644,25 @@ def leer_parada(datos, parcial=False):
     return entrada.validated_data, None
 
 
+def itinerarios_visibles(yo):
+    """Paradas de los paquetes del catálogo del usuario, más las de los paquetes que el cliente ya reservó."""
+    catalogo = filtrar_catalogo(yo, Itinerario.objects.all(), "paquete__agencia_id")
+    return Itinerario.objects.filter(Q(id__in=catalogo.values("id")) | Q(paquete_id__in=paquetes_reservados(yo)))
+
+
 class ItinerarioView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description=(
-            "Listar itinerarios ordenados por día y hora. Opcional: ?paquete_id=, ?search=, ?page= y ?page_size="
+            "Listar itinerarios ordenados por día y hora. El admin solo ve los de su agencia. "
+            "Opcional: ?paquete_id=, ?agencia_id= (solo superadmin), ?search=, ?page= y ?page_size="
         ),
         manual_parameters=PARAMETROS_LISTA + [
             openapi.Parameter("paquete_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+            PARAMETRO_AGENCIA,
         ],
     )
     def get(self, request):
-        itinerarioLista = Itinerario.objects.all()
+        itinerarioLista = filtrar_agencia_super(request, itinerarios_visibles(usuario_de(request)), "paquete__agencia_id")
         texto = texto_busqueda(request)
         if texto:
             itinerarioLista = itinerarioLista.filter(
@@ -700,7 +719,7 @@ class ItinerarioIdView(VistaCatalogo):
         operation_description="Listar itinerario por id"
     )
     def get(self, request, id):
-        registroEncontrado = Itinerario.objects.filter(id=id).first()
+        registroEncontrado = itinerarios_visibles(usuario_de(request)).filter(id=id).first()
         if registroEncontrado is None:
             return Response({"mensaje": "Itinerario no encontrado"}, status=status.HTTP_404_NOT_FOUND)
         return Response({
@@ -764,7 +783,7 @@ class ItinerarioTituloView(VistaCatalogo):
         operation_description="Busca itinerarios por título"
     )
     def get(self, request, titulo):
-        itinerarioLista = Itinerario.objects.filter(titulo__icontains=titulo)
+        itinerarioLista = itinerarios_visibles(usuario_de(request)).filter(titulo__icontains=titulo)
         lista = []
         for itinerario in itinerarioLista:
             lista.append({
@@ -785,7 +804,7 @@ class ItinerarioLugarView(VistaCatalogo):
         operation_description="Busca itinerarios por lugar"
     )
     def get(self, request, lugar):
-        itinerarioLista = Itinerario.objects.filter(lugar__icontains=lugar)
+        itinerarioLista = itinerarios_visibles(usuario_de(request)).filter(lugar__icontains=lugar)
         lista = []
         for itinerario in itinerarioLista:
             lista.append({
