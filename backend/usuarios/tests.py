@@ -1,5 +1,9 @@
 from django.contrib.auth.hashers import check_password
 from django.contrib.auth.models import User
+import json
+from unittest.mock import patch
+
+from django.core.mail import send_mail
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -748,3 +752,26 @@ class UsuarioAgenciaRutasTest(TestCase):
         self.assertEqual(self.sup.delete("/api/usuario-agencia/").status_code, 405)
         self.assertEqual(self.sup.get("/api/usuario-agencia/1/").status_code, 405)
         self.assertEqual(self.sup.post("/api/usuario-agencia/1/", {}, format="json").status_code, 405)
+
+
+@override_settings(EMAIL_BACKEND="usuarios.correo.ResendBackend", RESEND_API_KEY="clave-de-prueba")
+class ResendBackendTest(TestCase):
+    """El correo sale por HTTPS a Resend; aquí se simula la respuesta, no se envía nada."""
+
+    @patch("usuarios.correo.urllib.request.urlopen")
+    def test_envia_a_la_api(self, urlopen):
+        self.assertEqual(send_mail("Asunto", "Cuerpo", "RutaTour <no@rt.co>", ["cliente@rt.co"]), 1)
+        peticion = urlopen.call_args.args[0]
+        self.assertEqual(peticion.full_url, "https://api.resend.com/emails")
+        self.assertEqual(peticion.get_header("Authorization"), "Bearer clave-de-prueba")
+        self.assertEqual(json.loads(peticion.data), {
+            "from": "RutaTour <no@rt.co>", "to": ["cliente@rt.co"], "subject": "Asunto", "text": "Cuerpo",
+        })
+
+    @patch("usuarios.correo.urllib.request.urlopen", side_effect=OSError("sin red"))
+    def test_un_fallo_no_cambia_la_respuesta_de_recuperar(self, urlopen):
+        e = Escenario()
+        with self.assertLogs("usuarios.views", level="ERROR"):
+            r = Escenario.cliente_http().post("/api/password/reset/", {"correo": e.cliente.correo}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(urlopen.called)

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import secrets
 import urllib.error
 import urllib.parse
@@ -48,6 +49,9 @@ from destinos.models import Hospedaje
 from pagos.models import Pago
 from paquetes.models import Paquete
 from reservas.models import reservas_activas
+
+
+logger = logging.getLogger(__name__)
 
 
 def agencia_ids_de(usuario):
@@ -442,7 +446,8 @@ class PasswordResetView(APIView):
                 fail_silently=False,
             )
         except Exception:
-            pass
+            # La respuesta sigue igual para no revelar si el correo existe, pero el fallo queda en los logs.
+            logger.exception("No se pudo enviar el correo de recuperación")
 
         return Response(respuesta)
 
