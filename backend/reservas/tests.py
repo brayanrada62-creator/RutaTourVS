@@ -589,3 +589,76 @@ class ListaPasajerosAdminTest(TestCase):
         admin_b = Escenario.cliente_http(self.e.admin_b)
         self.assertEqual(admin_b.delete(f"/api/reserva/{self.aprobada.id}/").status_code, 403)
         self.assertEqual(Reserva.objects.get(id=self.aprobada.id).estado, "pendiente")
+
+
+class ChatEstadoViajeTest(TestCase):
+    """RUT-60 y RUT-62: chat grupal por salida; se escribe en PROGRAMADO y EN_CURSO, no en COMPLETADO."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.v = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a,
+                                      fecha=hoy_colombia() + timedelta(days=1), hora="06:30")
+        self.otro_viaje = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a2,
+                                               fecha=hoy_colombia() + timedelta(days=1), hora="06:30")
+        Bus_Conductor.objects.create(bus=self.e.bus_a, conductor=self.e.cond_a)
+        Reserva.objects.create(fecha_reserva=timezone.now(), usuario=self.e.cliente, paquete=self.e.paq_a, viaje=self.v)
+        Reserva.objects.create(fecha_reserva=timezone.now(), usuario=self.e.otro_cliente, paquete=self.e.paq_a,
+                               viaje=self.otro_viaje)
+        self.cliente = Escenario.cliente_http(self.e.cliente)
+        self.conductor = Escenario.cliente_http(self.e.cond_a)
+
+    def enviar(self, c, viaje, texto="hola"):
+        return c.post("/api/chat/", {"viaje_id": viaje.id, "texto": texto}, format="json")
+
+    def poner(self, estado):
+        Viaje.objects.filter(id=self.v.id).update(estado=estado)
+
+    def test_cliente_y_conductor_escriben_programado_y_en_curso(self):
+        for estado in (Viaje.PROGRAMADO, Viaje.EN_CURSO):
+            self.poner(estado)
+            self.assertEqual(self.enviar(self.cliente, self.v, f"cliente {estado}").status_code, 201)
+            self.assertEqual(self.enviar(self.conductor, self.v, f"conductor {estado}").status_code, 201)
+        # El mensaje del cliente queda asociado al paquete del viaje (criterio RUT-60).
+        self.assertTrue(ChatMensaje.objects.filter(viaje=self.v, paquete=self.e.paq_a, usuario=self.e.cliente).exists())
+
+    def test_conductor_ve_al_cliente_y_el_cliente_ve_al_conductor(self):
+        self.enviar(self.cliente, self.v, "¿a qué hora salimos?")
+        self.enviar(self.conductor, self.v, "a las 6:30")
+        textos_conductor = [m["texto"] for m in self.conductor.get(f"/api/chat/?viaje_id={self.v.id}").json()]
+        textos_cliente = [m["texto"] for m in self.cliente.get(f"/api/chat/?viaje_id={self.v.id}").json()]
+        self.assertEqual(textos_conductor, ["¿a qué hora salimos?", "a las 6:30"])
+        self.assertEqual(textos_cliente, ["¿a qué hora salimos?", "a las 6:30"])
+
+    def test_viaje_completado_no_recibe_mensajes_pero_se_lee(self):
+        self.enviar(self.cliente, self.v, "antes de llegar")
+        self.poner(Viaje.COMPLETADO)
+        for c in (self.cliente, self.conductor):
+            r = self.enviar(c, self.v, "después")
+            self.assertEqual(r.status_code, 409)
+            self.assertEqual(r.json()["motivo"], "viaje_finalizado")
+        self.assertEqual(ChatMensaje.objects.count(), 1)
+        self.assertEqual(self.cliente.get(f"/api/chat/?viaje_id={self.v.id}").status_code, 200)
+
+    def test_viaje_ajeno_403_y_no_guarda(self):
+        # Conductor escribiendo en una salida de otro bus; cliente y admin de otra salida/agencia.
+        self.assertEqual(self.enviar(self.conductor, self.otro_viaje).status_code, 403)
+        self.assertEqual(self.enviar(self.cliente, self.otro_viaje).status_code, 403)
+        self.assertEqual(self.enviar(Escenario.cliente_http(self.e.cond_b), self.v).status_code, 403)
+        self.assertEqual(self.enviar(Escenario.cliente_http(self.e.admin_b), self.v).status_code, 403)
+        self.assertEqual(ChatMensaje.objects.count(), 0)
+
+    def test_403_antes_que_409(self):
+        # A quien no es del viaje no se le revela que terminó.
+        self.poner(Viaje.COMPLETADO)
+        self.assertEqual(self.enviar(Escenario.cliente_http(self.e.cond_b), self.v).status_code, 403)
+
+    def test_mensaje_vacio_400(self):
+        self.assertEqual(self.enviar(self.conductor, self.v, "   ").status_code, 400)
+        self.assertEqual(ChatMensaje.objects.count(), 0)
+
+    def test_reserva_sin_salida_solo_lectura(self):
+        r = self.cliente.post("/api/chat/", {"paquete_id": self.e.paq_a.id, "texto": "hola"}, format="json")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.json()["motivo"], "sin_salida")
+        self.assertEqual(self.cliente.get(f"/api/chat/?paquete_id={self.e.paq_a.id}").status_code, 200)
+        self.assertEqual(ChatMensaje.objects.count(), 0)

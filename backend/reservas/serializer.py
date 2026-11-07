@@ -56,6 +56,12 @@ class GpsPuntoEntrada(serializers.Serializer):
     velocidad = serializers.DecimalField(max_digits=6, decimal_places=2)
     fecha = serializers.DateTimeField(required=False, allow_null=True)
     
+class ChatEntrada(serializers.Serializer):
+    """POST /chat/ (RUT-60 y RUT-62). El autor es quien tiene la sesión: no se envía."""
+    viaje_id = serializers.IntegerField(help_text="Salida del chat. Solo PROGRAMADO o EN_CURSO (409 si COMPLETADO)")
+    texto = serializers.CharField(max_length=400, help_text="No puede ir vacío (400). Máximo 400 caracteres")
+
+
 class NovedadEntrada(serializers.Serializer):
     paquete_id = serializers.IntegerField(required=False, allow_null=True)
     tipo = serializers.CharField(max_length=80, required=False, allow_blank=True)

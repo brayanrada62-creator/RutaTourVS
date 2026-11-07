@@ -283,7 +283,13 @@ class ReservasPagosTest(TestCase):
         self.assertEqual([m["texto"] for m in c.get(f"/api/chat/?paquete_id={self.e.paq_a.id}").json()], ["hola A"])
         self.assertEqual(c.get(f"/api/chat/?paquete_id={self.e.paq_b.id}").status_code, 403)
         self.assertEqual(c.get("/api/chat/").status_code, 400)
-        enviado = c.post("/api/chat/", {"paquete_id": self.e.paq_a.id, "usuario_id": self.e.cond_a.id, "texto": "x"}, format="json")
+        # RUT-60: por paquete (reserva sin salida) el chat es solo de lectura.
+        sin_salida = c.post("/api/chat/", {"paquete_id": self.e.paq_a.id, "texto": "x"}, format="json")
+        self.assertEqual(sin_salida.status_code, 409)
+        # Con su salida sí escribe, y el autor lo pone el servidor aunque el body diga otro usuario.
+        Reserva.objects.create(fecha_reserva="2026-10-20", usuario=self.e.cliente, paquete=self.e.paq_a, viaje=self.salida)
+        enviado = c.post("/api/chat/", {"viaje_id": self.salida.id, "usuario_id": self.e.cond_a.id, "texto": "x"},
+                         format="json")
         self.assertEqual(enviado.status_code, 201)
         self.assertEqual(ChatMensaje.objects.get(texto="x").usuario_id, self.e.cliente.id)
 

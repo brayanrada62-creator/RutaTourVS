@@ -5,7 +5,7 @@ from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 
 from .serializer import (
-    AsientoReservaEntrada, MensajeSalida, PaqueteAbordarEntrada, ReservaEditarEntrada, ReservaEntrada,
+    AsientoReservaEntrada, ChatEntrada, MensajeSalida, PaqueteAbordarEntrada, ReservaEditarEntrada, ReservaEntrada,
 )
 from .models import (
     ESTADOS_QUE_LIBERAN, ESTADOS_RESERVA, AsientoReserva, ChatMensaje, GpsPunto, Novedad, Reserva,
@@ -922,11 +922,33 @@ def chat_json(m):
             "texto": m.texto, "fecha": m.fecha}
 
 
+CHAT_ABIERTO = (Viaje.PROGRAMADO, Viaje.EN_CURSO)
+
+
 class ChatView(APIView):
-    @swagger_auto_schema(operation_description=(
-        "Mensajes de un viaje (?viaje_id=) o de un paquete (?paquete_id=), con autor y rol_id. "
-        "Un cliente solo ve sus mensajes y los del conductor o la agencia."
-    ))
+    """Chat de una salida (RUT-60 cliente, RUT-62 conductor): un hilo grupal por viaje.
+    Cada cliente ve sus mensajes y los del conductor y la agencia, nunca los de otros pasajeros."""
+
+    @swagger_auto_schema(
+        operation_description=(
+            "Mensajes de un viaje (?viaje_id=), con autor y rol_id, del más antiguo al más nuevo. "
+            "?paquete_id= solo para reservas antiguas sin salida (solo lectura). "
+            "Un cliente solo ve sus mensajes y los del conductor o la agencia. "
+            "Pueden leer: la agencia del viaje, el conductor de su bus y los clientes con reserva vigente en esa salida."
+        ),
+        manual_parameters=[
+            openapi.Parameter("viaje_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER, description="Salida del chat"),
+            openapi.Parameter("paquete_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER,
+                              description="Solo reservas antiguas sin salida"),
+        ],
+        responses={
+            200: "Lista de mensajes: id, paquete_id, viaje_id, usuario_id, autor, rol_id, texto, fecha",
+            400: "Falta viaje_id o paquete_id",
+            401: "Sin sesión",
+            403: "El viaje no es tuyo (otra agencia, otro bus o cliente de otra salida)",
+            404: "El viaje no existe",
+        },
+    )
     def get(self, request):
         yo = usuario_de(request)
         viaje_id = request.query_params.get("viaje_id")
@@ -947,21 +969,41 @@ class ChatView(APIView):
             lista = lista.filter(Q(usuario=yo) | ~Q(usuario__rol_id=ROL_CLIENTE))
         return Response([chat_json(m) for m in lista.select_related("usuario").order_by("fecha", "id")])
 
-    @swagger_auto_schema(operation_description="Enviar mensaje: {viaje_id o paquete_id, texto}. El autor es quien tiene la sesión.")
+    @swagger_auto_schema(
+        operation_description=(
+            "Enviar un mensaje al chat de la salida: {viaje_id, texto}. El autor es quien tiene la sesión. "
+            "Solo con el viaje PROGRAMADO o EN_CURSO: si está COMPLETADO responde 409 y no guarda nada. "
+            "Las reservas antiguas sin salida (paquete_id) solo leen el chat (409). "
+            "403 si el viaje no es tuyo: otra agencia, un bus que no es el tuyo o un cliente de otra salida."
+        ),
+        request_body=ChatEntrada,
+        responses={
+            201: "Mensaje guardado: id, paquete_id, viaje_id, usuario_id, autor, rol_id, texto, fecha",
+            400: "Texto vacío o falta viaje_id",
+            401: "Sin sesión",
+            403: "El viaje no es tuyo; no se guarda el mensaje",
+            404: "El viaje no existe",
+            409: "El viaje finalizó (estado COMPLETADO) o la reserva no tiene salida: el chat es solo de lectura",
+        },
+    )
     def post(self, request):
         yo = usuario_de(request)
-        viaje = None
-        if request.data.get("viaje_id"):
-            viaje, error = viaje_operativo(yo, request.data.get("viaje_id"))
-            if error:
-                return error
-            paquete_id = viaje.paquete_id
-        else:
-            paquete_id = request.data.get("paquete_id")
-            if not puede_ver_paquete_operativo(yo, paquete_id):
-                return prohibido()
+        if not request.data.get("viaje_id"):
+            if request.data.get("paquete_id"):
+                return Response({"message": "Tu reserva no tiene salida asignada: el chat es solo de lectura. "
+                                            "Comunícate con tu agencia", "motivo": "sin_salida"},
+                                status=status.HTTP_409_CONFLICT)
+            return Response({"message": "Indica el viaje (viaje_id)"}, status=status.HTTP_400_BAD_REQUEST)
+        # Primero el permiso (403): a quien no es del viaje no se le dice ni en qué estado está.
+        viaje, error = viaje_operativo(yo, request.data.get("viaje_id"))
+        if error:
+            return error
+        if viaje.estado not in CHAT_ABIERTO:
+            return Response({"message": "El viaje finalizó: el chat ya no recibe mensajes",
+                             "motivo": "viaje_finalizado", "estado": viaje.estado},
+                            status=status.HTTP_409_CONFLICT)
         texto = (request.data.get("texto") or "").strip()[:400]
         if not texto:
             return Response({"message": "Escribe un mensaje"}, status=status.HTTP_400_BAD_REQUEST)
-        m = ChatMensaje.objects.create(paquete_id=paquete_id, viaje=viaje, usuario_id=yo.id, texto=texto)
+        m = ChatMensaje.objects.create(paquete_id=viaje.paquete_id, viaje=viaje, usuario_id=yo.id, texto=texto)
         return Response(chat_json(m), status=status.HTTP_201_CREATED)
