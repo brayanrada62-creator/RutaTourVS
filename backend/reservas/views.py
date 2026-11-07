@@ -17,7 +17,7 @@ import re
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import Q
+from django.db.models import OuterRef, Q, Subquery
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
@@ -39,6 +39,30 @@ ESTADOS_ABORDAJE = ("PENDIENTE", "ABORDO", "AUSENTE")
 PARAMETRO_VIAJE = openapi.Parameter(
     "viaje_id", openapi.IN_QUERY, description="Solo las reservas de esta salida", type=openapi.TYPE_INTEGER,
 )
+PARAMETRO_PAGO = openapi.Parameter(
+    "pago", openapi.IN_QUERY, type=openapi.TYPE_STRING, enum=["aprobado"],
+    description="aprobado = solo los pasajeros cuyo ÚLTIMO pago está aprobado (los que pueden abordar)",
+)
+RESPUESTAS_PASAJEROS = {
+    200: "Lista de pasajeros: id, nombre, documento, detalle, codigo, asiento, estado, pago_estado, "
+         "puede_abordar, viaje_id, viaje_fecha, viaje_hora",
+    400: "viaje_id no es de este paquete o pago tiene un valor no válido",
+    401: "Sin sesión",
+    403: "El paquete o el viaje es de otra agencia",
+    404: "El paquete o el viaje no existe",
+}
+
+
+def con_pago_aprobado(request, reservas):
+    """(reservas, error). Con ?pago=aprobado deja solo las reservas cuyo último pago está aprobado.
+    Se usa el último pago, igual que estado_pago(): un pago aprobado y luego otro rechazado no aborda."""
+    valor = request.query_params.get("pago")
+    if valor is None:
+        return reservas, None
+    if valor != "aprobado":
+        return None, Response({"message": "pago solo acepta el valor 'aprobado'"}, status=status.HTTP_400_BAD_REQUEST)
+    ultimo = Pago.objects.filter(reserva=OuterRef("pk")).order_by("-id").values("estado")[:1]
+    return reservas.annotate(ultimo_pago=Subquery(ultimo)).filter(ultimo_pago="aprobado"), None
 
 
 def firma_reserva(reserva_id):
@@ -388,17 +412,22 @@ class ReservaIdView(APIView):
 
     @swagger_auto_schema(
         operation_description=(
-            "Cancelar la reserva: pasa a 'cancelada' y sus sillas quedan libres. No borra nada "
-            "(los pagos se conservan para la auditoría). Una reserva pagada solo la cancela la agencia."
-        )
+            "Cancelar la reserva: pasa a 'cancelada', sus sillas quedan libres y el pasajero sale de la lista "
+            "de pasajeros. No borra nada (los pagos se conservan para la auditoría). Solo la agencia del paquete "
+            "o el superadmin: el cliente no cancela por su cuenta, se comunica con la agencia (403)."
+        ),
+        responses={
+            200: "{mensaje, id}",
+            401: "Sin sesión",
+            403: "No es la agencia del paquete (incluye al cliente dueño de la reserva)",
+            404: "La reserva no existe",
+        },
     )
     def delete(self, request, id):
-        reserva = get_object_or_404(Reserva, id=id)
+        reserva = get_object_or_404(Reserva.objects.select_related("paquete"), id=id)
         yo = usuario_de(request)
-        pagada = Pago.objects.filter(reserva=reserva, estado="aprobado").exists()
-        es_dueno = reserva.usuario_id == yo.id and not pagada
-        if not (es_dueno or gestiona_agencia(yo, reserva.paquete.agencia_id)):
-            return prohibido("Una reserva pagada solo la puede cancelar la agencia")
+        if not gestiona_agencia(yo, reserva.paquete.agencia_id):
+            return prohibido("Solo la agencia puede cancelar la reserva. Comunícate con tu agencia")
         reserva.estado = "cancelada"
         reserva.save(update_fields=["estado"])
         return Response({"mensaje": "Reserva cancelada", "id": reserva.id})
@@ -505,9 +534,12 @@ class PaquetePasajerosView(APIView):
         operation_description=(
             "Pasajeros del paquete (solo la agencia o superadmin). Cada fila trae viaje_id, viaje_fecha y "
             "viaje_hora para no mezclar salidas; vienen ordenados por salida. Con ?viaje_id= solo los de esa "
-            "salida (400 si no es de este paquete). Las reservas antiguas sin salida traen viaje_id null."
+            "salida (400 si no es de este paquete). Las reservas antiguas sin salida traen viaje_id null. "
+            "Nunca incluye reservas canceladas ni vencidas. Con ?pago=aprobado solo los que pueden abordar "
+            "(lista de pasajeros del panel). 403 si el paquete es de otra agencia."
         ),
-        manual_parameters=[PARAMETRO_VIAJE],
+        manual_parameters=[PARAMETRO_VIAJE, PARAMETRO_PAGO],
+        responses=RESPUESTAS_PASAJEROS,
     )
     def get(self, request, paquete_id):
         agencia_id = agencia_del_paquete(paquete_id)
@@ -521,6 +553,9 @@ class PaquetePasajerosView(APIView):
             if viaje is None:
                 return Response({"message": "Esa salida no es de este paquete"}, status=status.HTTP_400_BAD_REQUEST)
             lista = reservas_del_viaje(viaje)
+        lista, error = con_pago_aprobado(request, lista)
+        if error:
+            return error
         lista = lista.select_related("paquete", "viaje").order_by("viaje__fecha", "viaje__hora", "id")
         return Response([pasajero_json(r) for r in lista])
 
@@ -634,13 +669,24 @@ def registrar_abordaje(request, reservas_validas, viaje):
 
 
 class ViajePasajerosView(APIView):
-    @swagger_auto_schema(operation_description="Pasajeros del viaje con su documento y el estado de su pago. Conductor del bus o admin.")
+    @swagger_auto_schema(
+        operation_description=(
+            "Pasajeros del viaje con su documento y el estado de su pago. Conductor del bus, admin de la agencia "
+            "o superadmin (403 si no). Sin ?pago= trae también los pendientes (la app los necesita para validar); "
+            "con ?pago=aprobado solo los que pueden abordar."
+        ),
+        manual_parameters=[PARAMETRO_PAGO],
+        responses=RESPUESTAS_PASAJEROS,
+    )
     def get(self, request, id):
         viaje = get_object_or_404(Viaje.objects.select_related("bus"), id=id)
         yo = usuario_de(request)
         if not (conductor_autorizado(yo, viaje) or gestiona_agencia(yo, viaje.bus.agencia_id)):
             return prohibido("Este viaje no pertenece a tu bus")
-        return Response([pasajero_json(r) for r in reservas_del_viaje(viaje).order_by("id")])
+        lista, error = con_pago_aprobado(request, reservas_del_viaje(viaje))
+        if error:
+            return error
+        return Response([pasajero_json(r) for r in lista.order_by("id")])
 
 
 class ViajeAbordarView(APIView):

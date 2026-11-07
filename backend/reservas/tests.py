@@ -36,8 +36,10 @@ class SillasRegresionTest(TestCase):
         self.assertEqual(c2.post("/api/asientoreserva/", {"asiento_id": self.s1.id, "reserva_id": r2}, format="json").status_code, 409)
         # nadie usa la reserva de otro para tomar sillas
         self.assertEqual(c2.post("/api/asientoreserva/", {"asiento_id": self.s2.id, "reserva_id": r1}, format="json").status_code, 403)
-        # el rollback de la app (cancelar su propia reserva sin pago) sigue permitido; ya no se borra
-        self.assertEqual(c2.delete(f"/api/reserva/{r2}/").status_code, 200)
+        # RUT-52: el cliente ya no cancela por su cuenta (se comunica con la agencia); la agencia sí
+        self.assertEqual(c2.delete(f"/api/reserva/{r2}/").status_code, 403)
+        self.assertEqual(Reserva.objects.get(id=r2).estado, "pendiente")
+        self.assertEqual(Escenario.cliente_http(self.e.admin_a).delete(f"/api/reserva/{r2}/").status_code, 200)
         self.assertEqual(Reserva.objects.get(id=r2).estado, "cancelada")
         self.assertEqual(AsientoReserva.objects.count(), 1)
 
@@ -510,3 +512,80 @@ class ReservaPorViajeTest(TestCase):
     def test_viaje_con_reservas_no_se_borra(self):
         self.reserva(self.v1)
         self.assertEqual(self.admin.delete(f"/api/viaje/{self.v1.id}/").status_code, 409)
+
+
+class ListaPasajerosAdminTest(TestCase):
+    """RUT-52 (HU-W-29): el administrador ve los pasajeros con pago aprobado de los viajes de SU agencia."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.v = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a,
+                                      fecha=hoy_colombia() + timedelta(days=5), hora="07:00")
+        self.otra_salida = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a2,
+                                                fecha=hoy_colombia() + timedelta(days=5), hora="09:00")
+        self.admin_a = Escenario.cliente_http(self.e.admin_a)
+        self.url = f"/api/paquete/{self.e.paq_a.id}/pasajeros/?viaje_id={self.v.id}&pago=aprobado"
+        self.aprobada = self.reserva(self.e.cliente, self.v, "aprobado")
+        self.pendiente = self.reserva(self.e.otro_cliente, self.v, "pendiente")
+        self.rechazada = self.reserva(self.e.otro_cliente, self.v, "rechazado")
+        self.sin_pago = self.reserva(self.e.otro_cliente, self.v, None)
+        self.de_otra_salida = self.reserva(self.e.cliente, self.otra_salida, "aprobado")
+
+    def reserva(self, usuario, viaje, pago):
+        r = Reserva.objects.create(fecha_reserva=timezone.now(), usuario=usuario, paquete=self.e.paq_a, viaje=viaje)
+        if pago:
+            Pago.objects.create(precio=1, reserva=r, fecha_pago=timezone.now(), estado=pago)
+        return r
+
+    def ids(self, respuesta):
+        self.assertEqual(respuesta.status_code, 200)
+        return {p["id"] for p in respuesta.json()}
+
+    def test_solo_pasajeros_con_pago_aprobado_de_esa_salida(self):
+        self.assertEqual(self.ids(self.admin_a.get(self.url)), {self.aprobada.id})
+
+    def test_cuenta_el_ultimo_pago(self):
+        # Un pago aprobado seguido de uno rechazado ya no puede abordar (misma regla que el abordaje).
+        Pago.objects.create(precio=1, reserva=self.aprobada, fecha_pago=timezone.now(), estado="rechazado")
+        Pago.objects.create(precio=1, reserva=self.pendiente, fecha_pago=timezone.now(), estado="aprobado")
+        self.assertEqual(self.ids(self.admin_a.get(self.url)), {self.pendiente.id})
+
+    def test_sin_filtro_sigue_trayendo_todas_las_vigentes(self):
+        # La app del conductor no se rompe: sin ?pago= trae también pendientes y sin pago.
+        conductor = Escenario.cliente_http(self.e.cond_a)
+        Bus_Conductor.objects.create(bus=self.e.bus_a, conductor=self.e.cond_a)
+        todas = {self.aprobada.id, self.pendiente.id, self.rechazada.id, self.sin_pago.id}
+        self.assertEqual(self.ids(conductor.get(f"/api/viaje/{self.v.id}/pasajeros/")), todas)
+        self.assertEqual(self.ids(conductor.get(f"/api/viaje/{self.v.id}/pasajeros/?pago=aprobado")),
+                         {self.aprobada.id})
+
+    def test_pago_invalido_400(self):
+        r = self.admin_a.get(f"/api/paquete/{self.e.paq_a.id}/pasajeros/?pago=pendiente")
+        self.assertEqual(r.status_code, 400)
+
+    def test_admin_de_otra_agencia_403_sin_datos(self):
+        admin_b = Escenario.cliente_http(self.e.admin_b)
+        for url in (self.url, f"/api/viaje/{self.v.id}/pasajeros/?pago=aprobado"):
+            r = admin_b.get(url)
+            self.assertEqual(r.status_code, 403)
+            self.assertNotIn("nombre", r.content.decode())
+
+    def test_superadmin_ve_la_lista(self):
+        sup = Escenario.cliente_http(self.e.super)
+        self.assertEqual(self.ids(sup.get(self.url)), {self.aprobada.id})
+
+    def test_reserva_cancelada_por_la_agencia_desaparece(self):
+        self.assertEqual(self.admin_a.delete(f"/api/reserva/{self.aprobada.id}/").status_code, 200)
+        self.assertEqual(self.ids(self.admin_a.get(self.url)), set())
+        # Sus pagos se conservan para la auditoría.
+        self.assertTrue(Pago.objects.filter(reserva=self.aprobada).exists())
+
+    def test_cliente_no_cancela_ni_su_reserva_sin_pago(self):
+        cliente = Escenario.cliente_http(self.e.otro_cliente)
+        self.assertEqual(cliente.delete(f"/api/reserva/{self.sin_pago.id}/").status_code, 403)
+        self.assertEqual(Reserva.objects.get(id=self.sin_pago.id).estado, "pendiente")
+
+    def test_admin_de_otra_agencia_no_cancela(self):
+        admin_b = Escenario.cliente_http(self.e.admin_b)
+        self.assertEqual(admin_b.delete(f"/api/reserva/{self.aprobada.id}/").status_code, 403)
+        self.assertEqual(Reserva.objects.get(id=self.aprobada.id).estado, "pendiente")

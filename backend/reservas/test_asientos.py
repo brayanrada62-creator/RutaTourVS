@@ -124,14 +124,15 @@ class ReservaAtomicaTest(Base, TestCase):
     def test_cancelar_libera_y_conserva_pagos(self):                         # H13
         rid = self.reservar(self.c1, [self.s1]).json()["id"]
         Pago.objects.create(precio=1, reserva_id=rid, fecha_pago=timezone.now(), estado="rechazado")
-        self.assertEqual(self.c1.delete(f"/api/reserva/{rid}/").status_code, 200)
+        # RUT-52: cancela la agencia, no el cliente.
+        self.assertEqual(self.admin.delete(f"/api/reserva/{rid}/").status_code, 200)
         self.assertEqual(Reserva.objects.get(id=rid).estado, "cancelada")
         self.assertEqual(Pago.objects.filter(reserva_id=rid).count(), 1)
         self.assertEqual(self.ocupadas(self.c2), [])
 
     def test_reserva_cancelada_no_se_reactiva(self):
         rid = self.reservar(self.c1, [self.s1]).json()["id"]
-        self.c1.delete(f"/api/reserva/{rid}/")
+        self.admin.delete(f"/api/reserva/{rid}/")
         r = self.admin.put(f"/api/reserva/{rid}/", {"estado": "pendiente"}, format="json")
         self.assertEqual(r.status_code, 409)
 
