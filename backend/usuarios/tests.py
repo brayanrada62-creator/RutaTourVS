@@ -6,6 +6,7 @@ from unittest.mock import patch
 from django.core.mail import send_mail
 from django.test import TestCase
 from rest_framework.test import APIClient
+from rest_framework_simplejwt.tokens import RefreshToken
 
 import tempfile
 from datetime import timedelta
@@ -937,3 +938,54 @@ class ReporteGeneralTest(TestCase):
         r = sup.get("/api/dashboard/reporte/")
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.json()["desde"].endswith("-01"))
+
+
+class RegistroUsuarioExistenteTest(TestCase):
+    """Registro con datos repetidos: cada caso con su mensaje, y la cuenta de sesión huérfana no bloquea el correo."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.datos = {"nombre_completo": "Ana Nueva", "numero_documento": "55555555", "correo": "ana@rt.co",
+                      "telefono": "3001234567", "contrasena": "clave1234"}
+
+    def registrar(self, **cambios):
+        return APIClient().post("/api/usuario/", {**self.datos, **cambios}, format="json")
+
+    def test_correo_repetido_dice_correo(self):
+        r = self.registrar(correo=self.e.cliente.correo.upper())
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["motivo"], "correo_existente")
+        self.assertIn("correo", r.json()["message"])
+
+    def test_documento_repetido_dice_documento(self):
+        Usuario.objects.filter(id=self.e.cliente.id).update(numero_documento="12345678")  # válido: 5 a 15 dígitos
+        r = self.registrar(numero_documento="12345678")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["motivo"], "documento_existente")
+        self.assertIn("documento", r.json()["message"])
+
+    def test_cuenta_de_sesion_huerfana_se_reutiliza(self):
+        viejo = User.objects.create_user(username="ana@rt.co", email="ana@rt.co", password="otraclave99")
+        viejo.is_active = False
+        viejo.save()
+        refresh_viejo = str(RefreshToken.for_user(viejo))
+        r = self.registrar()
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(User.objects.filter(username__iexact="ana@rt.co").count(), 1)
+        reutilizado = User.objects.get(username__iexact="ana@rt.co")
+        self.assertEqual(reutilizado.id, viejo.id)
+        self.assertTrue(reutilizado.is_active)
+        self.assertTrue(reutilizado.check_password("clave1234"))
+        self.assertTrue(Usuario.objects.filter(correo="ana@rt.co", rol_id=4).exists())
+        # Con la clave nueva entra; la sesión vieja ya no se puede renovar.
+        login = APIClient().post("/api/login/", {"correo": "ana@rt.co", "contrasena": "clave1234"}, format="json")
+        self.assertEqual(login.status_code, 200)
+        self.assertNotEqual(APIClient().post("/api/token/refresh/", {"refresh": refresh_viejo}, format="json").status_code, 200)
+
+    def test_cuenta_staff_de_django_no_se_reutiliza(self):
+        User.objects.create_superuser(username="ana@rt.co", email="ana@rt.co", password="otraclave99")
+        r = self.registrar()
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["motivo"], "correo_existente")
+        self.assertTrue(User.objects.get(username="ana@rt.co").check_password("otraclave99"))
+        self.assertFalse(Usuario.objects.filter(correo="ana@rt.co").exists())
