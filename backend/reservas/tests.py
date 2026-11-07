@@ -662,3 +662,62 @@ class ChatEstadoViajeTest(TestCase):
         self.assertEqual(r.json()["motivo"], "sin_salida")
         self.assertEqual(self.cliente.get(f"/api/chat/?paquete_id={self.e.paq_a.id}").status_code, 200)
         self.assertEqual(ChatMensaje.objects.count(), 0)
+
+
+class NovedadesSuperadminTest(TestCase):
+    """RUT-86 (HU-W-14): el superadmin revisa las novedades de TODAS las agencias y las marca como atendidas."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.v_a = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a,
+                                        fecha=hoy_colombia() + timedelta(days=1), hora="06:30")
+        self.grave = Novedad.objects.create(paquete=self.e.paq_a, viaje=self.v_a, tipo="Accidente",
+                                            detalle="Choque leve en la vía")
+        self.de_b = Novedad.objects.create(paquete=self.e.paq_b, tipo="Queja", detalle="Aire acondicionado dañado")
+        self.sup = Escenario.cliente_http(self.e.super)
+
+    def ids(self, r):
+        self.assertEqual(r.status_code, 200)
+        return {n["id"] for n in r.json()}
+
+    def test_superadmin_ve_las_de_todas_las_agencias(self):
+        self.assertEqual(self.ids(self.sup.get("/api/novedad/")), {self.grave.id, self.de_b.id})
+        self.assertEqual(self.ids(self.sup.get(f"/api/novedad/?agencia_id={self.e.ag_b.id}")), {self.de_b.id})
+
+    def test_admin_sigue_viendo_solo_las_suyas(self):
+        admin_a = Escenario.cliente_http(self.e.admin_a)
+        self.assertEqual(self.ids(admin_a.get("/api/novedad/")), {self.grave.id})
+        # agencia_id de otra agencia se ignora: no abre datos ajenos.
+        self.assertEqual(self.ids(admin_a.get(f"/api/novedad/?agencia_id={self.e.ag_b.id}")), {self.grave.id})
+
+    def test_conductor_y_cliente_403(self):
+        for u in (self.e.cond_a, self.e.cliente):
+            self.assertEqual(Escenario.cliente_http(u).get("/api/novedad/").status_code, 403)
+
+    def test_marcar_atendida_cambia_el_estado_en_la_api(self):
+        r = self.sup.put(f"/api/novedad/{self.de_b.id}/", {"resuelta": True}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["resuelta"])
+        self.assertTrue(Novedad.objects.get(id=self.de_b.id).resuelta)
+        self.assertEqual(self.ids(self.sup.get("/api/novedad/?resuelta=true")), {self.de_b.id})
+        self.assertEqual(self.ids(self.sup.get("/api/novedad/?resuelta=false")), {self.grave.id})
+        self.assertEqual(self.sup.get("/api/novedad/?resuelta=quizas").status_code, 400)
+
+    def test_detalle_trae_la_agencia_que_la_reporto(self):
+        r = self.sup.get(f"/api/novedad/{self.grave.id}/")
+        self.assertEqual(r.status_code, 200)
+        d = r.json()
+        self.assertEqual((d["tipo"], d["detalle"], d["agencia_id"], d["agencia"], d["placa"]),
+                         ("Accidente", "Choque leve en la vía", self.e.ag_a.id, self.e.ag_a.nombre, "AAA111"))
+        # La lista también trae la agencia.
+        fila = next(n for n in self.sup.get("/api/novedad/").json() if n["id"] == self.de_b.id)
+        self.assertEqual(fila["agencia"], self.e.ag_b.nombre)
+
+    def test_admin_de_otra_agencia_403_en_detalle_y_estado(self):
+        admin_b = Escenario.cliente_http(self.e.admin_b)
+        self.assertEqual(admin_b.get(f"/api/novedad/{self.grave.id}/").status_code, 403)
+        self.assertEqual(admin_b.put(f"/api/novedad/{self.grave.id}/", {"resuelta": True}, format="json").status_code, 403)
+        self.assertFalse(Novedad.objects.get(id=self.grave.id).resuelta)
+
+    def test_novedad_inexistente_404(self):
+        self.assertEqual(self.sup.get("/api/novedad/99999/").status_code, 404)

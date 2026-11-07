@@ -5,7 +5,8 @@ from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 
 from .serializer import (
-    AsientoReservaEntrada, ChatEntrada, MensajeSalida, PaqueteAbordarEntrada, ReservaEditarEntrada, ReservaEntrada,
+    AsientoReservaEntrada, ChatEntrada, MensajeSalida, NovedadEntrada, NovedadEstadoEntrada, PaqueteAbordarEntrada,
+    ReservaEditarEntrada, ReservaEntrada,
 )
 from .models import (
     ESTADOS_QUE_LIBERAN, ESTADOS_RESERVA, AsientoReserva, ChatMensaje, GpsPunto, Novedad, Reserva,
@@ -826,17 +827,28 @@ def conductores_por_bus(bus_ids):
     return {a.bus_id: a.conductor.nombre_completo for a in asignaciones}
 
 
+def agencia_obj_de_novedad(n):
+    """Agencia que reportó la novedad: la del paquete o, si el paquete ya no existe, la del bus del viaje."""
+    if n.paquete_id:
+        return n.paquete.agencia
+    return n.viaje.bus.agencia if n.viaje_id else None
+
+
 def novedad_json(n, conductores=None):
     viaje = n.viaje
     paquete = n.paquete or (viaje.paquete if viaje else None)
     bus_id = viaje.bus_id if viaje else None
     if conductores is None:
         conductores = conductores_por_bus([bus_id]) if bus_id else {}
+    agencia = agencia_obj_de_novedad(n)
     return {"id": n.id, "paquete_id": n.paquete_id, "viaje_id": n.viaje_id, "tipo": n.tipo,
             "detalle": n.detalle, "fecha": n.fecha, "resuelta": n.resuelta,
             "paquete": paquete.nombre if paquete else None,
             "placa": viaje.bus.placa if viaje else None,
-            "conductor": conductores.get(bus_id)}
+            "conductor": conductores.get(bus_id),
+            # RUT-86: el superadmin ve qué agencia la reportó.
+            "agencia_id": agencia.id if agencia else None,
+            "agencia": agencia.nombre if agencia else None}
 
 
 def agencia_de_novedad(n):
@@ -845,32 +857,70 @@ def agencia_de_novedad(n):
     return n.viaje.bus.agencia_id if n.viaje_id else None
 
 
+RELACIONES_NOVEDAD = ("paquete__agencia", "viaje__paquete", "viaje__bus__agencia")
+CAMPOS_NOVEDAD = (
+    "id, paquete_id, viaje_id, tipo, detalle, fecha, resuelta (true = atendida), paquete, placa, conductor, "
+    "agencia_id, agencia"
+)
+
+
 class NovedadView(APIView):
     @swagger_auto_schema(
         operation_description=(
-            "Novedades de la agencia (personal), con paquete, placa y conductor. "
-            "Filtro ?viaje_id=. Opcional: ?search=, ?page= y ?page_size="
+            "Novedades, quejas o incidentes con paquete, placa, conductor y la agencia que los reportó. "
+            "Superadmin: las de TODAS las agencias (RUT-86); ?agencia_id= limita a una. "
+            "Administrador: solo las de su agencia (agencia_id se ignora). Conductor y cliente: 403. "
+            "Filtros: ?viaje_id=, ?resuelta=true|false, ?search= (tipo o detalle), ?page= y ?page_size="
         ),
-        manual_parameters=PARAMETROS_LISTA,
+        manual_parameters=PARAMETROS_LISTA + [
+            PARAMETRO_AGENCIA,
+            openapi.Parameter("viaje_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+            openapi.Parameter("resuelta", openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN,
+                              description="true = atendidas, false = pendientes"),
+        ],
+        responses={
+            200: "Lista (o {count, results} con ?page=) de novedades: " + CAMPOS_NOVEDAD,
+            400: "resuelta no es true ni false",
+            401: "Sin sesión",
+            403: "Conductor o cliente",
+        },
     )
     def get(self, request):
         yo = usuario_de(request)
         if es_super(yo):
-            lista = Novedad.objects.all()
+            lista = filtrar_agencia_super(request, Novedad.objects.all(), "paquete__agencia_id")
         elif es_admin(yo):
             lista = Novedad.objects.filter(paquete__agencia_id__in=agencias_de(yo))
         else:
             return prohibido()
         if request.query_params.get("viaje_id"):
             lista = lista.filter(viaje_id=request.query_params.get("viaje_id"))
+        resuelta = request.query_params.get("resuelta")
+        if resuelta is not None:
+            if resuelta.lower() not in ("true", "false"):
+                return Response({"message": "resuelta debe ser true o false"}, status=status.HTTP_400_BAD_REQUEST)
+            lista = lista.filter(resuelta=resuelta.lower() == "true")
         texto = texto_busqueda(request)
         if texto:
             lista = lista.filter(Q(tipo__icontains=texto) | Q(detalle__icontains=texto))
-        lista = lista.select_related("paquete", "viaje__paquete", "viaje__bus").order_by("-fecha", "-id")
+        lista = lista.select_related(*RELACIONES_NOVEDAD).order_by("-fecha", "-id")
         conductores = conductores_por_bus(lista.exclude(viaje__isnull=True).values("viaje__bus_id"))
         return Response(paginar(request, lista, lambda n: novedad_json(n, conductores)))
 
-    @swagger_auto_schema(operation_description="Reportar novedad: {viaje_id, tipo, detalle} (o paquete_id para el personal).")
+    @swagger_auto_schema(
+        operation_description=(
+            "Reportar novedad: {viaje_id, tipo, detalle}. Conductor del bus o la agencia del viaje. "
+            "El personal también puede usar paquete_id sin viaje."
+        ),
+        request_body=NovedadEntrada,
+        responses={
+            201: "Novedad creada: " + CAMPOS_NOVEDAD,
+            400: "Falta el detalle",
+            401: "Sin sesión",
+            403: "El viaje o el paquete es de otra agencia o de otro bus",
+            404: "El viaje no existe",
+        },
+    )
     def post(self, request):
         yo = usuario_de(request)
         viaje = None
@@ -893,10 +943,37 @@ class NovedadView(APIView):
         return Response(novedad_json(n), status=status.HTTP_201_CREATED)
 
 
+RESPUESTAS_NOVEDAD_ID = {
+    401: "Sin sesión",
+    403: "La novedad es de otra agencia (o eres conductor o cliente)",
+    404: "La novedad no existe",
+}
+
+
 class NovedadIdView(APIView):
-    @swagger_auto_schema(operation_description="Marcar una novedad como resuelta o no: {resuelta: true|false}")
+    @swagger_auto_schema(
+        operation_description=(
+            "Detalle de una novedad con la agencia que la reportó (RUT-86). "
+            "Superadmin: cualquiera. Administrador: solo las de su agencia (403)."
+        ),
+        responses={200: "Novedad: " + CAMPOS_NOVEDAD, **RESPUESTAS_NOVEDAD_ID},
+    )
+    def get(self, request, id):
+        n = get_object_or_404(Novedad.objects.select_related(*RELACIONES_NOVEDAD), id=id)
+        if not gestiona_agencia(usuario_de(request), agencia_de_novedad(n)):
+            return prohibido("Esta novedad es de otra agencia")
+        return Response(novedad_json(n))
+
+    @swagger_auto_schema(
+        operation_description=(
+            "Marcar una novedad como atendida (resuelta: true) o reabrirla (false). "
+            "Superadmin: cualquiera. Administrador: solo las de su agencia (403)."
+        ),
+        request_body=NovedadEstadoEntrada,
+        responses={200: "Novedad actualizada: " + CAMPOS_NOVEDAD, 400: "Falta resuelta", **RESPUESTAS_NOVEDAD_ID},
+    )
     def put(self, request, id):
-        n = get_object_or_404(Novedad.objects.select_related("paquete", "viaje__bus", "viaje__paquete"), id=id)
+        n = get_object_or_404(Novedad.objects.select_related(*RELACIONES_NOVEDAD), id=id)
         if not gestiona_agencia(usuario_de(request), agencia_de_novedad(n)):
             return prohibido("Solo la agencia de la novedad puede cambiarla")
         if "resuelta" not in request.data:
@@ -906,7 +983,10 @@ class NovedadIdView(APIView):
         n.save()
         return Response(novedad_json(n))
 
-    @swagger_auto_schema(operation_description="Eliminar una novedad")
+    @swagger_auto_schema(
+        operation_description="Eliminar una novedad. Superadmin o la agencia de la novedad (403).",
+        responses={200: "{mensaje}", **RESPUESTAS_NOVEDAD_ID},
+    )
     def delete(self, request, id):
         n = get_object_or_404(Novedad.objects.select_related("paquete", "viaje__bus"), id=id)
         if not gestiona_agencia(usuario_de(request), agencia_de_novedad(n)):

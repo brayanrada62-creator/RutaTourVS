@@ -63,8 +63,16 @@ class ChatEntrada(serializers.Serializer):
 
 
 class NovedadEntrada(serializers.Serializer):
-    paquete_id = serializers.IntegerField(required=False, allow_null=True)
-    tipo = serializers.CharField(max_length=80, required=False, allow_blank=True)
-    detalle = serializers.CharField(max_length=400, required=False, allow_blank=True)
-    fecha = serializers.DateTimeField(required=False, allow_null=True)
+    viaje_id = serializers.IntegerField(required=False, allow_null=True,
+                                        help_text="Viaje en el que ocurrió (lo que envía el conductor)")
+    paquete_id = serializers.IntegerField(required=False, allow_null=True,
+                                          help_text="Solo el personal, si no hay viaje")
+    tipo = serializers.CharField(max_length=80, required=False, allow_blank=True,
+                                 help_text="Texto libre. 'accidente' es un incidente grave")
+    detalle = serializers.CharField(max_length=400, help_text="Obligatorio")
+
+
+class NovedadEstadoEntrada(serializers.Serializer):
+    """PUT /novedad/<id>/: marcar como atendida (true) o reabrir (false)."""
+    resuelta = serializers.BooleanField(help_text="true = atendida")
     
