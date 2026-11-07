@@ -687,10 +687,19 @@ class UsuarioView(APIView):
             return Response({'message': error}, status=status.HTTP_400_BAD_REQUEST)
         if agencia_id not in (None, "") and not existe_por_id(Agencia, agencia_id):
             return Response({'message': 'La agencia seleccionada no existe'}, status=status.HTTP_400_BAD_REQUEST)
-        if Usuario.objects.filter(correo__iexact=correo).exists() or \
-                Usuario.objects.filter(numero_documento=numero_documento).exists() or \
-                User.objects.filter(username__iexact=correo).exists():
-            return Response({'message': 'Ya existe un usuario con ese correo o documento'},
+        # Cada caso con su mensaje: así se sabe qué dato está repetido.
+        if Usuario.objects.filter(correo__iexact=correo).exists():
+            return Response({'message': 'Ya existe una cuenta con ese correo. Inicia sesión o recupera tu contraseña',
+                             'motivo': 'correo_existente'}, status=status.HTTP_400_BAD_REQUEST)
+        if Usuario.objects.filter(numero_documento=numero_documento).exists():
+            return Response({'message': 'Ese documento ya está registrado', 'motivo': 'documento_existente'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        # Cuenta de sesión "huérfana": el correo quedó en auth_user sin su Usuario (un borrado incompleto,
+        # por ejemplo directo en la base). Se reutiliza en lugar de bloquear ese correo para siempre.
+        # Nunca se reutiliza una cuenta de staff o superusuario de Django.
+        huerfano = User.objects.filter(username__iexact=correo).first()
+        if huerfano is not None and (huerfano.is_staff or huerfano.is_superuser):
+            return Response({'message': 'Ya existe una cuenta con ese correo', 'motivo': 'correo_existente'},
                             status=status.HTTP_400_BAD_REQUEST)
         if not existe_por_id(Rol, rol_id):
             return Response(
@@ -712,11 +721,21 @@ class UsuarioView(APIView):
                 licencia=licencia,
                 licencia_pdf=licencia_pdf,
             )
-            auth_user = User.objects.create_user(
-                username=correo,
-                email=correo,
-                password=contrasena,
-            )
+            if huerfano is not None:
+                # Sus sesiones viejas no sirven para la cuenta nueva: se revocan antes de reutilizarla.
+                revocar_sesiones(huerfano)
+                huerfano.username = correo
+                huerfano.email = correo
+                huerfano.is_active = True
+                huerfano.set_password(contrasena)
+                huerfano.save()
+                auth_user = huerfano
+            else:
+                auth_user = User.objects.create_user(
+                    username=correo,
+                    email=correo,
+                    password=contrasena,
+                )
             asociar_agencia(usuario, agencia_id)
         if registro_publico:
             return Response(datos_sesion(usuario, auth_user, "Registro correcto"), status=status.HTTP_201_CREATED)
