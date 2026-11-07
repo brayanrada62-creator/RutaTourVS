@@ -828,3 +828,112 @@ class MailjetBackendTest(TestCase):
         self.respuesta(urlopen, "error")
         with self.assertRaises(RuntimeError):
             send_mail("Asunto", "Cuerpo", "no@rt.co", ["cliente@rt.co"])
+
+
+from decimal import Decimal as _Decimal
+
+from reservas.models import AsientoReserva, Novedad
+
+
+class ReporteGeneralTest(TestCase):
+    """RUT-85 (HU-W-13): reporte de operación, ventas y ocupación por rango de fechas."""
+
+    def setUp(self):
+        self.e = Escenario()
+        hoy = hoy_colombia()
+        self.desde, self.hasta = hoy - timedelta(days=3), hoy + timedelta(days=3)
+        # Sillas que el administrador asignó: 10 en los buses de A y 8 en el de B.
+        sillas_a = [Asiento.objects.create(numero_asiento=n, tipo_bus=self.e.tipo_a) for n in range(1, 11)]
+        sillas_b = [Asiento.objects.create(numero_asiento=n, tipo_bus=self.e.tipo_b) for n in range(1, 9)]
+        v_a = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a, fecha=hoy, hora="06:30")
+        v_fuera = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a2, fecha=hoy + timedelta(days=30), hora="06:30")
+        v_b = Viaje.objects.create(paquete=self.e.paq_b, bus=self.e.bus_b, fecha=hoy + timedelta(days=1), hora="07:00")
+
+        r1 = self.reserva(v_a, sillas_a[:2])
+        Pago.objects.create(precio=100, reserva=r1, fecha_pago=timezone.now(), estado="aprobado")
+        # Pago aprobado FUERA del rango: no cuenta en ventas.
+        Pago.objects.create(precio=999, reserva=r1, fecha_pago=timezone.now() - timedelta(days=60), estado="aprobado")
+        # Pago pendiente: no es una venta.
+        Pago.objects.create(precio=70, reserva=self.reserva(v_a, sillas_a[2:3]), fecha_pago=timezone.now(), estado="pendiente")
+        # Reserva cancelada: sus sillas no ocupan.
+        self.reserva(v_a, sillas_a[3:5], estado="cancelada")
+        # Salida fuera del rango: no cuenta.
+        self.reserva(v_fuera, sillas_a[5:6])
+        rb = self.reserva(v_b, sillas_b[:1])
+        Pago.objects.create(precio=50, reserva=rb, fecha_pago=timezone.now(), estado="aprobado")
+
+        Novedad.objects.create(paquete=self.e.paq_a, viaje=v_a, tipo="Accidente", detalle="choque")
+        Novedad.objects.create(paquete=self.e.paq_a, tipo="Queja", detalle="aire", resuelta=True)
+        Bus_Conductor.objects.create(bus=self.e.bus_a, conductor=self.e.cond_a)
+
+    def reserva(self, viaje, sillas, estado="pendiente"):
+        r = Reserva.objects.create(fecha_reserva=timezone.now(), usuario=self.e.cliente, paquete=viaje.paquete,
+                                   viaje=viaje, estado=estado)
+        for s in sillas:
+            AsientoReserva.objects.create(reserva=r, asiento=s)
+        return r
+
+    def url(self, extra=""):
+        return f"/api/dashboard/reporte/?desde={self.desde}&hasta={self.hasta}{extra}"
+
+    def fila(self, datos, agencia):
+        return next(f for f in datos["agencias"] if f["agencia_id"] == agencia.id)
+
+    def test_superadmin_ve_todas_las_agencias_con_sus_metricas(self):
+        datos = Escenario.cliente_http(self.e.super).get(self.url()).json()
+        self.assertEqual({f["agencia_id"] for f in datos["agencias"]}, {self.e.ag_a.id, self.e.ag_b.id})
+        a = self.fila(datos, self.e.ag_a)
+        self.assertEqual(a["ventas"], {"pagos_aprobados": 1, "total": "100.00"})
+        self.assertEqual(a["ocupacion"], {"viajes": 1, "sillas_ofrecidas": 10, "sillas_reservadas": 3, "porcentaje": 30.0})
+        self.assertEqual((a["operacion"]["viajes_programados"], a["operacion"]["novedades"],
+                          a["operacion"]["novedades_atendidas"], a["operacion"]["incidentes_graves"]), (1, 2, 1, 1))
+        b = self.fila(datos, self.e.ag_b)
+        self.assertEqual(b["ventas"]["total"], "50.00")
+        self.assertEqual(b["ocupacion"]["porcentaje"], 12.5)
+
+    def test_totales_coinciden_con_los_reportes_por_agencia(self):
+        general = Escenario.cliente_http(self.e.super).get(self.url()).json()["totales"]
+        por_agencia = [Escenario.cliente_http(admin).get(self.url()).json()["totales"]
+                       for admin in (self.e.admin_a, self.e.admin_b)]
+        self.assertEqual(general["ventas"]["pagos_aprobados"], sum(t["ventas"]["pagos_aprobados"] for t in por_agencia))
+        self.assertEqual(_Decimal(general["ventas"]["total"]), sum(_Decimal(t["ventas"]["total"]) for t in por_agencia))
+        for seccion, campos in (("ocupacion", ("viajes", "sillas_ofrecidas", "sillas_reservadas")),
+                                ("operacion", tuple(general["operacion"]))):
+            for campo in campos:
+                self.assertEqual(general[seccion][campo], sum(t[seccion][campo] for t in por_agencia), campo)
+        self.assertEqual(general["ventas"]["total"], "150.00")
+        self.assertEqual(general["ocupacion"]["porcentaje"], round(4 * 100 / 18, 1))
+
+    def test_solo_datos_del_rango(self):
+        hoy = hoy_colombia()
+        lejos = f"/api/dashboard/reporte/?desde={hoy + timedelta(days=20)}&hasta={hoy + timedelta(days=40)}"
+        a = self.fila(Escenario.cliente_http(self.e.super).get(lejos).json(), self.e.ag_a)
+        self.assertEqual(a["ventas"], {"pagos_aprobados": 0, "total": "0.00"})
+        self.assertEqual(a["ocupacion"]["viajes"], 1)          # solo la salida de dentro de 30 días
+        self.assertEqual(a["ocupacion"]["sillas_reservadas"], 1)
+        self.assertEqual(a["operacion"]["novedades"], 0)
+        hace_60 = hoy - timedelta(days=60)
+        viejo = Escenario.cliente_http(self.e.super).get(f"/api/dashboard/reporte/?desde={hace_60}&hasta={hace_60}").json()
+        self.assertEqual(self.fila(viejo, self.e.ag_a)["ventas"]["total"], "999.00")
+
+    def test_admin_solo_ve_su_agencia(self):
+        admin_a = Escenario.cliente_http(self.e.admin_a)
+        datos = admin_a.get(self.url(f"&agencia_id={self.e.ag_b.id}")).json()
+        self.assertEqual([f["agencia_id"] for f in datos["agencias"]], [self.e.ag_a.id])
+
+    def test_superadmin_filtra_una_agencia(self):
+        datos = Escenario.cliente_http(self.e.super).get(self.url(f"&agencia_id={self.e.ag_b.id}")).json()
+        self.assertEqual([f["agencia_id"] for f in datos["agencias"]], [self.e.ag_b.id])
+        self.assertEqual(datos["totales"]["ventas"]["total"], "50.00")
+
+    def test_conductor_y_cliente_403(self):
+        for u in (self.e.cond_a, self.e.cliente):
+            self.assertEqual(Escenario.cliente_http(u).get(self.url()).status_code, 403)
+
+    def test_fechas_invalidas_400_y_sin_fechas_usa_el_mes(self):
+        sup = Escenario.cliente_http(self.e.super)
+        self.assertEqual(sup.get("/api/dashboard/reporte/?desde=2026-13-01").status_code, 400)
+        self.assertEqual(sup.get(f"/api/dashboard/reporte/?desde={self.hasta}&hasta={self.desde}").status_code, 400)
+        r = sup.get("/api/dashboard/reporte/")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["desde"].endswith("-01"))

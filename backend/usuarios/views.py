@@ -5,7 +5,7 @@ import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -43,12 +43,12 @@ from .permisos import (
     MENSAJE_AGENCIA_DESACTIVADA, ROL_ADMIN, ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, SesionVigente, SoloPersonal,
     agencia_desactivada, agencias_de, es_admin, es_super, filtrar_agencia_super, gestiona_agencia, prohibido, usuario_de,
 )
-from buses.models import Bus, TipoBus, Viaje
+from buses.models import Asiento, Bus, TipoBus, Viaje
 from destinos.imagenes import imagen_url
 from destinos.models import Hospedaje
 from pagos.models import Pago
 from paquetes.models import Paquete
-from reservas.models import reservas_activas
+from reservas.models import AsientoReserva, Novedad, reservas_activas
 
 
 logger = logging.getLogger(__name__)
@@ -1063,6 +1063,196 @@ class ResumenAgenciasView(APIView):
             return prohibido("Solo el superadministrador consulta el resumen de agencias")
         hoy = timezone.localtime(timezone.now(), ZoneInfo("America/Bogota")).date()
         return Response([resumen_de_agencia(agencia, hoy) for agencia in Agencia.objects.order_by("id")])
+
+
+##################################################################################################
+# RUT-85 (HU-W-13): reporte de operación, ventas y ocupación por rango de fechas.
+# Una sola función calcula la fila de cada agencia; el reporte general del superadmin es la suma de
+# esas mismas filas, así que sus totales coinciden siempre con los reportes por agencia del mismo rango.
+ZONA_COLOMBIA = ZoneInfo("America/Bogota")
+
+
+def rango_del_reporte(request):
+    """(desde, hasta, error). ?desde= y ?hasta= en AAAA-MM-DD (hora de Colombia), ambos días incluidos.
+    Sin fechas: desde el día 1 del mes actual hasta hoy."""
+    hoy = timezone.localtime(timezone.now(), ZONA_COLOMBIA).date()
+    try:
+        desde = date.fromisoformat(request.query_params["desde"]) if request.query_params.get("desde") else hoy.replace(day=1)
+        hasta = date.fromisoformat(request.query_params["hasta"]) if request.query_params.get("hasta") else hoy
+    except ValueError:
+        return None, None, Response({"message": "Las fechas deben tener el formato AAAA-MM-DD"},
+                                    status=status.HTTP_400_BAD_REQUEST)
+    if desde > hasta:
+        return None, None, Response({"message": "La fecha inicial no puede ser posterior a la final"},
+                                    status=status.HTTP_400_BAD_REQUEST)
+    return desde, hasta, None
+
+
+def porcentaje(parte, total):
+    return round(parte * 100 / total, 1) if total else 0.0
+
+
+def sillas_del_bus(bus, cache):
+    """Sillas que el administrador asignó al bus (las del tipo principal, las mismas con las que se reserva)."""
+    from buses.views import tipo_principal  # import local: buses.views también importa de usuarios
+    if bus.id not in cache:
+        tipo = tipo_principal(bus)
+        cache[bus.id] = Asiento.objects.filter(tipo_bus=tipo).count() if tipo else 0
+    return cache[bus.id]
+
+
+def reporte_de_agencia(agencia, desde, hasta):
+    """Ventas, ocupación y operación de UNA agencia entre desde y hasta (ambos incluidos)."""
+    inicio = timezone.make_aware(datetime.combine(desde, time.min), ZONA_COLOMBIA)
+    fin = timezone.make_aware(datetime.combine(hasta + timedelta(days=1), time.min), ZONA_COLOMBIA)
+
+    # Ventas: pagos APROBADOS de los paquetes de la agencia, por fecha_pago.
+    ventas = Pago.objects.filter(
+        estado="aprobado", reserva__paquete__agencia=agencia, fecha_pago__gte=inicio, fecha_pago__lt=fin,
+    ).aggregate(total=Sum("precio"), cantidad=Count("id"))
+
+    # Ocupación: salidas del rango en buses de la agencia. Sillas reservadas = las de reservas activas
+    # (ni canceladas ni vencidas) de ESA salida; sillas ofrecidas = las sillas asignadas al bus.
+    viajes = list(Viaje.objects.filter(bus__agencia=agencia, fecha__gte=desde, fecha__lte=hasta).select_related("bus"))
+    cache = {}
+    ofrecidas = sum(sillas_del_bus(v.bus, cache) for v in viajes)
+    reservadas = AsientoReserva.objects.filter(
+        reserva__in=reservas_activas(), reserva__viaje_id__in=[v.id for v in viajes],
+    ).count()
+    estados = {estado: 0 for estado, _ in Viaje.ESTADOS}
+    for v in viajes:
+        estados[v.estado] = estados.get(v.estado, 0) + 1
+
+    # Operación: salidas por estado, novedades del rango y recursos actuales de la agencia.
+    novedades = Novedad.objects.filter(paquete__agencia=agencia, fecha__gte=inicio, fecha__lt=fin)
+    return {
+        "agencia_id": agencia.id,
+        "agencia": agencia.nombre,
+        "activo": agencia.activo,
+        "ventas": {
+            "pagos_aprobados": ventas["cantidad"] or 0,
+            # Siempre con 2 decimales (SQLite devuelve "100" y MySQL "100.00").
+            "total": str((ventas["total"] or Decimal("0")).quantize(Decimal("0.01"))),
+        },
+        "ocupacion": {
+            "viajes": len(viajes),
+            "sillas_ofrecidas": ofrecidas,
+            "sillas_reservadas": reservadas,
+            "porcentaje": porcentaje(reservadas, ofrecidas),
+        },
+        "operacion": {
+            "viajes_programados": estados.get(Viaje.PROGRAMADO, 0),
+            "viajes_en_curso": estados.get(Viaje.EN_CURSO, 0),
+            "viajes_completados": estados.get(Viaje.COMPLETADO, 0),
+            "novedades": novedades.count(),
+            "novedades_atendidas": novedades.filter(resuelta=True).count(),
+            "incidentes_graves": novedades.filter(tipo__icontains="accid").count(),
+            "buses_activos": Bus.objects.filter(agencia=agencia, estado="activo").count(),
+            "conductores": UsuarioAgencia.objects.filter(agencia=agencia, usuario__rol_id=ROL_CONDUCTOR).count(),
+        },
+    }
+
+
+def sumar_reportes(filas):
+    """Totales = suma exacta de las filas de cada agencia (el porcentaje se recalcula sobre las sumas)."""
+    def suma(seccion, campo):
+        return sum(f[seccion][campo] for f in filas)
+
+    ofrecidas = suma("ocupacion", "sillas_ofrecidas")
+    reservadas = suma("ocupacion", "sillas_reservadas")
+    return {
+        "agencias": len(filas),
+        "ventas": {
+            "pagos_aprobados": suma("ventas", "pagos_aprobados"),
+            "total": str(sum((Decimal(f["ventas"]["total"]) for f in filas), Decimal("0.00"))),
+        },
+        "ocupacion": {
+            "viajes": suma("ocupacion", "viajes"),
+            "sillas_ofrecidas": ofrecidas,
+            "sillas_reservadas": reservadas,
+            "porcentaje": porcentaje(reservadas, ofrecidas),
+        },
+        "operacion": {campo: suma("operacion", campo) for campo in (
+            "viajes_programados", "viajes_en_curso", "viajes_completados", "novedades",
+            "novedades_atendidas", "incidentes_graves", "buses_activos", "conductores",
+        )},
+    }
+
+
+ESQUEMA_SECCIONES = {
+    "ventas": openapi.Schema(type=openapi.TYPE_OBJECT, properties={
+        "pagos_aprobados": openapi.Schema(type=openapi.TYPE_INTEGER),
+        "total": openapi.Schema(type=openapi.TYPE_STRING, example="1250000.00"),
+    }),
+    "ocupacion": openapi.Schema(type=openapi.TYPE_OBJECT, properties={
+        "viajes": openapi.Schema(type=openapi.TYPE_INTEGER),
+        "sillas_ofrecidas": openapi.Schema(type=openapi.TYPE_INTEGER),
+        "sillas_reservadas": openapi.Schema(type=openapi.TYPE_INTEGER),
+        "porcentaje": openapi.Schema(type=openapi.TYPE_NUMBER, example=72.5),
+    }),
+    "operacion": openapi.Schema(type=openapi.TYPE_OBJECT, properties={
+        campo: openapi.Schema(type=openapi.TYPE_INTEGER) for campo in (
+            "viajes_programados", "viajes_en_curso", "viajes_completados", "novedades",
+            "novedades_atendidas", "incidentes_graves", "buses_activos", "conductores",
+        )
+    }),
+}
+
+
+class ReporteView(APIView):
+    @swagger_auto_schema(
+        operation_description=(
+            "Reporte de operación, ventas y ocupación entre ?desde= y ?hasta= (AAAA-MM-DD, hora de Colombia, ambos "
+            "incluidos; sin fechas: el mes actual). Superadmin: todas las agencias, también las desactivadas "
+            "(?agencia_id= limita a una). Administrador: solo sus agencias (agencia_id se ignora). "
+            "Conductor y cliente: 403. totales es la suma exacta de las filas, así que coincide con los reportes "
+            "por agencia del mismo rango. Ventas = pagos aprobados por fecha_pago. Ocupación = sillas de reservas "
+            "activas de cada salida del rango / sillas asignadas al bus. Operación = salidas por estado, novedades "
+            "del rango (atendidas e incidentes graves = tipo accidente) y buses activos y conductores actuales."
+        ),
+        manual_parameters=[
+            openapi.Parameter("desde", openapi.IN_QUERY, type=openapi.TYPE_STRING, format="date", example="2026-11-01"),
+            openapi.Parameter("hasta", openapi.IN_QUERY, type=openapi.TYPE_STRING, format="date", example="2026-11-30"),
+            PARAMETRO_AGENCIA,
+        ],
+        responses={
+            200: openapi.Response("Reporte", openapi.Schema(type=openapi.TYPE_OBJECT, properties={
+                "desde": openapi.Schema(type=openapi.TYPE_STRING, format="date"),
+                "hasta": openapi.Schema(type=openapi.TYPE_STRING, format="date"),
+                "agencias": openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(
+                    type=openapi.TYPE_OBJECT, properties={
+                        "agencia_id": openapi.Schema(type=openapi.TYPE_INTEGER),
+                        "agencia": openapi.Schema(type=openapi.TYPE_STRING),
+                        "activo": openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        **ESQUEMA_SECCIONES,
+                    })),
+                "totales": openapi.Schema(type=openapi.TYPE_OBJECT, properties={
+                    "agencias": openapi.Schema(type=openapi.TYPE_INTEGER), **ESQUEMA_SECCIONES,
+                }),
+            })),
+            400: "Fecha con formato inválido o desde posterior a hasta",
+            401: "Sin sesión",
+            403: "Conductor o cliente",
+        },
+    )
+    def get(self, request):
+        yo = usuario_de(request)
+        if es_super(yo):
+            agencias = filtrar_agencia_super(request, Agencia.objects.all(), "id")
+        elif es_admin(yo):
+            agencias = Agencia.objects.filter(id__in=agencias_de(yo))
+        else:
+            return prohibido("Solo el superadministrador o el administrador consultan reportes")
+        desde, hasta, error = rango_del_reporte(request)
+        if error:
+            return error
+        filas = [reporte_de_agencia(agencia, desde, hasta) for agencia in agencias.order_by("nombre", "id")]
+        return Response({
+            "desde": desde.isoformat(),
+            "hasta": hasta.isoformat(),
+            "agencias": filas,
+            "totales": sumar_reportes(filas),
+        })
 
 
 def agencia_json(agencia, con_cuenta=False):

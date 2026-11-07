@@ -9,7 +9,7 @@ from .views import (
     PasswordResetConfirmarView,
     UsuarioView, UsuarioIdView, UsuarioDocumentoView, RolView,
     UsuarioAgenciaView, UsuarioAgenciaIdView,
-    DashboardResumenView, ResumenAgenciasView,
+    DashboardResumenView, ResumenAgenciasView, ReporteView,
     AgenciaView, AgenciaIdView, AgenciaNitView, AgenciaDireccionView,
 )
 
@@ -39,6 +39,7 @@ urlpatterns = [
     # Dashboard
     path('dashboard/resumen/', DashboardResumenView.as_view(), name='dashboard-resumen'),
     path('dashboard/agencias/', ResumenAgenciasView.as_view(), name='dashboard-agencias'),
+    path('dashboard/reporte/', ReporteView.as_view(), name='dashboard-reporte'),
 
     # Agencia
     path('agencia/', AgenciaView.as_view(), name='agencia'),
