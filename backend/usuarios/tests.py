@@ -37,7 +37,44 @@ class AutenticacionTest(TestCase):
         self.assertTrue(ok.json()["token"])
         malo = c.post("/api/login/", {"correo": self.e.cliente.correo, "contrasena": "mala"}, format="json")
         self.assertEqual(malo.status_code, 401)
-        self.assertEqual(malo.json()["mensaje"], "Usuario o contraseña incorrectos")
+        self.assertEqual(malo.json()["campo"], "contrasena")
+        self.assertEqual(malo.json()["message"], "La contraseña es incorrecta")
+
+    def test_login_dice_que_campo_esta_mal(self):
+        c = APIClient()
+        r = c.post("/api/login/", {"correo": "nadie@rt.co", "contrasena": CLAVE}, format="json")
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.json()["campo"], "correo")
+        self.assertEqual(r.json()["message"], "Correo no registrado")
+        # El correo se compara sin importar mayúsculas: solo falla la contraseña.
+        r = c.post("/api/login/", {"correo": self.e.cliente.correo.upper(), "contrasena": "otra-clave"}, format="json")
+        self.assertEqual((r.status_code, r.json()["campo"]), (401, "contrasena"))
+        r = c.post("/api/login/", {"correo": "", "contrasena": CLAVE}, format="json")
+        self.assertEqual((r.status_code, r.json()["campo"]), (400, "correo"))
+        r = c.post("/api/login/", {"correo": self.e.cliente.correo, "contrasena": ""}, format="json")
+        self.assertEqual((r.status_code, r.json()["campo"]), (400, "contrasena"))
+
+    def test_suspendido_con_clave_mala_no_revela_la_suspension(self):
+        Usuario.objects.filter(id=self.e.cliente.id).update(activo=False)
+        c = APIClient()
+        r = c.post("/api/login/", {"correo": self.e.cliente.correo, "contrasena": "mala"}, format="json")
+        self.assertEqual((r.status_code, r.json()["campo"]), (401, "contrasena"))
+        r = c.post("/api/login/", {"correo": self.e.cliente.correo, "contrasena": CLAVE}, format="json")
+        self.assertEqual(r.status_code, 403)
+        self.assertIn("suspendido", r.json()["message"])
+
+    def test_superadmin_suspende_administradores_y_clientes_sin_agencia(self):
+        sup = Escenario.cliente_http(self.e.super)
+        for objetivo in (self.e.admin_a, self.e.cliente):  # cliente = registrado desde la app, sin agencia
+            self.assertEqual(sup.put(f"/api/usuario/{objetivo.id}/", {"activo": False}, format="json").status_code, 200)
+            r = APIClient().post("/api/login/", {"correo": objetivo.correo, "contrasena": CLAVE}, format="json")
+            self.assertEqual(r.status_code, 403, objetivo.correo)
+            self.assertEqual(sup.put(f"/api/usuario/{objetivo.id}/", {"activo": True}, format="json").status_code, 200)
+        # Un admin no puede suspender a otro admin ni a un cliente sin agencia (no es de su agencia).
+        admin = Escenario.cliente_http(self.e.admin_a)
+        for objetivo in (self.e.admin_b, self.e.cliente):
+            self.assertEqual(admin.put(f"/api/usuario/{objetivo.id}/", {"activo": False}, format="json").status_code, 403)
+        self.assertTrue(Usuario.objects.get(id=self.e.cliente.id).activo)
 
     def test_login_trae_rol_agencia_y_usuario_como_objeto(self):
         r = APIClient().post("/api/login/", {"correo": self.e.admin_a.correo, "contrasena": CLAVE}, format="json")

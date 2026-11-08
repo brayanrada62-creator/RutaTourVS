@@ -291,25 +291,40 @@ def verificar_google_id_token(id_token):
     return datos
 
 
+def error_login(campo, mensaje, codigo=status.HTTP_401_UNAUTHORIZED):
+    """Error del login con el campo que falló (correo o contrasena), para mostrarlo junto a él."""
+    return Response({"campo": campo, "message": mensaje, "mensaje": mensaje}, status=codigo)
+
+
 class LoginView(APIView):
     permission_classes = [AllowAny]
     @swagger_auto_schema(
+        operation_description=(
+            "Inicia sesión con correo y contraseña. Cada error indica en 'campo' qué dato está mal "
+            "(correo o contrasena) para mostrarlo junto a ese campo. La suspensión solo se informa "
+            "si la contraseña es correcta."
+        ),
         request_body=loginSerializer,
-        responses={200: openapi.Response(description="Tokens JWT y datos del usuario")}
+        responses={
+            200: openapi.Response(description="Tokens JWT y datos del usuario"),
+            400: openapi.Response(description="Falta el correo o la contraseña: {campo, message}"),
+            401: openapi.Response(description="{campo: 'correo', message: 'Correo no registrado'} o "
+                                              "{campo: 'contrasena', message: 'La contraseña es incorrecta'}"),
+            403: openapi.Response(description="Usuario suspendido o agencia desactivada"),
+        },
         )
     def post(self, request):
         email = str(request.data.get('correo') or '').strip()
         password = request.data.get('contrasena')
+        if not email:
+            return error_login("correo", "Escribe tu correo", status.HTTP_400_BAD_REQUEST)
+        if not isinstance(password, str) or not password:
+            return error_login("contrasena", "Escribe tu contraseña", status.HTTP_400_BAD_REQUEST)
         usuario_negocio = Usuario.objects.filter(correo__iexact=email).first()
-        if (
-            usuario_negocio is None
-            or not isinstance(password, str)
-            or not clave_correcta(usuario_negocio, password)
-        ):
-            return Response(
-                {"message": "Credenciales inválidas", "mensaje": "Usuario o contraseña incorrectos"},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
+        if usuario_negocio is None:
+            return error_login("correo", "Correo no registrado")
+        if not clave_correcta(usuario_negocio, password):
+            return error_login("contrasena", "La contraseña es incorrecta")
         if not usuario_negocio.activo:
             return Response(
                 {"message": "Usuario suspendido. Comunícate con tu agencia",
