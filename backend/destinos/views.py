@@ -8,7 +8,7 @@ from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 
 from .serializer import (
-    DestinoEntrada, HopedajeEntrada, HospedajeDestinoEntrada, ImagenEntrada, MensajeSalida, DepartamentoSerializer
+    DestinoEntrada, HopedajeEntrada, HospedajeDestinoEntrada, ImagenEntrada, MensajeSalida
 )
 from .models import Destino, Hospedaje, HospedajeDestino, ImagenDestino, Departamento
 from .imagenes import (
@@ -17,6 +17,7 @@ from .imagenes import (
 from usuarios.permisos import (
     LecturaPublica, agencias_de, es_super, filtrar_agencia_super, filtrar_catalogo, usuario_de,
 )
+from usuarios.serializer import error_telefono, error_telefono_fijo
 from usuarios.paginacion import PARAMETRO_AGENCIA, PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
 
 AVISO_COMPARTIDO = "Admin: 409 si lo usan paquetes de otra agencia. Superadmin: sin esa restricción."
@@ -215,6 +216,7 @@ def hospedaje_json(h, request=None):
         "destino_ids": destino_ids,
         "direccion": h.direccion,
         "telefono": h.telefono,
+        "telefono_fijo": h.telefono_fijo,
         "descripcion": h.descripcion,
         "imagen": imagen_url(h.imagen, request),
     }
@@ -245,14 +247,21 @@ def destino_ids_de(data):
     return ids, None
 
 
-def error_hospedaje(datos):
-    """Mensaje si un texto del hospedaje supera su límite; None si todos sirven."""
+def error_hospedaje(datos, actual=None):
+    """Mensaje si un dato del hospedaje no sirve; None si todos sirven.
+    Celular: obligatorio al crear; al editar ([actual]) se valida solo si cambia, así un hotel antiguo
+    con otro formato puede seguir editando sus demás datos. Fijo: opcional (vacío lo borra)."""
     limites = (("nombre", "El nombre", 150), ("direccion", "La dirección", 255),
                ("telefono", "El teléfono", 20), ("descripcion", "La descripción", 2000))
     for campo, etiqueta, maximo in limites:
         if len(str(datos.get(campo) or "")) > maximo:
             return f"{etiqueta} admite máximo {maximo} caracteres"
-    return None
+    telefono = datos.get("telefono")
+    if actual is None or (telefono is not None and str(telefono).strip() != actual.telefono):
+        error = error_telefono(telefono)
+        if error:
+            return error
+    return error_telefono_fijo(datos.get("telefono_fijo"))
 
 
 class HospedajeView(VistaCatalogo):
@@ -280,7 +289,10 @@ class HospedajeView(VistaCatalogo):
         return Response(paginar(request, hospedajeLista.distinct().order_by("id"), lambda h: hospedaje_json(h, request)))
 
     @swagger_auto_schema(
-        operation_description="Guardar hospedaje",
+        operation_description=(
+            "Guardar hospedaje. telefono = celular obligatorio (10 dígitos, empieza por 3); telefono_fijo opcional "
+            "(10 dígitos, empieza por 60). 400 con el motivo si no cumplen."
+        ),
         request_body=HopedajeEntrada,
         responses={201: MensajeSalida}
     )
@@ -292,7 +304,8 @@ class HospedajeView(VistaCatalogo):
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
         direccion = request.data.get("direccion")
-        telefono = request.data.get("telefono")
+        telefono = str(request.data.get("telefono") or "").strip()
+        telefono_fijo = str(request.data.get("telefono_fijo") or "").strip()
         descripcion = request.data.get("descripcion")
         destino_ids, error = destino_ids_de(request.data)
         if error:
@@ -301,6 +314,7 @@ class HospedajeView(VistaCatalogo):
             nombre=nombre,
             direccion=direccion,
             telefono=telefono,
+            telefono_fijo=telefono_fijo,
             descripcion=descripcion,
             imagen=request.FILES.get("imagen"),
         )
@@ -333,12 +347,12 @@ class HospedajeIdView(VistaCatalogo):
             return error
         if request.data.get("nombre") is not None and not str(request.data.get("nombre")).strip():
             return Response({"message": "El nombre es obligatorio"}, status=status.HTTP_400_BAD_REQUEST)
-        error = error_hospedaje(request.data)
+        error = error_hospedaje(request.data, actual=hospedajeB)
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
         if request.FILES.get("imagen"):
             hospedajeB.imagen = request.FILES.get("imagen")
-        for campo in ("nombre", "direccion", "telefono", "descripcion"):
+        for campo in ("nombre", "direccion", "telefono", "telefono_fijo", "descripcion"):
             if request.data.get(campo) is not None:
                 setattr(hospedajeB, campo, request.data.get(campo))
         hospedajeB.save()

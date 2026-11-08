@@ -26,7 +26,7 @@ class HospedajeDestinoCrudTest(TestCase):
                 "nombre": "Hotel Central",
                 "destino_id": self.destino_a.id,
                 "direccion": "Centro",
-                "telefono": "123",
+                "telefono": "3001234567",
                 "descripcion": "Hotel",
             },
             format="json",
@@ -84,7 +84,7 @@ class ValidacionCatalogoTest(TestCase):
         self.assertEqual(self.admin.post("/api/destino/", por_nombre, format="json").status_code, 201)
 
     def test_hospedaje_sin_nombre(self):
-        datos = {"nombre": "", "direccion": "d", "telefono": "1", "descripcion": "d"}
+        datos = {"nombre": "", "direccion": "d", "telefono": "3001234567", "descripcion": "d"}
         self.assertEqual(self.admin.post("/api/hospedaje/", datos, format="json").status_code, 400)
 
 
@@ -131,11 +131,36 @@ class LimitesTextoHospedajeTest(TestCase):
         self.admin = Escenario.cliente_http(Escenario().admin_a)
 
     def crear(self, **cambios):
-        datos = {"nombre": "Hotel", "direccion": "d", "telefono": "1", "descripcion": "d", **cambios}
+        datos = {"nombre": "Hotel", "direccion": "d", "telefono": "3001234567", "descripcion": "d", **cambios}
         return self.admin.post("/api/hospedaje/", datos, format="json")
 
+    def test_celular_obligatorio_y_fijo_opcional(self):
+        for malo in ("123", "6011234567", "30012345678", ""):
+            r = self.crear(nombre=f"H{malo}", telefono=malo)
+            self.assertEqual(r.status_code, 400, malo)
+            self.assertIn("celular", r.json()["message"])
+        for malo in ("123", "3001234567", "601123456"):
+            r = self.crear(nombre=f"F{malo}", telefono_fijo=malo)
+            self.assertEqual(r.status_code, 400, malo)
+            self.assertIn("fijo", r.json()["message"])
+        self.assertEqual(self.crear(nombre="Con fijo", telefono_fijo="6028201234").status_code, 200)
+        hotel = Hospedaje.objects.get(nombre="Con fijo")
+        self.assertEqual((hotel.telefono, hotel.telefono_fijo), ("3001234567", "6028201234"))
+        self.assertEqual(self.admin.get(f"/api/hospedaje/{hotel.id}/").json()["telefono_fijo"], "6028201234")
+        # Vacío borra el fijo (es opcional).
+        self.assertEqual(self.admin.put(f"/api/hospedaje/{hotel.id}/", {"telefono_fijo": ""}, format="json").status_code, 200)
+        hotel.refresh_from_db()
+        self.assertEqual(hotel.telefono_fijo, "")
+
+    def test_hotel_antiguo_edita_sin_cambiar_su_telefono(self):
+        viejo = Hospedaje.objects.create(nombre="Viejo", direccion="d", telefono="30013131311", descripcion="d")
+        url = f"/api/hospedaje/{viejo.id}/"
+        r = self.admin.put(url, {"nombre": "Viejo 2", "telefono": "30013131311"}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.admin.put(url, {"telefono": "3001"}, format="json").status_code, 400)
+
     def test_limites(self):
-        for cambio in ({"nombre": "x" * 151}, {"direccion": "x" * 256}, {"telefono": "1" * 21},
+        for cambio in ({"nombre": "x" * 151}, {"direccion": "x" * 256}, {"telefono": "3" * 21},
                        {"descripcion": "x" * 2001}):
             self.assertEqual(self.crear(**cambio).status_code, 400, cambio)
         self.assertEqual(self.crear(descripcion="x" * 2000).status_code, 200)
