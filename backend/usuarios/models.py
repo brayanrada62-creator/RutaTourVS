@@ -78,6 +78,17 @@ class UsuarioAgencia(models.Model):
         db_table = "usuario_agencia"
 
 
+class Dispositivo(models.Model):
+    """Teléfono con la app instalada: su token de Firebase para recibir notificaciones push (D1)."""
+    usuario = models.ForeignKey(Usuario, on_delete=models.CASCADE, related_name="dispositivos")
+    token = models.CharField(max_length=255, unique=True)
+    plataforma = models.CharField(max_length=20, default="android")
+    actualizado = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "dispositivos"
+
+
 class VerificacionCorreo(models.Model):
     """Código de 6 dígitos enviado a un correo antes de crear la cuenta (A4). Se guarda solo su hash."""
     correo = models.EmailField(max_length=150, db_index=True)

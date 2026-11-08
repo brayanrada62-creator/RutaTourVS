@@ -226,6 +226,9 @@ FRONTEND_RESET_URL = os.environ.get('FRONTEND_RESET_URL', '')
 # Crear una cuenta (o cambiar el correo) exige el código que se envía a ese correo (A4).
 # VERIFICAR_CORREO=False lo desactiva, por ejemplo mientras se publica la versión nueva de la app.
 VERIFICAR_CORREO = os.environ.get('VERIFICAR_CORREO', 'True') == 'True'
+# Notificaciones push (Firebase Cloud Messaging). FIREBASE_CREDENTIALS = el JSON de la cuenta de servicio
+# del proyecto de Firebase (completo, en una sola variable de entorno de Render). Sin ella no se envían pushes.
+FIREBASE_CREDENTIALS = os.environ.get('FIREBASE_CREDENTIALS', '')
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
 
 # Con DEBUG=False Django no imprime los errores 500: así aparecen en los logs de Render.

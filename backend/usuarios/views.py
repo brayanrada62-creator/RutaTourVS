@@ -39,7 +39,7 @@ from .serializer import (
     UsuarioAgenciaEntrada, RecuperarContrasenaEntrada,
     ConfirmarContrasenaEntrada, LoginGoogleEntrada,
 )
-from .models import Usuario, Agencia, Rol, UsuarioAgencia, RecuperarContrasena, VerificacionCorreo
+from .models import Usuario, Agencia, Rol, UsuarioAgencia, RecuperarContrasena, VerificacionCorreo, Dispositivo
 from .paginacion import PARAMETRO_AGENCIA, PARAMETROS_LISTA, paginar, texto_busqueda
 from .permisos import (
     MENSAJE_AGENCIA_DESACTIVADA, ROL_ADMIN, ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, SesionVigente, SoloPersonal,
@@ -405,6 +405,40 @@ class VerificarCorreoConfirmarView(APIView):
         pendiente.save(update_fields=["verificado"])
         token = signing.dumps({"correo": correo}, salt=TOKEN_CORREO_SAL)
         return Response({"message": "Correo verificado", "token_correo": token})
+
+
+class DispositivoView(APIView):
+    """Token de Firebase del teléfono del usuario con sesión (D1). Cada quien registra y borra solo los suyos."""
+
+    @swagger_auto_schema(
+        operation_description=(
+            "Registra el token de Firebase de este teléfono para recibir notificaciones push (mensajes del chat). "
+            "Si el token ya existía con otro usuario (otra sesión en el mismo teléfono), pasa al usuario actual."
+        ),
+        request_body=openapi.Schema(type=openapi.TYPE_OBJECT, required=["token"], properties={
+            "token": openapi.Schema(type=openapi.TYPE_STRING, description="Token de Firebase Cloud Messaging"),
+            "plataforma": openapi.Schema(type=openapi.TYPE_STRING, description="android (por defecto)"),
+        }),
+        responses={200: "Registrado", 400: "Falta el token", 401: "Sin sesión"},
+    )
+    def post(self, request):
+        token = str(request.data.get("token") or "").strip()
+        if not token or len(token) > 255:
+            return Response({"message": "Falta el token del dispositivo"}, status=status.HTTP_400_BAD_REQUEST)
+        plataforma = str(request.data.get("plataforma") or "android")[:20]
+        Dispositivo.objects.update_or_create(token=token, defaults={"usuario": usuario_de(request), "plataforma": plataforma})
+        return Response({"message": "Dispositivo registrado"})
+
+    @swagger_auto_schema(
+        operation_description="Al cerrar sesión: deja de enviar notificaciones a este teléfono (solo borra tokens propios).",
+        request_body=openapi.Schema(type=openapi.TYPE_OBJECT, required=["token"],
+                                    properties={"token": openapi.Schema(type=openapi.TYPE_STRING)}),
+        responses={200: "Borrado"},
+    )
+    def delete(self, request):
+        token = str(request.data.get("token") or "").strip()
+        Dispositivo.objects.filter(token=token, usuario=usuario_de(request)).delete()
+        return Response({"message": "Dispositivo borrado"})
 
 
 class LoginView(APIView):
