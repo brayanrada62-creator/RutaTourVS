@@ -39,6 +39,10 @@ class Reserva(models.Model):
     # Quién viaja, si no es el titular de la cuenta (vacío = viaja el titular).
     pasajero_nombre = models.CharField(max_length=120, blank=True, default="")
     pasajero_documento = models.CharField(max_length=15, blank=True, default="")
+    # OTP de abordaje: 6 dígitos que el cliente ve en su ticket (con pago aprobado) y el conductor
+    # escribe al abordar. Único dentro de la salida y de un solo uso (otp_usado_en).
+    otp = models.CharField(max_length=6, blank=True, default="")
+    otp_usado_en = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return str(self.fecha_reserva)

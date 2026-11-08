@@ -15,8 +15,10 @@ from .models import (
 import hashlib
 import hmac
 import re
+import secrets
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.db.models import OuterRef, Q, Subquery
 from django.shortcuts import get_object_or_404
@@ -83,6 +85,35 @@ def leer_codigo(texto):
         return None
     reserva_id = int(m.group(1))
     return reserva_id if hmac.compare_digest(m.group(2).upper(), firma_reserva(reserva_id)) else None
+
+
+OTP_DIGITOS = 6
+OTP_MAX_FALLOS = 10          # intentos fallidos por salida...
+OTP_VENTANA_SEG = 10 * 60    # ...en 10 minutos (evita adivinar códigos)
+OTP_FORMATO = re.compile(r"\d{6}")
+
+
+def generar_otp(reserva):
+    """Asigna (una sola vez) un OTP de 6 dígitos, distinto al de las demás reservas de la misma salida."""
+    if reserva.otp:
+        return reserva.otp
+    with transaction.atomic():
+        r = Reserva.objects.select_for_update().get(id=reserva.id)
+        if not r.otp:
+            hermanas = Reserva.objects.filter(paquete_id=r.paquete_id).exclude(id=r.id)
+            hermanas = hermanas.filter(viaje_id=r.viaje_id) if r.viaje_id else hermanas
+            usados = set(hermanas.exclude(otp="").values_list("otp", flat=True))
+            otp = f"{secrets.randbelow(10 ** OTP_DIGITOS):0{OTP_DIGITOS}d}"
+            while otp in usados:
+                otp = f"{secrets.randbelow(10 ** OTP_DIGITOS):0{OTP_DIGITOS}d}"
+            r.otp = otp
+            r.save(update_fields=["otp"])
+        reserva.otp = r.otp
+    return reserva.otp
+
+
+def clave_fallos_otp(viaje_id):
+    return f"otp-fallos:{viaje_id}"
 
 
 def estado_pago(reserva):
@@ -337,6 +368,33 @@ class ReservaView(APIView):
                 raise
             return Response(reserva_json(repetida), status=status.HTTP_200_OK)
         return Response(reserva_json(reserva), status=status.HTTP_201_CREATED)
+
+
+class ReservaOtpView(APIView):
+    @swagger_auto_schema(
+        operation_description=(
+            "Código de abordaje (OTP) de la reserva, para mostrarlo en el ticket. Solo el cliente dueño de la reserva "
+            "(403 si no). 409 si el pago no está aprobado, la reserva está cancelada o vencida, o el viaje finalizó. "
+            "Responde {otp, usado, usado_en}: 6 dígitos, únicos en la salida y de un solo uso al abordar."
+        ),
+        responses={200: "OTP de la reserva", 403: "No es tu reserva", 404: "No existe", 409: "Aún no disponible"},
+    )
+    def get(self, request, id):
+        reserva = get_object_or_404(Reserva.objects.select_related("viaje"), id=id)
+        yo = usuario_de(request)
+        if yo is None or reserva.usuario_id != yo.id:
+            return prohibido("Solo el titular de la reserva ve su código de abordaje")
+        if reserva.estado in ESTADOS_QUE_LIBERAN or reserva.vencida:
+            return Response({"message": "La reserva no está vigente", "motivo": "reserva_no_vigente"},
+                            status=status.HTTP_409_CONFLICT)
+        if estado_pago(reserva) != "aprobado":
+            return Response({"message": "Tu código de abordaje aparece cuando la agencia apruebe el pago",
+                             "motivo": "pago_no_aprobado"}, status=status.HTTP_409_CONFLICT)
+        if reserva.viaje is not None and reserva.viaje.estado == Viaje.COMPLETADO:
+            return Response({"message": "El viaje ya finalizó", "motivo": "viaje_finalizado"},
+                            status=status.HTTP_409_CONFLICT)
+        return Response({"otp": generar_otp(reserva), "usado": reserva.otp_usado_en is not None,
+                         "usado_en": reserva.otp_usado_en})
 
 
 class ReservaIdView(APIView):
@@ -634,7 +692,23 @@ def registrar_abordaje(request, reservas_validas, viaje):
     if estado not in ESTADOS_ABORDAJE:
         return Response({"message": "Estado de abordaje inválido"}, status=status.HTTP_400_BAD_REQUEST)
     codigo = request.data.get("codigo")
-    if codigo:
+    otp = str(request.data.get("otp") or "").strip()
+    por_otp = bool(otp)
+    if por_otp:
+        clave = clave_fallos_otp(viaje.id if viaje is not None else 0)
+        if cache.get(clave, 0) >= OTP_MAX_FALLOS:
+            return Response({"message": "Demasiados códigos incorrectos. Espera unos minutos e inténtalo de nuevo",
+                             "motivo": "demasiados_intentos"}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        encontrada = reservas_validas.filter(otp=otp).first() if OTP_FORMATO.fullmatch(otp) else None
+        if encontrada is None:
+            cache.set(clave, cache.get(clave, 0) + 1, OTP_VENTANA_SEG)
+            return Response({"message": "Código no válido para este viaje", "motivo": "otp_invalido"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if encontrada.otp_usado_en and encontrada.abordado != "ABORDO":
+            return Response({"message": "Este código ya se usó. Valida al pasajero por su número de reserva",
+                             "motivo": "otp_usado"}, status=status.HTTP_409_CONFLICT)
+        reserva_id = encontrada.id
+    elif codigo:
         reserva_id = leer_codigo(codigo)
         if reserva_id is None:
             return Response({"message": "Código QR no válido", "motivo": "qr_invalido"},
@@ -665,7 +739,11 @@ def registrar_abordaje(request, reservas_validas, viaje):
         reserva.abordado = estado
         if viaje is not None and reserva.viaje_id is None:
             reserva.viaje = viaje  # queda ligada al viaje en el que abordó
-        reserva.save(update_fields=["abordado", "viaje"])
+        campos = ["abordado", "viaje"]
+        if por_otp and estado == "ABORDO":
+            reserva.otp_usado_en = timezone.now()  # un solo uso
+            campos.append("otp_usado_en")
+        reserva.save(update_fields=campos)
     return Response(pasajero_json(reserva))
 
 
@@ -693,8 +771,10 @@ class ViajePasajerosView(APIView):
 class ViajeAbordarView(APIView):
     @swagger_auto_schema(
         operation_description=(
-            "Registrar abordaje. Body: {codigo: 'RT-<id>-<firma>'} (QR) o {reserva_id}, y estado "
-            "ABORDO | AUSENTE | PENDIENTE. ABORDO exige el último pago aprobado (409 con 'motivo' si no). "
+            "Registrar abordaje. Body: {otp: '123456'} (código de abordaje del ticket), {codigo: 'RT-<id>-<firma>'} "
+            "o {reserva_id}, y estado ABORDO | AUSENTE | PENDIENTE. ABORDO exige el último pago aprobado (409 con "
+            "'motivo' si no). OTP: 400 otp_invalido si no es de este viaje, 409 otp_usado si ya se usó, 429 "
+            "demasiados_intentos tras 10 fallos en 10 minutos en la misma salida. "
             "Responde el pasajero: nombre, documento, detalle (paquete), asiento, pago_estado, viaje_fecha, viaje_hora."
         )
     )

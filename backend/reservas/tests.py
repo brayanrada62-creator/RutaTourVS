@@ -110,6 +110,59 @@ class AbordajeTest(TestCase):
         self.assertEqual(res.json()["motivo"], "otro_viaje")
         self.assertEqual(self.abordar(reserva_id=999999).status_code, 404)
 
+    def test_otp_del_cliente_y_abordaje_de_un_solo_uso(self):
+        from django.core.cache import cache
+        cache.clear()
+        r = self.reserva("aprobado")
+        r.viaje = self.viaje
+        r.save()
+        cliente = Escenario.cliente_http(self.e.cliente)
+        res = cliente.get(f"/api/reserva/{r.id}/otp/")
+        self.assertEqual(res.status_code, 200)
+        otp = res.json()["otp"]
+        self.assertRegex(otp, r"^\d{6}$")
+        self.assertEqual(cliente.get(f"/api/reserva/{r.id}/otp/").json()["otp"], otp)  # siempre el mismo
+        # Otros no lo ven: otro cliente, el conductor y el admin.
+        for otro in (self.e.otro_cliente, self.e.cond_a, self.e.admin_a):
+            self.assertEqual(Escenario.cliente_http(otro).get(f"/api/reserva/{r.id}/otp/").status_code, 403)
+        # El conductor aborda con el OTP; repetirlo no duplica (ya abordó).
+        primero = self.c.post(f"/api/viaje/{self.viaje.id}/abordar/", {"otp": otp, "estado": "ABORDO"}, format="json")
+        self.assertEqual((primero.status_code, primero.json()["estado"]), (200, "ABORDO"))
+        r.refresh_from_db()
+        self.assertIsNotNone(r.otp_usado_en)
+        self.assertTrue(self.c.post(f"/api/viaje/{self.viaje.id}/abordar/", {"otp": otp}, format="json").json()["sin_cambios"])
+        self.assertTrue(cliente.get(f"/api/reserva/{r.id}/otp/").json()["usado"])
+        # Si el conductor lo devuelve a PENDIENTE, el OTP ya no sirve: se valida por número de reserva.
+        self.abordar(reserva_id=r.id, estado="PENDIENTE")
+        usado = self.c.post(f"/api/viaje/{self.viaje.id}/abordar/", {"otp": otp}, format="json")
+        self.assertEqual((usado.status_code, usado.json()["motivo"]), (409, "otp_usado"))
+        self.assertEqual(self.abordar(reserva_id=r.id).status_code, 200)
+
+    def test_otp_sin_pago_aprobado_o_de_otro_viaje(self):
+        from django.core.cache import cache
+        cache.clear()
+        cliente = Escenario.cliente_http(self.e.cliente)
+        pendiente = self.reserva("pendiente")
+        res = cliente.get(f"/api/reserva/{pendiente.id}/otp/")
+        self.assertEqual((res.status_code, res.json()["motivo"]), (409, "pago_no_aprobado"))
+        # OTP de una reserva del otro viaje: no sirve en este (aislamiento entre salidas y agencias).
+        ajena = self.reserva("aprobado", paquete=self.e.paq_b)
+        ajena.viaje = self.otro_viaje
+        ajena.save()
+        otp_ajeno = cliente.get(f"/api/reserva/{ajena.id}/otp/").json()["otp"]
+        res = self.c.post(f"/api/viaje/{self.viaje.id}/abordar/", {"otp": otp_ajeno}, format="json")
+        self.assertEqual((res.status_code, res.json()["motivo"]), (400, "otp_invalido"))
+        self.assertEqual(self.c.post(f"/api/viaje/{self.viaje.id}/abordar/", {"otp": "12ab"}, format="json").status_code, 400)
+
+    def test_otp_bloquea_tras_muchos_fallos(self):
+        from django.core.cache import cache
+        cache.clear()
+        for _ in range(10):
+            self.c.post(f"/api/viaje/{self.viaje.id}/abordar/", {"otp": "000000"}, format="json")
+        res = self.c.post(f"/api/viaje/{self.viaje.id}/abordar/", {"otp": "000001"}, format="json")
+        self.assertEqual((res.status_code, res.json()["motivo"]), (429, "demasiados_intentos"))
+        cache.clear()
+
     def test_conductor_no_autorizado(self):
         r = self.reserva("aprobado", paquete=self.e.paq_b)
         self.assertEqual(self.abordar(codigo=codigo_reserva(r.id), viaje=self.otro_viaje).status_code, 403)
