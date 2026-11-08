@@ -215,6 +215,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Minutos que una reserva guarda sus sillas sin comprobante de pago (regla de negocio: 1 hora).
 RESERVA_MINUTOS_PAGO = int(os.environ.get('RESERVA_MINUTOS_PAGO', '60'))
+# Distancia máxima (metros) entre el conductor y una parada con coordenadas para marcarla como cumplida.
+PARADA_RADIO_METROS = int(os.environ.get('PARADA_RADIO_METROS', '200'))
 
 EMAIL_BACKEND = os.environ.get(
     'EMAIL_BACKEND',

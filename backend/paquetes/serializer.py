@@ -57,6 +57,10 @@ class ItinerarioEntrada(serializers.Serializer):
     descripcion = serializers.CharField(max_length=300, required=False, allow_blank=True)
     hora = serializers.TimeField()
     lugar = serializers.CharField(max_length=150)
+    lat = serializers.DecimalField(max_digits=9, decimal_places=6, min_value=-90, max_value=90, required=False,
+                                   allow_null=True, help_text="Latitud de la parada (opcional; va con lng)")
+    lng = serializers.DecimalField(max_digits=9, decimal_places=6, min_value=-180, max_value=180, required=False,
+                                   allow_null=True, help_text="Longitud de la parada (opcional; va con lat)")
 
 
 class PaqueteValidar(serializers.Serializer):

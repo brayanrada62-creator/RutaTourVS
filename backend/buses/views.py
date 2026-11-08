@@ -1,3 +1,6 @@
+import math
+
+from django.conf import settings
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.views import APIView
@@ -1276,6 +1279,8 @@ def paradas_json(viaje):
         lista.append({
             "id": it.id, "nombre": it.titulo or it.lugar, "lugar": it.lugar, "dia": it.dia,
             "hora": it.hora.strftime("%H:%M") if it.hora else "", "orden": orden,
+            "lat": float(it.lat) if it.lat is not None else None,
+            "lng": float(it.lng) if it.lng is not None else None,
             "cumplida": it.id in hechas, "cumplida_en": hechas.get(it.id),
         })
     return lista
@@ -1288,9 +1293,41 @@ class ViajeParadasView(APIView):
         return Response(paradas_json(viaje))
 
 
+RADIO_TIERRA_M = 6_371_000
+
+
+def distancia_metros(lat1, lng1, lat2, lng2):
+    """Distancia en metros entre dos puntos (haversine)."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * RADIO_TIERRA_M * math.asin(math.sqrt(a))
+
+
+def leer_ubicacion(datos):
+    """(lat, lng) válidos que envía la app, o None si faltan o no son números en rango."""
+    try:
+        lat, lng = float(datos.get("lat")), float(datos.get("lng"))
+    except (TypeError, ValueError):
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180) or math.isnan(lat) or math.isnan(lng):
+        return None
+    return lat, lng
+
+
 class ViajeParadaCumplirView(APIView):
     @swagger_auto_schema(
-        operation_description="El conductor que inició el viaje marca una parada del itinerario como cumplida (idempotente)."
+        operation_description=(
+            "El conductor que inició el viaje marca una parada del itinerario como cumplida (idempotente). "
+            "Body {lat, lng}: su ubicación actual. Si la parada tiene coordenadas, debe estar a menos de "
+            "PARADA_RADIO_METROS (200 m): 400 motivo 'sin_ubicacion' si no envía su ubicación, 409 motivo 'lejos' "
+            "con distancia_m y radio_m si está más lejos. Sin coordenadas en la parada no se puede verificar y se permite."
+        ),
+        request_body=openapi.Schema(type=openapi.TYPE_OBJECT, properties={
+            "lat": openapi.Schema(type=openapi.TYPE_NUMBER, description="Latitud actual del conductor"),
+            "lng": openapi.Schema(type=openapi.TYPE_NUMBER, description="Longitud actual del conductor"),
+        }),
+        responses={200: "Paradas del viaje", 400: "Sin ubicación", 403: "No es tu viaje", 409: "Lejos o viaje no en curso"},
     )
     def post(self, request, id, itinerario_id):
         yo = usuario_de(request)
@@ -1302,5 +1339,19 @@ class ViajeParadaCumplirView(APIView):
         if viaje.conductor_id != yo.id:
             return prohibido("Solo el conductor que inició el viaje marca paradas")
         itinerario = get_object_or_404(Itinerario, id=itinerario_id, paquete_id=viaje.paquete_id)
+        ya_cumplida = ParadaCumplida.objects.filter(viaje=viaje, itinerario=itinerario).exists()
+        if not ya_cumplida and itinerario.lat is not None and itinerario.lng is not None:
+            ubicacion = leer_ubicacion(request.data)
+            if ubicacion is None:
+                return Response({"message": "Activa la ubicación (GPS) para marcar la llegada a la parada",
+                                 "motivo": "sin_ubicacion"}, status=status.HTTP_400_BAD_REQUEST)
+            radio = settings.PARADA_RADIO_METROS
+            distancia = distancia_metros(*ubicacion, float(itinerario.lat), float(itinerario.lng))
+            if distancia > radio:
+                nombre = itinerario.titulo or itinerario.lugar
+                return Response({"message": f"Estás a {round(distancia)} m de {nombre}. Debes estar a menos de "
+                                            f"{radio} m para marcar la llegada",
+                                 "motivo": "lejos", "distancia_m": round(distancia), "radio_m": radio},
+                                status=status.HTTP_409_CONFLICT)
         ParadaCumplida.objects.get_or_create(viaje=viaje, itinerario=itinerario)
         return Response(paradas_json(viaje))
