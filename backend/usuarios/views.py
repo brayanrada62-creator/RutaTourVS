@@ -45,7 +45,7 @@ from .permisos import (
     agencia_desactivada, agencias_de, es_admin, es_super, filtrar_agencia_super, gestiona_agencia, prohibido, usuario_de,
 )
 from buses.models import Asiento, Bus, TipoBus, Viaje
-from destinos.imagenes import imagen_url
+from destinos.imagenes import borrar_archivo, imagen_url, validar_foto
 from destinos.models import Hospedaje
 from pagos.models import Pago
 from paquetes.models import Paquete
@@ -133,6 +133,7 @@ def usuario_json(usuario, request=None):
         'licencia': usuario.licencia,
         'tiene_licencia_pdf': bool(usuario.licencia_pdf),
         'licencia_pdf_url': imagen_url(usuario.licencia_pdf, request) if puede_ver_pdf else None,
+        'foto_url': imagen_url(usuario.foto, request),
         'activo': usuario.activo,
     }
 
@@ -399,7 +400,7 @@ class UsuarioPerfilView(APIView):
     )
     def get(self, request):
         usuario = usuario_de(request)
-        data = usuario_json(usuario)
+        data = usuario_json(usuario, request)
         data['name'] = usuario.nombre_completo
         data['role'] = usuario.rol.rol
         return Response(data)
@@ -659,6 +660,7 @@ class UsuarioView(APIView):
             "documento de 5 a 15 dígitos, contraseña de 8 o más y celular de 10 dígitos que empiece por 3 "
             "si se envía (400 si no; también para el personal). "
             "Administrador: conductores o clientes de su agencia. Superadministrador: cualquiera. "
+            "foto (opcional, multipart): JPG, PNG o WEBP de máx. 5 MB (400 con campo 'foto' si no). "
             "Conductor (rol 3): se puede enviar como multipart/form-data con 'licencia_pdf' (.pdf, máx. 5 MB; "
             "400 si no cumple). Solo el admin de la agencia o el superadmin suben ese PDF (403 sin sesión)."
         ),
@@ -695,6 +697,12 @@ class UsuarioView(APIView):
                 return prohibido("Solo puedes crear usuarios de tu agencia")
         elif not es_super(yo):
             return prohibido()
+
+        foto = request.FILES.get("foto") if hasattr(request, "FILES") else None
+        if foto is not None:
+            error = validar_foto(foto)
+            if error:
+                return Response({'message': error, 'campo': 'foto'}, status=status.HTTP_400_BAD_REQUEST)
 
         licencia_pdf = archivo_licencia(request)
         if licencia_pdf is not None:
@@ -751,6 +759,7 @@ class UsuarioView(APIView):
                 contrasena=make_password(contrasena),
                 licencia=licencia,
                 licencia_pdf=licencia_pdf,
+                foto=foto,
             )
             if huerfano is not None:
                 # Sus sesiones viejas no sirven para la cuenta nueva: se revocan antes de reutilizarla.
@@ -866,6 +875,11 @@ class UsuarioIdView(APIView):
         error = error_edicion_usuario(usuario, datos, rol_nuevo, agencia_nueva)
         if error:
             return Response({'message': error}, status=status.HTTP_400_BAD_REQUEST)
+        foto = request.FILES.get("foto") if hasattr(request, "FILES") else None
+        if foto is not None:
+            error = validar_foto(foto)
+            if error:
+                return Response({'message': error, 'campo': 'foto'}, status=status.HTTP_400_BAD_REQUEST)
         correo_anterior = usuario.correo
         usuario.nombre_completo = datos.get('nombre_completo', usuario.nombre_completo)
         usuario.rol_id = rol_nuevo
@@ -880,6 +894,10 @@ class UsuarioIdView(APIView):
         if licencia_pdf is not None:
             borrar_licencia_pdf(usuario)  # el PDF anterior no queda huérfano en el almacenamiento
             usuario.licencia_pdf = licencia_pdf
+        quitar_foto = str(datos.get('quitar_foto', '')).lower() in ("true", "1")
+        if foto is not None or quitar_foto:
+            borrar_archivo(usuario.foto)  # la foto anterior no queda huérfana en Cloudinary
+            usuario.foto = foto
         if 'activo' in datos:
             nuevo_activo = str(datos.get('activo')).lower() in ("true", "1")
             if mismo and nuevo_activo != usuario.activo:

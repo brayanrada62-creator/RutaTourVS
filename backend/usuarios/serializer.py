@@ -60,6 +60,7 @@ class UsuarioEntrada(serializers.Serializer):
     contrasena = serializers.CharField(max_length=255)
     licencia = serializers.CharField(max_length=30, required=False, allow_blank=True,
                                      help_text="Número de la licencia de conducción")
+    foto = serializers.ImageField(required=False, help_text="Foto de perfil: JPG, PNG o WEBP de máx. 5 MB (multipart)")
     licencia_pdf = serializers.FileField(required=False,
                                          help_text="Solo conductores, enviado como multipart/form-data por el admin "
                                                    "de su agencia o el superadmin. Archivo .pdf de máximo 5 MB")
@@ -83,6 +84,9 @@ class UsuarioEditarEntrada(serializers.Serializer):
                                          help_text="Reemplaza el PDF del conductor (.pdf, máx. 5 MB). "
                                                    "Solo el admin de su agencia o el superadmin")
     activo = serializers.BooleanField(required=False, help_text="false = suspender")
+    foto = serializers.ImageField(required=False, help_text="Reemplaza la foto: JPG, PNG o WEBP de máx. 5 MB (multipart). "
+                                                            "La anterior se borra de Cloudinary")
+    quitar_foto = serializers.BooleanField(required=False, help_text="true = quitar la foto de perfil")
 
 
 class RecuperarContrasenaEntrada(serializers.Serializer):

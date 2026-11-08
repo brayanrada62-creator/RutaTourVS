@@ -28,7 +28,7 @@ class HopedajeEntrada(serializers.Serializer):
     telefono_fijo = serializers.CharField(max_length=10, required=False, allow_blank=True, validators=[validar_fijo],
                                           help_text="Opcional. Fijo: 10 dígitos y empieza por 60 (6012345678)")
     descripcion = serializers.CharField(max_length=2000)
-    imagen = serializers.ImageField(required=False)
+    imagen = serializers.ImageField(required=False, help_text="Foto del hotel: JPG, PNG o WEBP de máx. 5 MB (multipart)")
 
 
 class HospedajeDestinoEntrada(serializers.Serializer):

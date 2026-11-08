@@ -1,3 +1,4 @@
+import os
 from django.contrib.auth.hashers import check_password
 from django.contrib.auth.models import User
 import json
@@ -1100,3 +1101,52 @@ class RegistroUsuarioExistenteTest(TestCase):
         self.assertEqual(r.json()["motivo"], "correo_existente")
         self.assertTrue(User.objects.get(username="ana@rt.co").check_password("otraclave99"))
         self.assertFalse(Usuario.objects.filter(correo="ana@rt.co").exists())
+
+
+MEDIA_FOTOS = tempfile.mkdtemp()
+
+
+@override_settings(MEDIA_ROOT=MEDIA_FOTOS)
+class FotoUsuarioTest(TestCase):
+    """F: foto de perfil (Cloudinary en Render, MEDIA_ROOT en pruebas) validada en el backend."""
+
+    def setUp(self):
+        self.e = Escenario()
+
+    def test_cada_quien_sube_su_foto_y_reemplaza_la_anterior(self):
+        c = Escenario.cliente_http(self.e.cliente)
+        url = f"/api/usuario/{self.e.cliente.id}/"
+        self.assertEqual(c.put(url, {"foto": imagen("yo.png")}, format="multipart").status_code, 200)
+        primera = Usuario.objects.get(id=self.e.cliente.id).foto.name
+        self.assertTrue(primera.startswith("usuarios/"))
+        self.assertNotIn("yo", primera)  # nombre aleatorio
+        perfil = c.get("/api/usuario/perfil/").json()
+        self.assertTrue(perfil["foto_url"].startswith("http://testserver/media/usuarios/"))
+        self.assertEqual(c.put(url, {"foto": imagen("otra.jpg", "JPEG")}, format="multipart").status_code, 200)
+        segunda = Usuario.objects.get(id=self.e.cliente.id).foto.name
+        self.assertNotEqual(primera, segunda)
+        self.assertFalse(os.path.exists(os.path.join(MEDIA_FOTOS, primera)))  # la anterior se borró
+        self.assertEqual(c.put(url, {"quitar_foto": "true"}, format="multipart").status_code, 200)
+        self.assertFalse(Usuario.objects.get(id=self.e.cliente.id).foto)
+
+    def test_rechaza_lo_que_no_es_imagen_o_pesa_mas_de_5_mb(self):
+        c = Escenario.cliente_http(self.e.cliente)
+        url = f"/api/usuario/{self.e.cliente.id}/"
+        falso = SimpleUploadedFile("foto.png", b"%PDF-1.4 no soy imagen", content_type="image/png")
+        r = c.put(url, {"foto": falso}, format="multipart")
+        self.assertEqual((r.status_code, r.json()["campo"]), (400, "foto"))
+        with patch("destinos.imagenes.FOTO_MAX_BYTES", 10):  # el límite real es 5 MB
+            r = c.put(url, {"foto": imagen("grande.png")}, format="multipart")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("5 MB", r.json()["message"])
+        self.assertFalse(Usuario.objects.get(id=self.e.cliente.id).foto)
+
+    def test_solo_quien_puede_editar_al_usuario_cambia_su_foto(self):
+        ajeno = Escenario.cliente_http(self.e.admin_b)  # otra agencia
+        r = ajeno.put(f"/api/usuario/{self.e.cond_a.id}/", {"foto": imagen()}, format="multipart")
+        self.assertEqual(r.status_code, 403)
+        admin = Escenario.cliente_http(self.e.admin_a)  # su agencia
+        self.assertEqual(admin.put(f"/api/usuario/{self.e.cond_a.id}/", {"foto": imagen()}, format="multipart").status_code, 200)
+        sup = Escenario.cliente_http(self.e.super)  # el superadmin, también la suya
+        self.assertEqual(sup.put(f"/api/usuario/{self.e.super.id}/", {"foto": imagen()}, format="multipart").status_code, 200)
+
