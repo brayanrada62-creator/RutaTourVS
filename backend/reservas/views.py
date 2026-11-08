@@ -25,6 +25,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
 from usuarios.models import Usuario
+from usuarios.notificaciones import enviar_push_en_segundo_plano
 from pagos.models import Pago
 from buses.models import Asiento, Bus_Conductor
 from paquetes.models import Paquete
@@ -1085,6 +1086,35 @@ def chat_json(m):
 CHAT_ABIERTO = (Viaje.PROGRAMADO, Viaje.EN_CURSO)
 
 
+def destinatarios_chat(mensaje, viaje):
+    """A quién avisar de un mensaje nuevo (D1), con la misma privacidad del chat:
+    - lo que escribe un cliente solo lo ven el conductor y la agencia → se avisa al conductor del bus;
+    - lo que escriben el conductor o la agencia lo ven todos → se avisa a los clientes de la salida y al conductor.
+    Nunca al propio autor."""
+    autor = mensaje.usuario
+    conductores = set(Bus_Conductor.objects.filter(bus_id=viaje.bus_id).values_list("conductor_id", flat=True))
+    if viaje.conductor_id:
+        conductores.add(viaje.conductor_id)
+    if autor is not None and autor.rol_id == ROL_CLIENTE:
+        ids = conductores
+    else:
+        clientes = set(reservas_del_viaje(viaje).values_list("usuario_id", flat=True))
+        ids = conductores | clientes
+    return ids - {mensaje.usuario_id}
+
+
+def notificar_chat(mensaje, viaje):
+    autor = mensaje.usuario
+    nombre = {3: "El conductor", 1: "Tu agencia", 2: "Tu agencia"}.get(autor.rol_id, autor.nombre_completo) if autor else "Alguien"
+    texto = mensaje.texto if len(mensaje.texto) <= 120 else mensaje.texto[:117] + "…"
+    enviar_push_en_segundo_plano(
+        destinatarios_chat(mensaje, viaje),
+        f"Nuevo mensaje · {viaje.paquete.nombre}",
+        f"{nombre}: {texto}",
+        {"tipo": "chat", "viaje_id": viaje.id, "paquete_id": viaje.paquete_id, "viaje_estado": viaje.estado},
+    )
+
+
 class ChatView(APIView):
     """Chat de una salida (RUT-60 cliente, RUT-62 conductor): un hilo grupal por viaje.
     Cada cliente ve sus mensajes y los del conductor y la agencia, nunca los de otros pasajeros."""
@@ -1132,6 +1162,8 @@ class ChatView(APIView):
     @swagger_auto_schema(
         operation_description=(
             "Enviar un mensaje al chat de la salida: {viaje_id, texto}. El autor es quien tiene la sesión. "
+            "Envía una notificación push a los demás: si escribe un cliente, al conductor; si escriben el conductor "
+            "o la agencia, a todos los pasajeros de la salida y al conductor. "
             "Solo con el viaje PROGRAMADO o EN_CURSO: si está COMPLETADO responde 409 y no guarda nada. "
             "Las reservas antiguas sin salida (paquete_id) solo leen el chat (409). "
             "403 si el viaje no es tuyo: otra agencia, un bus que no es el tuyo o un cliente de otra salida."
@@ -1166,4 +1198,5 @@ class ChatView(APIView):
         if not texto:
             return Response({"message": "Escribe un mensaje"}, status=status.HTTP_400_BAD_REQUEST)
         m = ChatMensaje.objects.create(paquete_id=viaje.paquete_id, viaje=viaje, usuario_id=yo.id, texto=texto)
+        notificar_chat(m, viaje)  # push a los demás del chat (D1); no demora la respuesta
         return Response(chat_json(m), status=status.HTTP_201_CREATED)

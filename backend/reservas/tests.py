@@ -1,3 +1,4 @@
+from unittest.mock import patch
 from datetime import timedelta
 
 from django.test import TestCase
@@ -774,3 +775,77 @@ class NovedadesSuperadminTest(TestCase):
 
     def test_novedad_inexistente_404(self):
         self.assertEqual(self.sup.get("/api/novedad/99999/").status_code, 404)
+
+
+class NotificacionChatTest(TestCase):
+    """D1: aviso push de mensaje nuevo, con la misma privacidad del chat grupal."""
+
+    def setUp(self):
+        self.e = Escenario()
+        hoy = hoy_colombia()
+        self.v = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a, fecha=hoy + timedelta(days=2), hora="06:30")
+        otro = Viaje.objects.create(paquete=self.e.paq_a, bus=self.e.bus_a2, fecha=hoy + timedelta(days=2), hora="06:30")
+        Bus_Conductor.objects.create(bus=self.e.bus_a, conductor=self.e.cond_a)
+        self.ajeno = self.e.usuario("ajeno@rt.co", 4)
+        for usuario, viaje in ((self.e.cliente, self.v), (self.e.otro_cliente, self.v), (self.ajeno, otro)):
+            Reserva.objects.create(fecha_reserva=timezone.now(), usuario=usuario, paquete=self.e.paq_a, viaje=viaje)
+
+    def enviar(self, quien, texto="hola"):
+        with patch("reservas.views.enviar_push_en_segundo_plano") as push:
+            r = Escenario.cliente_http(quien).post("/api/chat/", {"viaje_id": self.v.id, "texto": texto}, format="json")
+        self.assertEqual(r.status_code, 201)
+        destinatarios, titulo, cuerpo, datos = push.call_args.args
+        return set(destinatarios), titulo, cuerpo, datos
+
+    def test_el_conductor_escribe_y_avisa_a_todos_los_pasajeros_de_la_salida(self):
+        ids, titulo, cuerpo, datos = self.enviar(self.e.cond_a, "Salimos en 10 minutos")
+        self.assertEqual(ids, {self.e.cliente.id, self.e.otro_cliente.id})  # no al ajeno (otra salida) ni a sí mismo
+        self.assertIn(self.e.paq_a.nombre, titulo)
+        self.assertEqual(cuerpo, "El conductor: Salimos en 10 minutos")
+        self.assertEqual((datos["tipo"], datos["viaje_id"]), ("chat", self.v.id))
+
+    def test_un_cliente_escribe_y_solo_avisa_al_conductor(self):
+        ids, _, cuerpo, _ = self.enviar(self.e.cliente)
+        self.assertEqual(ids, {self.e.cond_a.id})  # los demás pasajeros no ven su mensaje
+        self.assertTrue(cuerpo.startswith(self.e.cliente.nombre_completo))
+
+    def test_registrar_y_borrar_el_token_del_telefono(self):
+        from usuarios.models import Dispositivo
+        c = Escenario.cliente_http(self.e.cliente)
+        self.assertEqual(c.post("/api/dispositivo/", {"token": "tok-1"}, format="json").status_code, 200)
+        self.assertEqual(Dispositivo.objects.get(token="tok-1").usuario_id, self.e.cliente.id)
+        # Mismo teléfono, otra sesión: el token pasa al usuario nuevo.
+        Escenario.cliente_http(self.e.otro_cliente).post("/api/dispositivo/", {"token": "tok-1"}, format="json")
+        self.assertEqual(Dispositivo.objects.get(token="tok-1").usuario_id, self.e.otro_cliente.id)
+        c.delete("/api/dispositivo/", {"token": "tok-1"}, format="json")  # no es suyo: no lo borra
+        self.assertTrue(Dispositivo.objects.filter(token="tok-1").exists())
+        self.assertEqual(Escenario.cliente_http().post("/api/dispositivo/", {"token": "x"}, format="json").status_code, 401)
+        self.assertEqual(c.post("/api/dispositivo/", {}, format="json").status_code, 400)
+
+    def test_sin_credenciales_no_se_envia_nada(self):
+        from usuarios.models import Dispositivo
+        from usuarios.notificaciones import enviar_push
+        Dispositivo.objects.create(usuario=self.e.cliente, token="tok-2")
+        with self.settings(FIREBASE_CREDENTIALS=""), self.assertLogs("usuarios.notificaciones", level="INFO"):
+            self.assertEqual(enviar_push([self.e.cliente.id], "t", "c"), 0)
+        self.assertEqual(enviar_push([self.e.otro_cliente.id], "t", "c"), 0)  # sin teléfonos registrados
+
+    def test_con_firebase_envia_y_borra_tokens_vencidos(self):
+        from types import SimpleNamespace
+        from usuarios.models import Dispositivo
+        from usuarios import notificaciones
+        Dispositivo.objects.create(usuario=self.e.cliente, token="bueno")
+        Dispositivo.objects.create(usuario=self.e.cliente, token="viejo")
+
+        class UnregisteredError(Exception):
+            pass
+
+        def responder(mensaje, app=None):
+            return SimpleNamespace(responses=[
+                SimpleNamespace(success=t == "bueno", exception=None if t == "bueno" else UnregisteredError())
+                for t in mensaje.tokens])
+
+        with patch.object(notificaciones, "_firebase", return_value=object()),                 patch("firebase_admin.messaging.send_each_for_multicast", side_effect=responder):
+            self.assertEqual(notificaciones.enviar_push([self.e.cliente.id], "t", "c", {"viaje_id": 1}), 2)
+        self.assertEqual(list(Dispositivo.objects.values_list("token", flat=True)), ["bueno"])
+

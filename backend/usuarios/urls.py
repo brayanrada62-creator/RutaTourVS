@@ -1,7 +1,7 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
-    LoginView, VerificarCorreoView, VerificarCorreoConfirmarView,
+    LoginView, DispositivoView, VerificarCorreoView, VerificarCorreoConfirmarView,
     LoginGoogleView,
     LogoutView,
     UsuarioPerfilView,
@@ -16,6 +16,7 @@ from .views import (
 urlpatterns = [
     # Login
     path('login/', LoginView.as_view(), name='login'),
+    path('dispositivo/', DispositivoView.as_view(), name='dispositivo'),
     path('verificar-correo/', VerificarCorreoView.as_view(), name='verificar-correo'),
     path('verificar-correo/confirmar/', VerificarCorreoConfirmarView.as_view(), name='verificar-correo-confirmar'),
     path('login/google/', LoginGoogleView.as_view(), name='login-google'),
