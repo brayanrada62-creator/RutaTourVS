@@ -27,7 +27,8 @@ class Hospedaje(models.Model):
     nombre = models.CharField(max_length=150)
     destinos = models.ManyToManyField(Destino, through="HospedajeDestino", related_name="hospedajes")
     direccion = models.CharField(max_length=255)
-    telefono = models.CharField(max_length=20)
+    telefono = models.CharField(max_length=20)  # celular (10 dígitos, empieza por 3)
+    telefono_fijo = models.CharField(max_length=10, blank=True, default="")  # opcional (60 + indicativo)
     descripcion = models.CharField(max_length=2000)
     imagen = models.ImageField(upload_to="hospedajes/", max_length=255, blank=True, null=True)
 

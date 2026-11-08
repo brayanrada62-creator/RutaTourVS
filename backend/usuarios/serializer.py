@@ -19,6 +19,22 @@ def validar_celular(valor):
         raise serializers.ValidationError(error)
 
 
+# Teléfono fijo de Colombia (desde 2021): 10 dígitos que empiezan por 60 + indicativo (6012345678 Bogotá).
+FIJO_CO = re.compile(r"60\d{8}")
+MENSAJE_FIJO = "El teléfono fijo debe tener 10 dígitos y empezar por 60 (por ejemplo 6012345678)"
+
+
+def error_telefono_fijo(valor):
+    """Mensaje si el fijo no sirve; None si es válido o viene vacío (es opcional)."""
+    texto = str(valor or "").strip()
+    return None if not texto or FIJO_CO.fullmatch(texto) else MENSAJE_FIJO
+
+
+def validar_fijo(valor):
+    error = error_telefono_fijo(valor)
+    if error:
+        raise serializers.ValidationError(error)
+
 
 class MensajeSalida(serializers.Serializer):
     message = serializers.CharField(max_length=255)
