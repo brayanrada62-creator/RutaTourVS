@@ -156,6 +156,10 @@ class UsuariosTest(TestCase):
             {"numero_documento": "1234"},
             {"contrasena": "corta12"},
             {"telefono": "12"},
+            {"telefono": "6011234567"},   # fijo de Bogotá: solo se aceptan celulares
+            {"telefono": "300123456"},    # 9 dígitos
+            {"telefono": "30012345678"},  # 11 dígitos
+            {"telefono": "300-123-4567"},
         ]
         for cambio in malos:
             r = APIClient().post("/api/usuario/", {**valido, **cambio}, format="json")
@@ -185,7 +189,21 @@ class UsuariosTest(TestCase):
     def test_no_se_sube_su_propio_rol(self):
         c = Escenario.cliente_http(self.e.cond_a)
         self.assertEqual(c.put(f"/api/usuario/{self.e.cond_a.id}/", {"rol_id": 1}, format="json").status_code, 403)
-        self.assertEqual(c.put(f"/api/usuario/{self.e.cond_a.id}/", {"telefono": "300"}, format="json").status_code, 200)
+        self.assertEqual(c.put(f"/api/usuario/{self.e.cond_a.id}/", {"telefono": "300"}, format="json").status_code, 400)
+        self.assertEqual(c.put(f"/api/usuario/{self.e.cond_a.id}/", {"telefono": "3001234567"}, format="json").status_code, 200)
+
+    def test_celular_del_personal_y_telefono_antiguo(self):
+        sup = Escenario.cliente_http(self.e.super)
+        base = {"nombre_completo": "Cond", "rol_id": 3, "agencia_id": self.e.ag_a.id, "tipo_documento": "CC",
+                "numero_documento": "8080808", "correo": "cond.nuevo@rt.co", "contrasena": "clave1234"}
+        r = sup.post("/api/usuario/", {**base, "telefono": "6011234567"}, format="json")
+        self.assertEqual((r.status_code, r.json()["campo"]), (400, "telefono"))
+        self.assertFalse(Usuario.objects.filter(correo="cond.nuevo@rt.co").exists())
+        self.assertEqual(sup.post("/api/usuario/", {**base, "telefono": "3109876543"}, format="json").status_code, 200)
+        # El escenario tiene teléfono "1" (formato antiguo): editar otros datos enviándolo igual no falla.
+        r = sup.put(f"/api/usuario/{self.e.cond_a.id}/", {"nombre_completo": "Nuevo", "telefono": "1"}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(sup.put(f"/api/usuario/{self.e.cond_a.id}/", {"telefono": "2"}, format="json").status_code, 400)
 
     def test_admin_limites(self):
         a = Escenario.cliente_http(self.e.admin_a)
@@ -504,7 +522,7 @@ class SuperadminAgenciasTest(TestCase):
 
     def test_admin_no_modifica_otra_agencia_y_super_si(self):
         e = self.e
-        datos = {"nombre": "Nuevo", "nit": "9", "direccion": "x", "telefono": "9", "correo": "n@n.co"}
+        datos = {"nombre": "Nuevo", "nit": "9", "direccion": "x", "telefono": "3001112233", "correo": "n@n.co"}
         self.assertEqual(self.adm.put(f"/api/agencia/{e.ag_b.id}/", datos, format="json").status_code, 403)
         self.assertEqual(self.adm.delete(f"/api/paquete/{e.paq_b.id}/").status_code, 403)
         self.assertEqual(self.adm.delete(f"/api/viaje/{self.viaje_b.id}/").status_code, 403)
@@ -529,9 +547,21 @@ class SuperadminAgenciasTest(TestCase):
         self.assertEqual(self.sup.post("/api/agencia/", {}, format="json").status_code, 400)
         self.assertEqual(self.sup.put(url, {"nombre": ""}, format="json").status_code, 400)
         self.assertEqual(self.sup.put(url, {"correo": "malo"}, format="json").status_code, 400)
-        self.assertEqual(self.sup.put(url, {"telefono": "555"}, format="json").status_code, 200)
+        r = self.sup.put(url, {"telefono": "555"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("10 dígitos", r.json()["message"])
+        self.assertEqual(self.sup.put(url, {"telefono": "3155550000"}, format="json").status_code, 200)
         agencia = Agencia.objects.get(id=self.e.ag_b.id)
-        self.assertEqual((agencia.telefono, agencia.nombre), ("555", "B"))  # lo que no se envía se conserva
+        self.assertEqual((agencia.telefono, agencia.nombre), ("3155550000", "B"))  # lo que no se envía se conserva
+
+    def test_agencia_nueva_exige_celular_y_la_antigua_edita_sin_cambiarlo(self):
+        datos = {"nombre": "Nueva", "nit": "777", "direccion": "d", "telefono": "6015551234", "correo": "n@rt.co"}
+        self.assertEqual(self.sup.post("/api/agencia/", datos, format="json").status_code, 400)
+        self.assertEqual(self.sup.post("/api/agencia/", {**datos, "telefono": "3015551234"}, format="json").status_code, 200)
+        # ag_a tiene teléfono "1" (antiguo): el formulario lo reenvía al editar el nombre y no debe fallar.
+        url = f"/api/agencia/{self.e.ag_a.id}/"
+        self.assertEqual(self.sup.put(url, {"nombre": "A2", "telefono": "1"}, format="json").status_code, 200)
+        self.assertEqual(Agencia.objects.get(id=self.e.ag_a.id).nombre, "A2")
 
     def test_eliminar_agencia_con_datos_responde_409_con_totales(self):
         respuesta = self.sup.delete(f"/api/agencia/{self.e.ag_b.id}/")
@@ -728,7 +758,7 @@ class ValidacionUsuariosTest(TestCase):
         self.assertEqual(self.sup.post("/api/usuario/", self.datos(), format="json").status_code, 200)
 
     def test_nit_repetido(self):
-        agencia = {"nombre": "Otra", "nit": self.e.ag_a.nit, "direccion": "d", "telefono": "1", "correo": "o@rt.co"}
+        agencia = {"nombre": "Otra", "nit": self.e.ag_a.nit, "direccion": "d", "telefono": "3001234567", "correo": "o@rt.co"}
         self.assertEqual(self.sup.post("/api/agencia/", agencia, format="json").status_code, 400)
         r = self.sup.put(f"/api/agencia/{self.e.ag_b.id}/", {"nit": self.e.ag_a.nit}, format="json")
         self.assertEqual(r.status_code, 400)

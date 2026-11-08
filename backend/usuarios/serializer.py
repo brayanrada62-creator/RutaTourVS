@@ -1,5 +1,23 @@
+import re
+
 from rest_framework import serializers
 from .models import Agencia, Usuario
+
+# Celular de Colombia: 10 dígitos y empieza por 3 (por ejemplo 3001234567). Solo se aceptan celulares.
+CELULAR_CO = re.compile(r"3\d{9}")
+MENSAJE_CELULAR = "El celular debe tener 10 dígitos y empezar por 3"
+
+
+def error_telefono(valor):
+    """Mensaje si el celular no sirve; None si es válido. Lo usan el registro, el personal y las agencias."""
+    return None if CELULAR_CO.fullmatch(str(valor or "").strip()) else MENSAJE_CELULAR
+
+
+def validar_celular(valor):
+    error = error_telefono(valor)
+    if error:
+        raise serializers.ValidationError(error)
+
 
 
 class MensajeSalida(serializers.Serializer):
@@ -21,7 +39,8 @@ class UsuarioEntrada(serializers.Serializer):
     tipo_documento = serializers.CharField(max_length=30)
     numero_documento = serializers.CharField(max_length=30)
     correo = serializers.EmailField(max_length=150)
-    telefono = serializers.CharField(max_length=20)
+    telefono = serializers.CharField(max_length=10, validators=[validar_celular],
+                                     help_text="Celular de Colombia: 10 dígitos y empieza por 3")
     contrasena = serializers.CharField(max_length=255)
     licencia = serializers.CharField(max_length=30, required=False, allow_blank=True,
                                      help_text="Número de la licencia de conducción")
@@ -38,7 +57,9 @@ class UsuarioEditarEntrada(serializers.Serializer):
     tipo_documento = serializers.CharField(max_length=30, required=False)
     numero_documento = serializers.CharField(max_length=30, required=False)
     correo = serializers.EmailField(max_length=150, required=False)
-    telefono = serializers.CharField(max_length=20, required=False)
+    telefono = serializers.CharField(max_length=10, required=False, validators=[validar_celular],
+                                     help_text="Celular de Colombia: 10 dígitos y empieza por 3. "
+                                               "Se valida solo si cambia")
     contrasena = serializers.CharField(max_length=255, required=False)
     licencia = serializers.CharField(max_length=30, required=False, allow_blank=True,
                                      help_text="Número de la licencia de conducción")
@@ -68,7 +89,8 @@ class AgenciaEntrada(serializers.Serializer):
     nombre = serializers.CharField(max_length=150)
     nit = serializers.CharField(max_length=30)
     direccion = serializers.CharField(max_length=255)
-    telefono = serializers.CharField(max_length=20)
+    telefono = serializers.CharField(max_length=10, validators=[validar_celular],
+                                     help_text="Celular de Colombia: 10 dígitos y empieza por 3")
     correo = serializers.EmailField(max_length=150)
     activo = serializers.BooleanField(required=False, help_text="Solo el superadministrador lo cambia")
     banco = serializers.CharField(max_length=100, required=False, allow_blank=True)

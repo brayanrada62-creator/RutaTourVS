@@ -33,6 +33,7 @@ from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, Ou
 from drf_yasg import openapi
 
 from .serializer import (
+    error_telefono,
     UsuarioEditarEntrada, UsuarioEntrada, loginSerializer, AgenciaEntrada, MensajeSalida,
     UsuarioAgenciaEntrada, RecuperarContrasenaEntrada,
     ConfirmarContrasenaEntrada, LoginGoogleEntrada,
@@ -240,9 +241,8 @@ def error_registro(nombre, correo, documento, telefono, clave):
     documento = str(documento or "")
     if not (documento.isdigit() and 5 <= len(documento) <= 15):
         return "El documento debe tener de 5 a 15 dígitos"
-    telefono = str(telefono or "")
-    if telefono and not (telefono.isdigit() and 7 <= len(telefono) <= 15):
-        return "El teléfono debe tener de 7 a 15 dígitos"
+    if str(telefono or "").strip() and error_telefono(telefono):
+        return error_telefono(telefono)
     if len(str(clave or "")) < CLAVE_MINIMA:
         return f"La contraseña debe tener al menos {CLAVE_MINIMA} caracteres"
     return None
@@ -617,6 +617,10 @@ def error_edicion_usuario(usuario, datos, rol_nuevo, agencia_nueva):
     clave = datos.get('contrasena')
     if clave and len(str(clave)) < CLAVE_MINIMA:
         return f"La contraseña debe tener al menos {CLAVE_MINIMA} caracteres"
+    # Solo si cambia: un usuario antiguo con otro formato puede seguir editando sus demás datos.
+    telefono = str(datos.get('telefono', usuario.telefono) or "").strip()
+    if telefono and telefono != usuario.telefono and error_telefono(telefono):
+        return error_telefono(telefono)
     return None
 
 
@@ -629,7 +633,8 @@ class UsuarioView(APIView):
     @swagger_auto_schema(
         operation_description=(
             "Crea un usuario. Sin sesión: registro de cliente (rol 4, sin agencia) con nombre, correo válido, "
-            "documento de 5 a 15 dígitos, contraseña de 8 o más y teléfono de 7 a 15 dígitos si se envía (400 si no). "
+            "documento de 5 a 15 dígitos, contraseña de 8 o más y celular de 10 dígitos que empiece por 3 "
+            "si se envía (400 si no; también para el personal). "
             "Administrador: conductores o clientes de su agencia. Superadministrador: cualquiera. "
             "Conductor (rol 3): se puede enviar como multipart/form-data con 'licencia_pdf' (.pdf, máx. 5 MB; "
             "400 si no cumple). Solo el admin de la agencia o el superadmin suben ese PDF (403 sin sesión)."
@@ -685,6 +690,9 @@ class UsuarioView(APIView):
         error = error_correo_clave(correo, contrasena)
         if error:
             return Response({'message': error}, status=status.HTTP_400_BAD_REQUEST)
+        if str(telefono or "").strip() and error_telefono(telefono):
+            return Response({'message': error_telefono(telefono), 'campo': 'telefono'},
+                            status=status.HTTP_400_BAD_REQUEST)
         if agencia_id not in (None, "") and not existe_por_id(Agencia, agencia_id):
             return Response({'message': 'La agencia seleccionada no existe'}, status=status.HTTP_400_BAD_REQUEST)
         # Cada caso con su mensaje: así se sabe qué dato está repetido.
@@ -1295,8 +1303,13 @@ def agencia_json(agencia, con_cuenta=False):
     return datos
 
 
-def leer_agencia(datos, parcial=False):
-    """(datos validados, error 400). Sin esto un POST o PUT incompleto terminaba en error 500."""
+def leer_agencia(datos, parcial=False, actual=None):
+    """(datos validados, error 400). Sin esto un POST o PUT incompleto terminaba en error 500.
+    Al editar ([actual]) el teléfono solo se valida si cambia: una agencia antigua con un fijo puede
+    seguir editando sus demás datos."""
+    datos = {campo: datos.get(campo) for campo in datos}
+    if actual is not None and str(datos.get("telefono") or "").strip() == actual.telefono:
+        datos.pop("telefono")
     entrada = AgenciaEntrada(data=datos, partial=parcial)
     if entrada.is_valid():
         return entrada.validated_data, None
@@ -1365,7 +1378,7 @@ class AgenciaIdView(APIView):
         yo = usuario_de(request)
         if not gestiona_agencia(yo, agenciaB.id):
             return prohibido()
-        datos, error = leer_agencia(request.data, parcial=True)
+        datos, error = leer_agencia(request.data, parcial=True, actual=agenciaB)
         if error:
             return error
         if "activo" in datos and not es_super(yo):
