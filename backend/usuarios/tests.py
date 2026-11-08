@@ -53,6 +53,15 @@ class AutenticacionTest(TestCase):
         self.assertEqual(datos["usuario"]["rol_id"], 2)
         self.assertEqual(datos["usuario"]["agencia_id"], self.e.ag_a.id)
 
+    def test_login_y_perfil_traen_el_nombre_de_la_agencia(self):
+        cliente_agencia = self.e.usuario("cli.agencia@rt.co", 4, self.e.ag_a)
+        for usuario, esperado in ((cliente_agencia, self.e.ag_a.nombre), (self.e.cliente, None)):
+            r = APIClient().post("/api/login/", {"correo": usuario.correo, "contrasena": CLAVE}, format="json")
+            self.assertEqual(r.json()["agencia_nombre"], esperado, usuario.correo)
+            self.assertEqual(r.json()["usuario"]["agencia_nombre"], esperado)
+            perfil = Escenario.cliente_http(usuario).get("/api/usuario/perfil/").json()
+            self.assertEqual(perfil["agencia_nombre"], esperado)
+
     def test_solo_acepta_prefijo_bearer(self):
         r = APIClient().post("/api/login/", {"correo": self.e.cliente.correo, "contrasena": CLAVE}, format="json")
         access = r.json()["token"]
