@@ -327,6 +327,41 @@ class MigracionContrasenasTest(TransactionTestCase):
 
 
 
+class SesionRenovableTest(TestCase):
+    """Los 7 días del refresh cuentan desde el último uso (rotación), no desde el login."""
+
+    def setUp(self):
+        self.e = Escenario()
+        login = APIClient().post("/api/login/", {"correo": self.e.cond_a.correo, "contrasena": CLAVE}, format="json")
+        self.refresh = login.json()["refresh"]
+
+    def renovar(self, refresh):
+        return APIClient().post("/api/token/refresh/", {"refresh": refresh}, format="json")
+
+    def test_renovar_entrega_un_refresh_nuevo_que_vence_despues(self):
+        with patch("rest_framework_simplejwt.tokens.aware_utcnow",
+                   return_value=timezone.now() + timedelta(days=6)):
+            r = self.renovar(self.refresh)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["access"])
+        nuevo = r.json()["refresh"]
+        self.assertNotEqual(nuevo, self.refresh)
+        vence_viejo = RefreshToken(self.refresh, verify=False)["exp"]
+        vence_nuevo = RefreshToken(nuevo, verify=False)["exp"]  # emitido "dentro de 6 días"
+        self.assertGreater(vence_nuevo - vence_viejo, 5 * 24 * 3600)  # ~6 días más
+
+    def test_apps_viejas_que_no_guardan_el_nuevo_siguen_funcionando(self):
+        self.assertEqual(self.renovar(self.refresh).status_code, 200)
+        self.assertEqual(self.renovar(self.refresh).status_code, 200)
+
+    def test_suspender_revoca_tambien_los_refresh_renovados(self):
+        nuevo = self.renovar(self.refresh).json()["refresh"]
+        admin = Escenario.cliente_http(self.e.admin_a)
+        self.assertEqual(admin.put(f"/api/usuario/{self.e.cond_a.id}/", {"activo": False}, format="json").status_code, 200)
+        self.assertEqual(self.renovar(nuevo).status_code, 401)
+        self.assertEqual(self.renovar(self.refresh).status_code, 401)
+
+
 class SuspensionTest(TestCase):
     def setUp(self):
         self.e = Escenario()
