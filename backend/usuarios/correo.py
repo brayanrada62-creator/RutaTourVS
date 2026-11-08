@@ -1,9 +1,8 @@
-"""Envío de correo por API HTTP (Resend o Mailjet).
+"""Envío de correo por la API HTTP de Mailjet.
 
 El plan gratuito de Render bloquea los puertos SMTP, así que el correo sale por HTTPS.
-Para activarlo en Render, define DEFAULT_FROM_EMAIL y una de estas opciones:
-- Resend: EMAIL_BACKEND=usuarios.correo.ResendBackend y RESEND_API_KEY.
-- Mailjet: EMAIL_BACKEND=usuarios.correo.MailjetBackend, MAILJET_API_KEY y MAILJET_SECRET_KEY.
+En Render: EMAIL_BACKEND=usuarios.correo.MailjetBackend, MAILJET_API_KEY, MAILJET_SECRET_KEY y
+DEFAULT_FROM_EMAIL (las credenciales van solo en variables de entorno).
 """
 import base64
 import json
@@ -13,7 +12,6 @@ from email.utils import parseaddr
 from django.conf import settings
 from django.core.mail.backends.base import BaseEmailBackend
 
-RESEND_URL = "https://api.resend.com/emails"
 MAILJET_URL = "https://api.mailjet.com/v3.1/send"
 
 
@@ -30,28 +28,6 @@ class CorreoHttpBackend(BaseEmailBackend):
                 if not self.fail_silently:
                     raise
         return enviados
-
-
-class ResendBackend(CorreoHttpBackend):
-    def enviar(self, mensaje):
-        datos = {
-            "from": mensaje.from_email,
-            "to": mensaje.recipients(),
-            "subject": mensaje.subject,
-            "text": mensaje.body,
-        }
-        peticion = urllib.request.Request(
-            RESEND_URL,
-            data=json.dumps(datos).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {settings.RESEND_API_KEY}",
-                "Content-Type": "application/json",
-                "User-Agent": "RutaTour/1.0",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(peticion, timeout=10):
-            pass
 
 
 class MailjetBackend(CorreoHttpBackend):

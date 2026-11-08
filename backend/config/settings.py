@@ -213,8 +213,7 @@ EMAIL_BACKEND = os.environ.get(
     'EMAIL_BACKEND',
     'django.core.mail.backends.console.EmailBackend',
 )
-# Render gratis bloquea SMTP: en producción EMAIL_BACKEND=usuarios.correo.ResendBackend o MailjetBackend.
-RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
+# Render gratis bloquea SMTP: en producción EMAIL_BACKEND=usuarios.correo.MailjetBackend.
 MAILJET_API_KEY = os.environ.get('MAILJET_API_KEY', '')
 MAILJET_SECRET_KEY = os.environ.get('MAILJET_SECRET_KEY', '')
 EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
@@ -224,7 +223,10 @@ EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True') == 'True'
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER or 'RutaTour <noreply@rutatour.com>')
 FRONTEND_RESET_URL = os.environ.get('FRONTEND_RESET_URL', '')
-GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+# Crear una cuenta (o cambiar el correo) exige el código que se envía a ese correo (A4).
+# VERIFICAR_CORREO=False lo desactiva, por ejemplo mientras se publica la versión nueva de la app.
+VERIFICAR_CORREO = os.environ.get('VERIFICAR_CORREO', 'True') == 'True'
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
 
 # Con DEBUG=False Django no imprime los errores 500: así aparecen en los logs de Render.
 LOGGING = {
