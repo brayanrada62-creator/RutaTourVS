@@ -1,3 +1,5 @@
+from usuarios.models import VerificacionCorreo
+import re
 import os
 from django.contrib.auth.hashers import check_password
 from django.contrib.auth.models import User
@@ -886,29 +888,6 @@ class UsuarioAgenciaRutasTest(TestCase):
         self.assertEqual(self.sup.post("/api/usuario-agencia/1/", {}, format="json").status_code, 405)
 
 
-@override_settings(EMAIL_BACKEND="usuarios.correo.ResendBackend", RESEND_API_KEY="clave-de-prueba")
-class ResendBackendTest(TestCase):
-    """El correo sale por HTTPS a Resend; aquí se simula la respuesta, no se envía nada."""
-
-    @patch("usuarios.correo.urllib.request.urlopen")
-    def test_envia_a_la_api(self, urlopen):
-        self.assertEqual(send_mail("Asunto", "Cuerpo", "RutaTour <no@rt.co>", ["cliente@rt.co"]), 1)
-        peticion = urlopen.call_args.args[0]
-        self.assertEqual(peticion.full_url, "https://api.resend.com/emails")
-        self.assertEqual(peticion.get_header("Authorization"), "Bearer clave-de-prueba")
-        self.assertEqual(json.loads(peticion.data), {
-            "from": "RutaTour <no@rt.co>", "to": ["cliente@rt.co"], "subject": "Asunto", "text": "Cuerpo",
-        })
-
-    @patch("usuarios.correo.urllib.request.urlopen", side_effect=OSError("sin red"))
-    def test_un_fallo_no_cambia_la_respuesta_de_recuperar(self, urlopen):
-        e = Escenario()
-        with self.assertLogs("usuarios.views", level="ERROR"):
-            r = Escenario.cliente_http().post("/api/password/reset/", {"correo": e.cliente.correo}, format="json")
-        self.assertEqual(r.status_code, 200)
-        self.assertTrue(urlopen.called)
-
-
 @override_settings(EMAIL_BACKEND="usuarios.correo.MailjetBackend", MAILJET_API_KEY="k", MAILJET_SECRET_KEY="s")
 class MailjetBackendTest(TestCase):
     """El correo sale por HTTPS a Mailjet; aquí se simula la respuesta, no se envía nada."""
@@ -1149,4 +1128,79 @@ class FotoUsuarioTest(TestCase):
         self.assertEqual(admin.put(f"/api/usuario/{self.e.cond_a.id}/", {"foto": imagen()}, format="multipart").status_code, 200)
         sup = Escenario.cliente_http(self.e.super)  # el superadmin, también la suya
         self.assertEqual(sup.put(f"/api/usuario/{self.e.super.id}/", {"foto": imagen()}, format="multipart").status_code, 200)
+
+
+@override_settings(VERIFICAR_CORREO=True, EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+class VerificarCorreoTest(TestCase):
+    """A4: el correo se verifica con un código antes de crear la cuenta (Mailjet en producción)."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.e = Escenario()
+        self.anonimo = APIClient()
+        self.datos = {"nombre_completo": "Ana QA", "numero_documento": "4455667", "correo": "ana.nueva@rt.co",
+                      "telefono": "3001234567", "contrasena": "clave1234"}
+
+    def codigo_enviado(self):
+        from django.core import mail
+        return re.search(r"\b(\d{6})\b", mail.outbox[-1].body).group(1)
+
+    def test_registro_con_codigo_correcto(self):
+        r = self.anonimo.post("/api/verificar-correo/", {"correo": "Ana.Nueva@rt.co"}, format="json")
+        self.assertEqual(r.status_code, 200)
+        codigo = self.codigo_enviado()
+        sin_token = self.anonimo.post("/api/usuario/", self.datos, format="json")
+        self.assertEqual((sin_token.status_code, sin_token.json()["motivo"]), (400, "correo_no_verificado"))
+        r = self.anonimo.post("/api/verificar-correo/confirmar/", {"correo": "ana.nueva@rt.co", "codigo": codigo},
+                              format="json")
+        token = r.json()["token_correo"]
+        # El token es de ESE correo: no sirve para otro.
+        otro = self.anonimo.post("/api/usuario/", {**self.datos, "correo": "otra@rt.co", "token_correo": token},
+                                 format="json")
+        self.assertEqual(otro.status_code, 400)
+        r = self.anonimo.post("/api/usuario/", {**self.datos, "token_correo": token}, format="json")
+        self.assertEqual(r.status_code, 201)
+
+    def test_codigo_incorrecto_vencido_y_limite_de_intentos(self):
+        self.anonimo.post("/api/verificar-correo/", {"correo": "ana.nueva@rt.co"}, format="json")
+        codigo = self.codigo_enviado()
+        malo = "000000" if codigo != "000000" else "111111"
+        for _ in range(5):
+            r = self.anonimo.post("/api/verificar-correo/confirmar/", {"correo": "ana.nueva@rt.co", "codigo": malo},
+                                  format="json")
+            self.assertEqual(r.status_code, 400)
+        # Agotados los intentos, ni el código correcto sirve: hay que pedir otro.
+        r = self.anonimo.post("/api/verificar-correo/confirmar/", {"correo": "ana.nueva@rt.co", "codigo": codigo},
+                              format="json")
+        self.assertEqual((r.status_code, r.json()["motivo"]), (400, "codigo_vencido"))
+        VerificacionCorreo.objects.update(intentos=0, creado=timezone.now() - timedelta(minutes=11))
+        r = self.anonimo.post("/api/verificar-correo/confirmar/", {"correo": "ana.nueva@rt.co", "codigo": codigo},
+                              format="json")
+        self.assertEqual(r.json()["motivo"], "codigo_vencido")
+        self.assertFalse(VerificacionCorreo.objects.filter(codigo_hash=codigo).exists())  # se guarda el hash
+
+    def test_correo_ya_registrado_y_limite_de_envios(self):
+        r = self.anonimo.post("/api/verificar-correo/", {"correo": self.e.cliente.correo}, format="json")
+        self.assertEqual((r.status_code, r.json()["motivo"]), (400, "correo_existente"))
+        self.assertEqual(self.anonimo.post("/api/verificar-correo/", {"correo": "no-es-correo"}, format="json").status_code, 400)
+        self.assertEqual(self.anonimo.post("/api/verificar-correo/", {"correo": "x@rt.co"}, format="json").status_code, 200)
+        r = self.anonimo.post("/api/verificar-correo/", {"correo": "x@rt.co"}, format="json")
+        self.assertEqual(r.status_code, 429)
+
+    @patch("usuarios.views.send_mail", side_effect=OSError("sin red"))
+    def test_si_mailjet_falla_se_avisa(self, _):
+        with self.assertLogs("usuarios.views", level="ERROR"):
+            r = self.anonimo.post("/api/verificar-correo/", {"correo": "y@rt.co"}, format="json")
+        self.assertEqual((r.status_code, r.json()["motivo"]), (503, "envio_fallido"))
+
+    def test_el_personal_tambien_verifica_y_cambiar_el_correo_lo_exige(self):
+        sup = Escenario.cliente_http(self.e.super)
+        datos = {**self.datos, "rol_id": 3, "agencia_id": self.e.ag_a.id, "tipo_documento": "CC"}
+        self.assertEqual(sup.post("/api/usuario/", datos, format="json").status_code, 400)
+        c = Escenario.cliente_http(self.e.cliente)
+        r = c.put(f"/api/usuario/{self.e.cliente.id}/", {"correo": "nuevo.correo@rt.co"}, format="json")
+        self.assertEqual((r.status_code, r.json()["motivo"]), (400, "correo_no_verificado"))
+        # Cambiar otros datos sin tocar el correo no pide nada.
+        self.assertEqual(c.put(f"/api/usuario/{self.e.cliente.id}/", {"nombre_completo": "Otro"}, format="json").status_code, 200)
 

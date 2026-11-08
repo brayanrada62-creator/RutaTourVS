@@ -78,6 +78,18 @@ class UsuarioAgencia(models.Model):
         db_table = "usuario_agencia"
 
 
+class VerificacionCorreo(models.Model):
+    """Código de 6 dígitos enviado a un correo antes de crear la cuenta (A4). Se guarda solo su hash."""
+    correo = models.EmailField(max_length=150, db_index=True)
+    codigo_hash = models.CharField(max_length=64)
+    creado = models.DateTimeField(auto_now_add=True)
+    intentos = models.PositiveSmallIntegerField(default=0)
+    verificado = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "verificar_correo"
+
+
 class RecuperarContrasena(models.Model):
     usuario = models.ForeignKey(Usuario, on_delete=models.CASCADE)
     token_hash = models.CharField(max_length=64, unique=True)

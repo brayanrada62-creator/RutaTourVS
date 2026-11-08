@@ -10,6 +10,8 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
+from django.core import signing
+from django.core.cache import cache
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
@@ -38,7 +40,7 @@ from .serializer import (
     UsuarioAgenciaEntrada, RecuperarContrasenaEntrada,
     ConfirmarContrasenaEntrada, LoginGoogleEntrada,
 )
-from .models import Usuario, Agencia, Rol, UsuarioAgencia, RecuperarContrasena
+from .models import Usuario, Agencia, Rol, UsuarioAgencia, RecuperarContrasena, VerificacionCorreo
 from .paginacion import PARAMETRO_AGENCIA, PARAMETROS_LISTA, paginar, texto_busqueda
 from .permisos import (
     MENSAJE_AGENCIA_DESACTIVADA, ROL_ADMIN, ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, SesionVigente, SoloPersonal,
@@ -300,6 +302,119 @@ def verificar_google_id_token(id_token):
 def error_login(campo, mensaje, codigo=status.HTTP_401_UNAUTHORIZED):
     """Error del login con el campo que falló (correo o contrasena), para mostrarlo junto a él."""
     return Response({"campo": campo, "message": mensaje, "mensaje": mensaje}, status=codigo)
+
+
+CODIGO_CORREO_MIN = 10            # el código vence a los 10 minutos
+CODIGO_CORREO_INTENTOS = 5        # intentos para escribirlo bien
+ENVIOS_CORREO_ESPERA_SEG = 60     # un envío por minuto al mismo correo
+ENVIOS_CORREO_HORA = 5            # y máximo 5 por hora
+TOKEN_CORREO_SAL = "rutatour-verificar-correo"
+TOKEN_CORREO_MIN = 30             # tiempo para terminar el registro después de verificar
+
+
+def correo_verificado(correo, token):
+    """True si el token lo emitió /verificar-correo/confirmar/ para ese correo hace menos de 30 minutos."""
+    if not getattr(settings, "VERIFICAR_CORREO", True):
+        return True
+    try:
+        datos = signing.loads(str(token or ""), salt=TOKEN_CORREO_SAL, max_age=TOKEN_CORREO_MIN * 60)
+    except signing.BadSignature:
+        return False
+    return str(datos.get("correo", "")).lower() == str(correo or "").strip().lower()
+
+
+def error_correo_no_verificado():
+    return Response({"message": "Verifica el correo con el código que te enviamos", "campo": "correo",
+                     "motivo": "correo_no_verificado"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class VerificarCorreoView(APIView):
+    permission_classes = [AllowAny]
+
+    @swagger_auto_schema(
+        operation_description=(
+            "Envía un código de 6 dígitos (por Mailjet) al correo para comprobar que existe y es de quien se "
+            "registra. Vence en 10 minutos. 400 si el correo no es válido o ya tiene cuenta (motivo "
+            "correo_existente); 429 si se pide más de una vez por minuto o más de 5 por hora; 503 si el "
+            "correo no se pudo enviar."
+        ),
+        request_body=openapi.Schema(type=openapi.TYPE_OBJECT, required=["correo"],
+                                    properties={"correo": openapi.Schema(type=openapi.TYPE_STRING)}),
+        responses={200: "Código enviado", 400: "Correo inválido o ya registrado", 429: "Demasiados envíos",
+                   503: "No se pudo enviar"},
+    )
+    def post(self, request):
+        correo = str(request.data.get("correo") or "").strip().lower()
+        error = error_correo_clave(correo, None)
+        if error:
+            return Response({"message": error, "campo": "correo"}, status=status.HTTP_400_BAD_REQUEST)
+        if Usuario.objects.filter(correo__iexact=correo).exists():
+            return Response({"message": "Ya existe una cuenta con ese correo. Inicia sesión o recupera tu contraseña",
+                             "campo": "correo", "motivo": "correo_existente"}, status=status.HTTP_400_BAD_REQUEST)
+        if cache.get(f"correo-espera:{correo}"):
+            return Response({"message": "Espera un minuto antes de pedir otro código", "motivo": "espera"},
+                            status=status.HTTP_429_TOO_MANY_REQUESTS)
+        hora = cache.get(f"correo-hora:{correo}", 0)
+        if hora >= ENVIOS_CORREO_HORA:
+            return Response({"message": "Pediste demasiados códigos. Inténtalo en una hora", "motivo": "limite"},
+                            status=status.HTTP_429_TOO_MANY_REQUESTS)
+        codigo = f"{secrets.randbelow(1000000):06d}"
+        VerificacionCorreo.objects.filter(correo=correo, verificado=False).delete()  # solo vale el último
+        VerificacionCorreo.objects.create(correo=correo, codigo_hash=hash_valor(codigo))
+        cuerpo = (
+            "Hola,\n\n"
+            f"Tu código para verificar el correo en RutaTour es: {codigo}\n"
+            f"Vence en {CODIGO_CORREO_MIN} minutos.\n\n"
+            "Si no estás creando una cuenta en RutaTour, ignora este correo.\n"
+        )
+        try:
+            send_mail("Código de verificación RutaTour", cuerpo, settings.DEFAULT_FROM_EMAIL, [correo],
+                      fail_silently=False)
+        except Exception:
+            logger.exception("No se pudo enviar el código de verificación")
+            return Response({"message": "No pudimos enviar el correo. Revisa la dirección o inténtalo más tarde",
+                             "motivo": "envio_fallido"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        cache.set(f"correo-espera:{correo}", True, ENVIOS_CORREO_ESPERA_SEG)
+        cache.set(f"correo-hora:{correo}", hora + 1, 3600)
+        return Response({"message": f"Te enviamos un código a {correo}. Vence en {CODIGO_CORREO_MIN} minutos",
+                         "expira_en_min": CODIGO_CORREO_MIN})
+
+
+class VerificarCorreoConfirmarView(APIView):
+    permission_classes = [AllowAny]
+
+    @swagger_auto_schema(
+        operation_description=(
+            "Confirma el código de 6 dígitos. Devuelve token_correo (válido 30 minutos): se envía al crear la "
+            "cuenta (POST /usuario/) o al cambiar el correo (PUT /usuario/<id>/). 400 si el código no coincide "
+            "(motivo codigo_incorrecto) o venció; tras 5 intentos fallidos hay que pedir otro."
+        ),
+        request_body=openapi.Schema(type=openapi.TYPE_OBJECT, required=["correo", "codigo"], properties={
+            "correo": openapi.Schema(type=openapi.TYPE_STRING),
+            "codigo": openapi.Schema(type=openapi.TYPE_STRING, description="6 dígitos"),
+        }),
+        responses={200: "{token_correo}", 400: "Código incorrecto o vencido"},
+    )
+    def post(self, request):
+        correo = str(request.data.get("correo") or "").strip().lower()
+        codigo = str(request.data.get("codigo") or "").strip()
+        limite = timezone.now() - timedelta(minutes=CODIGO_CORREO_MIN)
+        pendiente = (VerificacionCorreo.objects.filter(correo=correo, verificado=False, creado__gte=limite)
+                     .order_by("-id").first())
+        if pendiente is None or pendiente.intentos >= CODIGO_CORREO_INTENTOS:
+            return Response({"message": "El código venció o ya no es válido. Pide uno nuevo", "motivo": "codigo_vencido"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if not secrets.compare_digest(pendiente.codigo_hash, hash_valor(codigo)):
+            pendiente.intentos += 1
+            pendiente.save(update_fields=["intentos"])
+            quedan = CODIGO_CORREO_INTENTOS - pendiente.intentos
+            return Response({"message": f"El código no coincide. Te quedan {quedan} intentos" if quedan else
+                                        "El código no coincide. Pide uno nuevo",
+                             "motivo": "codigo_incorrecto"}, status=status.HTTP_400_BAD_REQUEST)
+        pendiente.verificado = True
+        pendiente.save(update_fields=["verificado"])
+        token = signing.dumps({"correo": correo}, salt=TOKEN_CORREO_SAL)
+        return Response({"message": "Correo verificado", "token_correo": token})
 
 
 class LoginView(APIView):
@@ -656,9 +771,9 @@ class UsuarioView(APIView):
 
     @swagger_auto_schema(
         operation_description=(
-            "Crea un usuario. Sin sesión: registro de cliente (rol 4, sin agencia) con nombre, correo válido, "
-            "documento de 5 a 15 dígitos, contraseña de 8 o más y celular de 10 dígitos que empiece por 3 "
-            "si se envía (400 si no; también para el personal). "
+            "Crea un usuario. Exige token_correo (de /verificar-correo/confirmar/) para ese correo: 400 "
+            "correo_no_verificado si falta. Sin sesión: registro de cliente (rol 4, sin agencia) con nombre, correo válido, "
+            "documento de 5 a 15 dígitos, contraseña de 8 o más y celular de 10 dígitos que empiece por 3 si se envía (400 si no; también para el personal). "
             "Administrador: conductores o clientes de su agencia. Superadministrador: cualquiera. "
             "foto (opcional, multipart): JPG, PNG o WEBP de máx. 5 MB (400 con campo 'foto' si no). "
             "Conductor (rol 3): se puede enviar como multipart/form-data con 'licencia_pdf' (.pdf, máx. 5 MB; "
@@ -730,6 +845,8 @@ class UsuarioView(APIView):
         if Usuario.objects.filter(correo__iexact=correo).exists():
             return Response({'message': 'Ya existe una cuenta con ese correo. Inicia sesión o recupera tu contraseña',
                              'motivo': 'correo_existente'}, status=status.HTTP_400_BAD_REQUEST)
+        if not correo_verificado(correo, request.data.get('token_correo')):
+            return error_correo_no_verificado()
         if Usuario.objects.filter(numero_documento=numero_documento).exists():
             return Response({'message': 'Ese documento ya está registrado', 'motivo': 'documento_existente'},
                             status=status.HTTP_400_BAD_REQUEST)
@@ -875,6 +992,10 @@ class UsuarioIdView(APIView):
         error = error_edicion_usuario(usuario, datos, rol_nuevo, agencia_nueva)
         if error:
             return Response({'message': error}, status=status.HTTP_400_BAD_REQUEST)
+        nuevo_correo = str(datos.get('correo') or '').strip()
+        if nuevo_correo and nuevo_correo.lower() != usuario.correo.lower() \
+                and not correo_verificado(nuevo_correo, datos.get('token_correo')):
+            return error_correo_no_verificado()
         foto = request.FILES.get("foto") if hasattr(request, "FILES") else None
         if foto is not None:
             error = validar_foto(foto)

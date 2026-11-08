@@ -33,3 +33,6 @@ DATABASES = {
 MIGRATION_MODULES = {app: None for app in ('usuarios', 'paquetes', 'reservas', 'pagos', 'buses', 'destinos')}
 
 PASSWORD_HASHERS = ['dev_settings.HasherRapido']
+
+# Las pruebas existentes crean usuarios sin el código del correo; las de A4 lo activan con override_settings.
+VERIFICAR_CORREO = False

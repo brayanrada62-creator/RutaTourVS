@@ -58,6 +58,7 @@ class UsuarioEntrada(serializers.Serializer):
     telefono = serializers.CharField(max_length=10, validators=[validar_celular],
                                      help_text="Celular de Colombia: 10 dígitos y empieza por 3")
     contrasena = serializers.CharField(max_length=255)
+    token_correo = serializers.CharField(help_text="Token de POST /verificar-correo/confirmar/ para este correo")
     licencia = serializers.CharField(max_length=30, required=False, allow_blank=True,
                                      help_text="Número de la licencia de conducción")
     foto = serializers.ImageField(required=False, help_text="Foto de perfil: JPG, PNG o WEBP de máx. 5 MB (multipart)")
@@ -74,6 +75,7 @@ class UsuarioEditarEntrada(serializers.Serializer):
     tipo_documento = serializers.CharField(max_length=30, required=False)
     numero_documento = serializers.CharField(max_length=30, required=False)
     correo = serializers.EmailField(max_length=150, required=False)
+    token_correo = serializers.CharField(required=False, help_text="Obligatorio si cambia el correo")
     telefono = serializers.CharField(max_length=10, required=False, validators=[validar_celular],
                                      help_text="Celular de Colombia: 10 dígitos y empieza por 3. "
                                                "Se valida solo si cambia")
