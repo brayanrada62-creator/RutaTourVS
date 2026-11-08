@@ -9,6 +9,7 @@ from rest_framework.test import APIClient
 from usuarios.pruebas import Escenario
 
 from usuarios.models import Agencia, Rol, Usuario, UsuarioAgencia
+from paquetes.models import Itinerario
 from buses.models import Asiento, Bus, Bus_Conductor, TipoBus
 from buses.views import hoy_colombia
 
@@ -276,6 +277,31 @@ class EstadosViajeTest(TestCase):
         b = Escenario.cliente_http(self.e.cond_b)
         self.assertEqual(b.post(f"/api/viaje/{self.v['id']}/iniciar/").status_code, 403)
         self.assertEqual(Viaje.objects.get(id=self.v["id"]).estado, "PROGRAMADO")
+
+    def test_parada_actual_para_retomar_tras_cerrar_la_app(self):
+        primera = Itinerario.objects.create(titulo="Plaza", paquete=self.e.paq_a, dia="1", descripcion="d",
+                                            hora="07:00", lugar="Centro")
+        segunda = Itinerario.objects.create(titulo="Mirador", paquete=self.e.paq_a, dia="1", descripcion="d",
+                                            hora="09:00", lugar="Alto")
+        url = f"/api/viaje/{self.v['id']}/"
+        self.assertIsNone(self.c.get(url).json()["parada_actual"])  # programado
+        self.c.post(f"/api/viaje/{self.v['id']}/iniciar/")
+        self.assertIsNone(self.c.get(url).json()["parada_actual"])  # en curso, aún sin llegar
+        self.c.post(f"/api/viaje/{self.v['id']}/paradas/{primera.id}/cumplir/")
+        # "La app se cerró": una sesión nueva consulta los viajes y sabe en qué parada iba.
+        nueva = Escenario.cliente_http(self.e.cond_a)
+        en_lista = {v["id"]: v for v in nueva.get("/api/viaje/").json()}[self.v["id"]]
+        self.assertEqual(en_lista["parada_actual"]["id"], primera.id)
+        self.assertEqual(en_lista["parada_actual"]["nombre"], "Plaza")
+        self.c.post(f"/api/viaje/{self.v['id']}/paradas/{segunda.id}/cumplir/")
+        self.assertEqual(nueva.get(url).json()["parada_actual"]["nombre"], "Mirador")
+        # Repetir una parada ya marcada no cambia la actual (get_or_create no la mueve).
+        self.c.post(f"/api/viaje/{self.v['id']}/paradas/{primera.id}/cumplir/")
+        self.assertEqual(nueva.get(url).json()["parada_actual"]["nombre"], "Mirador")
+        self.c.post(f"/api/viaje/{self.v['id']}/finalizar/")
+        self.assertIsNone(nueva.get(url).json()["parada_actual"])
+        # Aislamiento: un conductor de otra agencia no ve el viaje ni su parada.
+        self.assertEqual(Escenario.cliente_http(self.e.cond_b).get(url).status_code, 404)
 
     def test_editar_solo_programado(self):
         admin = Escenario.cliente_http(self.e.admin_a)

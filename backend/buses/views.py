@@ -964,7 +964,22 @@ def viaje_json(viaje):
         "conductor_id": viaje.conductor_id,
         "iniciado_en": viaje.iniciado_en,
         "finalizado_en": viaje.finalizado_en,
+        "parada_actual": parada_actual_json(viaje),
     }
+
+
+def parada_actual_json(viaje):
+    """Parada donde está el bus: la última que el conductor marcó con el viaje EN_CURSO (None si aún no
+    llega a ninguna o el viaje no está en curso). Vive en el backend: si la app se cierra a mitad de la
+    validación, al volver a entrar el conductor retoma esa parada con los abordajes ya guardados."""
+    if viaje.estado != Viaje.EN_CURSO:
+        return None
+    ultima = (ParadaCumplida.objects.filter(viaje=viaje).select_related("itinerario")
+              .order_by("-cumplida_en", "-id").first())
+    if ultima is None:
+        return None
+    it = ultima.itinerario
+    return {"id": it.id, "nombre": it.titulo or it.lugar, "lugar": it.lugar, "llegada": ultima.cumplida_en}
 
 
 def buses_del_conductor(conductor):
@@ -1060,7 +1075,9 @@ class ViajeView(APIView):
         operation_description=(
             "Listar viajes. Superadmin: todos. Conductor: los del bus que tiene asignado. Admin: los de su agencia. "
             "Cliente: salidas PROGRAMADAS desde hoy y las de sus reservas. "
-            "Filtros: ?estado=, ?bus_id=, ?paquete_id=, ?agencia_id= (solo superadmin)"
+            "Filtros: ?estado=, ?bus_id=, ?paquete_id=, ?agencia_id= (solo superadmin). "
+            "Cada viaje EN_CURSO trae parada_actual {id, nombre, lugar, llegada}: la última parada marcada "
+            "(null si aún no llega a ninguna); la app la usa para retomar la validación tras cerrarse."
         ),
         manual_parameters=[
             openapi.Parameter("estado", openapi.IN_QUERY, type=openapi.TYPE_STRING),
