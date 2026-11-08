@@ -112,14 +112,18 @@ def borrar_licencia_pdf(usuario):
 
 
 def usuario_json(usuario, request=None):
-    """licencia_pdf_url solo aparece para el superadmin o el admin de la misma agencia (con request)."""
-    ids = agencia_ids_de(usuario)
+    """licencia_pdf_url solo aparece para el superadmin o el admin de la misma agencia (con request).
+    agencia_nombre: la agencia que registró al usuario (la de agencia_id); None si se registró solo."""
+    agencias = list(UsuarioAgencia.objects.filter(usuario=usuario).order_by("id")
+                    .values_list("agencia_id", "agencia__nombre"))
+    ids = [agencia_id for agencia_id, _ in agencias]
     yo = usuario_de(request) if request is not None else None
     puede_ver_pdf = yo is not None and puede_gestionar_licencia(yo, usuario)
     return {
         'id': usuario.id,
         'nombre_completo': usuario.nombre_completo,
         'agencia_id': ids[0] if ids else None,
+        'agencia_nombre': agencias[0][1] if agencias else None,
         'agencia_ids': ids,
         'rol_id': usuario.rol_id,
         'tipo_documento': usuario.tipo_documento,
@@ -218,6 +222,7 @@ def datos_sesion(usuario_negocio, auth_user, mensaje='Login correcto'):
         'id': usuario_negocio.id,
         'usuario_id': usuario_negocio.id,
         'agencia_id': data.get('agencia_id'),
+        'agencia_nombre': data.get('agencia_nombre'),
         'rol_id': usuario_negocio.rol_id,
         'rol': usuario_negocio.rol.rol,
         'nombre_completo': usuario_negocio.nombre_completo,
@@ -387,7 +392,10 @@ class UsuarioPerfilView(APIView):
     # Permiso por defecto (Autenticado): token válido y usuario activo.
 
     @swagger_auto_schema(
-        operation_description="Obtiene el perfil del usuario autenticado"
+        operation_description=(
+            "Obtiene el perfil del usuario autenticado. agencia_nombre = la agencia que lo registró "
+            "(null si se registró solo desde la app). El login (POST /login/) trae el mismo campo."
+        )
     )
     def get(self, request):
         usuario = usuario_de(request)
