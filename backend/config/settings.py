@@ -90,9 +90,16 @@ REST_FRAMEWORK = {
 }
 
 # JWT: el access se manda en cada petición ("Authorization: Bearer <access>"); el refresh renueva la sesión.
+# ROTATE_REFRESH_TOKENS: cada POST /token/refresh/ entrega también un refresh nuevo con 7 días más, así
+# los 7 días cuentan desde el último uso y no desde el login (a un conductor no se le vence en plena ruta;
+# quien no usa la app en 7 días sí debe volver a entrar). El panel web cierra antes: 30 min sin actividad.
+# BLACKLIST_AFTER_ROTATION=False: las apps ya instaladas que no guardan el refresh nuevo siguen usando el
+# suyo hasta que venza (como antes). Suspender o desactivar la agencia revoca todos (revocar_sesiones).
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': False,
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 SWAGGER_SETTINGS = {
@@ -224,7 +231,8 @@ EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True') == 'True'
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER or 'RutaTour <noreply@rutatour.com>')
 FRONTEND_RESET_URL = os.environ.get('FRONTEND_RESET_URL', '')
-GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+
 
 # Con DEBUG=False Django no imprime los errores 500: así aparecen en los logs de Render.
 LOGGING = {
