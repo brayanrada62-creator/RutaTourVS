@@ -1,3 +1,7 @@
+from pagos.tests import imagen
+from django.test import override_settings
+from django.core.files.uploadedfile import SimpleUploadedFile
+import tempfile
 from django.test import TestCase
 
 from destinos.models import Departamento, Destino, Hospedaje
@@ -145,3 +149,20 @@ class LimitesTextoHospedajeTest(TestCase):
         hospedaje = Hospedaje.objects.get(nombre="Hotel")
         r = self.admin.put(f"/api/hospedaje/{hospedaje.id}/", {"descripcion": "x" * 2001}, format="json")
         self.assertEqual(r.status_code, 400)
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class FotoHotelTest(TestCase):
+    def setUp(self):
+        self.admin = Escenario.cliente_http(Escenario().admin_a)
+
+    def test_foto_del_hotel_validada(self):
+        datos = {"nombre": "Hotel Foto", "direccion": "d", "telefono": "3001234567", "descripcion": "d"}
+        falso = SimpleUploadedFile("h.jpg", b"no es imagen", content_type="image/jpeg")
+        r = self.admin.post("/api/hospedaje/", {**datos, "imagen": falso}, format="multipart")
+        self.assertEqual((r.status_code, r.json()["campo"]), (400, "imagen"))
+        self.assertEqual(self.admin.post("/api/hospedaje/", {**datos, "imagen": imagen("h.png")}, format="multipart").status_code, 200)
+        hotel = Hospedaje.objects.get(nombre="Hotel Foto")
+        self.assertTrue(hotel.imagen.name.startswith("hospedajes/"))
+        self.assertTrue(self.admin.get(f"/api/hospedaje/{hotel.id}/").json()["imagen"].startswith("http://testserver/media/hospedajes/"))
+

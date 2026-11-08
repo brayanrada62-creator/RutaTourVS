@@ -25,7 +25,7 @@ class HopedajeEntrada(serializers.Serializer):
     direccion = serializers.CharField(max_length=255)
     telefono = serializers.CharField(max_length=20)
     descripcion = serializers.CharField(max_length=2000)
-    imagen = serializers.ImageField(required=False)
+    imagen = serializers.ImageField(required=False, help_text="Foto del hotel: JPG, PNG o WEBP de máx. 5 MB (multipart)")
 
 
 class HospedajeDestinoEntrada(serializers.Serializer):

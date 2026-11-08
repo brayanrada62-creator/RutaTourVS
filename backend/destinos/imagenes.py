@@ -1,4 +1,39 @@
+import secrets
+
+from PIL import Image
+
 from .models import Departamento, ImagenDestino
+
+FOTO_MAX_BYTES = 5 * 1024 * 1024
+FORMATOS_FOTO = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp"}
+
+
+def validar_foto(archivo, que="La foto"):
+    """Mensaje de error si no es una imagen JPG, PNG o WEBP de máximo 5 MB; None si sirve.
+    Se revisa el contenido con Pillow (cambiarle la extensión a otro archivo no basta). Si sirve, se le
+    pone un nombre aleatorio: la URL en Cloudinary no se puede adivinar ni dice de quién es."""
+    if archivo.size > FOTO_MAX_BYTES:
+        return f"{que} supera 5 MB"
+    try:
+        with Image.open(archivo) as imagen:
+            formato = imagen.format
+            imagen.verify()
+    except Exception:
+        formato = None
+    archivo.seek(0)
+    if formato not in FORMATOS_FOTO:
+        return f"{que} debe ser una imagen JPG, PNG o WEBP"
+    archivo.name = f"{secrets.token_hex(8)}.{FORMATOS_FOTO[formato]}"
+    return None
+
+
+def borrar_archivo(campo):
+    """Borra del almacenamiento (Cloudinary o local) el archivo de un campo, si tiene uno."""
+    if campo:
+        try:
+            campo.storage.delete(campo.name)
+        except Exception:
+            pass  # si ya no existe, no impide guardar el nuevo
 
 
 def imagen_url(campo, request=None):

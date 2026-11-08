@@ -12,7 +12,8 @@ from .serializer import (
 )
 from .models import Destino, Hospedaje, HospedajeDestino, ImagenDestino, Departamento
 from .imagenes import (
-    archivo_imagen, destino_json, guardar_imagen_destino, imagen_url, resolver_departamento,
+    archivo_imagen, borrar_archivo, destino_json, guardar_imagen_destino, imagen_url, resolver_departamento,
+    validar_foto,
 )
 from usuarios.permisos import (
     LecturaPublica, agencias_de, es_super, filtrar_agencia_super, filtrar_catalogo, usuario_de,
@@ -297,12 +298,15 @@ class HospedajeView(VistaCatalogo):
         destino_ids, error = destino_ids_de(request.data)
         if error:
             return error
+        imagen = request.FILES.get("imagen")
+        if imagen is not None and (error := validar_foto(imagen, "La foto del hotel")):
+            return Response({"message": error, "campo": "imagen"}, status=status.HTTP_400_BAD_REQUEST)
         hospedaje = Hospedaje.objects.create(
             nombre=nombre,
             direccion=direccion,
             telefono=telefono,
             descripcion=descripcion,
-            imagen=request.FILES.get("imagen"),
+            imagen=imagen,
         )
         if destino_ids is not None:
             hospedaje.destinos.set(destino_ids)
@@ -336,8 +340,12 @@ class HospedajeIdView(VistaCatalogo):
         error = error_hospedaje(request.data)
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
-        if request.FILES.get("imagen"):
-            hospedajeB.imagen = request.FILES.get("imagen")
+        imagen = request.FILES.get("imagen")
+        if imagen is not None:
+            if error := validar_foto(imagen, "La foto del hotel"):
+                return Response({"message": error, "campo": "imagen"}, status=status.HTTP_400_BAD_REQUEST)
+            borrar_archivo(hospedajeB.imagen)  # la anterior no queda huérfana en Cloudinary
+            hospedajeB.imagen = imagen
         for campo in ("nombre", "direccion", "telefono", "descripcion"):
             if request.data.get(campo) is not None:
                 setattr(hospedajeB, campo, request.data.get(campo))

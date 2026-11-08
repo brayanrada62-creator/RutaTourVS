@@ -59,6 +59,8 @@ class Usuario(models.Model):
                                     blank=True, null=True)
     # Suspensión: un usuario inactivo no puede iniciar sesión ni usar su token.
     activo = models.BooleanField(default=True)
+    # Foto de perfil (JPG/PNG/WEBP, máx. 5 MB). Con CLOUDINARY_URL se guarda en la carpeta usuarios/.
+    foto = models.ImageField(upload_to="usuarios/", max_length=255, blank=True, null=True)
 
     def __str__(self):
         return self.nombre_completo
