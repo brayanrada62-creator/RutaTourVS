@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -10,7 +10,7 @@ from usuarios.pruebas import Escenario
 
 from usuarios.models import Agencia, Rol, Usuario, UsuarioAgencia
 from paquetes.models import Itinerario
-from buses.models import Asiento, Bus, Bus_Conductor, TipoBus
+from buses.models import Asiento, Bus, Bus_Conductor, ParadaCumplida, TipoBus
 from buses.views import hoy_colombia
 
 # Fechas futuras relativas a hoy: la programación rechaza el pasado (HU-W-21).
@@ -302,6 +302,40 @@ class EstadosViajeTest(TestCase):
         self.assertIsNone(nueva.get(url).json()["parada_actual"])
         # Aislamiento: un conductor de otra agencia no ve el viaje ni su parada.
         self.assertEqual(Escenario.cliente_http(self.e.cond_b).get(url).status_code, 404)
+
+    def test_marcar_parada_solo_estando_cerca(self):
+        # Plaza de Silvia (Cauca) aprox. 2.6111, -76.3800
+        plaza = Itinerario.objects.create(titulo="Plaza", paquete=self.e.paq_a, dia="1", descripcion="d",
+                                          hora="07:00", lugar="Silvia", lat="2.611100", lng="-76.380000")
+        sin_punto = Itinerario.objects.create(titulo="Mirador", paquete=self.e.paq_a, dia="1", descripcion="d",
+                                              hora="09:00", lugar="Alto")
+        self.c.post(f"/api/viaje/{self.v['id']}/iniciar/")
+        url = f"/api/viaje/{self.v['id']}/paradas/{plaza.id}/cumplir/"
+        sin_gps = self.c.post(url, {}, format="json")
+        self.assertEqual((sin_gps.status_code, sin_gps.json()["motivo"]), (400, "sin_ubicacion"))
+        lejos = self.c.post(url, {"lat": 2.6200, "lng": -76.3800}, format="json")  # ~1 km al norte
+        self.assertEqual((lejos.status_code, lejos.json()["motivo"]), (409, "lejos"))
+        self.assertGreater(lejos.json()["distancia_m"], 900)
+        self.assertEqual(lejos.json()["radio_m"], 200)
+        self.assertFalse(ParadaCumplida.objects.filter(itinerario=plaza).exists())
+        cerca = self.c.post(url, {"lat": 2.6120, "lng": -76.3800}, format="json")  # ~100 m
+        self.assertEqual(cerca.status_code, 200)
+        self.assertTrue(next(p for p in cerca.json() if p["id"] == plaza.id)["cumplida"])
+        self.assertEqual(next(p for p in cerca.json() if p["id"] == plaza.id)["lat"], 2.6111)
+        # Ya cumplida: repetir no vuelve a exigir la ubicación (idempotente).
+        self.assertEqual(self.c.post(url, {}, format="json").status_code, 200)
+        # Parada sin coordenadas: no se puede verificar y se permite.
+        r = self.c.post(f"/api/viaje/{self.v['id']}/paradas/{sin_punto.id}/cumplir/", {}, format="json")
+        self.assertEqual(r.status_code, 200)
+
+    @override_settings(PARADA_RADIO_METROS=50)
+    def test_el_radio_se_configura(self):
+        plaza = Itinerario.objects.create(titulo="Plaza", paquete=self.e.paq_a, dia="1", descripcion="d",
+                                          hora="07:00", lugar="Silvia", lat="2.611100", lng="-76.380000")
+        self.c.post(f"/api/viaje/{self.v['id']}/iniciar/")
+        r = self.c.post(f"/api/viaje/{self.v['id']}/paradas/{plaza.id}/cumplir/",
+                        {"lat": 2.6120, "lng": -76.3800}, format="json")  # ~100 m > 50 m
+        self.assertEqual((r.status_code, r.json()["radio_m"]), (409, 50))
 
     def test_editar_solo_programado(self):
         admin = Escenario.cliente_http(self.e.admin_a)

@@ -642,9 +642,33 @@ def leer_parada(datos, parcial=False):
     """(datos validados, error 400). Sin esto un POST sin hora terminaba en error 500."""
     entrada = ItinerarioEntrada(data=datos, partial=parcial)
     if not entrada.is_valid():
+        if set(entrada.errors) & {"lat", "lng"}:
+            return None, Response({"message": "Las coordenadas no son válidas (latitud -90 a 90, longitud -180 a 180)",
+                                   "errores": entrada.errors}, status=status.HTTP_400_BAD_REQUEST)
         return None, Response({"message": "Revisa título, día, hora y lugar de la parada", "errores": entrada.errors},
                               status=status.HTTP_400_BAD_REQUEST)
-    return entrada.validated_data, None
+    datos = entrada.validated_data
+    if ("lat" in datos) != ("lng" in datos) or (datos.get("lat") is None) != (datos.get("lng") is None):
+        return None, Response({"message": "Envía la latitud y la longitud juntas"}, status=status.HTTP_400_BAD_REQUEST)
+    return datos, None
+
+
+def coordenada(valor):
+    return float(valor) if valor is not None else None
+
+
+def itinerario_json(itinerario):
+    return {
+        "id": itinerario.id,
+        "titulo": itinerario.titulo,
+        "paquete_id": itinerario.paquete_id,
+        "dia": itinerario.dia,
+        "descripcion": itinerario.descripcion,
+        "hora": itinerario.hora,
+        "lugar": itinerario.lugar,
+        "lat": coordenada(itinerario.lat),
+        "lng": coordenada(itinerario.lng),
+    }
 
 
 def itinerarios_visibles(yo):
@@ -674,24 +698,13 @@ class ItinerarioView(VistaCatalogo):
         paquete_id = entero_query(request, "paquete_id")
         if paquete_id:
             itinerarioLista = itinerarioLista.filter(paquete_id=paquete_id)
-
-        def itinerario_json(itinerario):
-            return {
-                "id": itinerario.id,
-                "titulo": itinerario.titulo,
-                "paquete_id": itinerario.paquete_id,
-                "dia": itinerario.dia,
-                "descripcion": itinerario.descripcion,
-                "hora": itinerario.hora,
-                "lugar": itinerario.lugar,
-            }
-
         return Response(paginar(request, ordenar_itinerario(itinerarioLista), itinerario_json))
 
     @swagger_auto_schema(
         operation_description=(
             "Guardar itinerario. Solo el admin de la agencia del paquete o el superadmin (403). "
-            "400 si faltan título, día, hora o lugar, o si no son válidos."
+            "400 si faltan título, día, hora o lugar, o si no son válidos. lat y lng (opcionales, juntas) son el "
+            "punto de la parada: con ellas el conductor solo la marca estando a menos de 200 m."
         ),
         request_body=ItinerarioEntrada,
         responses={201: MensajeSalida, 400: "Datos inválidos", 403: "Paquete de otra agencia", 404: "No existe"},
@@ -711,7 +724,9 @@ class ItinerarioView(VistaCatalogo):
             dia=str(datos["dia"]),
             descripcion=datos.get("descripcion", ""),
             hora=datos["hora"],
-            lugar=datos["lugar"]
+            lugar=datos["lugar"],
+            lat=datos.get("lat"),
+            lng=datos.get("lng"),
         )
         return Response({"id": itinerario.id, "mensaje": "Itinerario almacenado correctamente"},
                         status=status.HTTP_201_CREATED)
@@ -725,15 +740,7 @@ class ItinerarioIdView(VistaCatalogo):
         registroEncontrado = itinerarios_visibles(usuario_de(request)).filter(id=id).first()
         if registroEncontrado is None:
             return Response({"mensaje": "Itinerario no encontrado"}, status=status.HTTP_404_NOT_FOUND)
-        return Response({
-            "id": registroEncontrado.id,
-            "titulo": registroEncontrado.titulo,
-            "paquete_id": registroEncontrado.paquete_id,
-            "dia": registroEncontrado.dia,
-            "descripcion": registroEncontrado.descripcion,
-            "hora": registroEncontrado.hora,
-            "lugar": registroEncontrado.lugar,
-        })
+        return Response(itinerario_json(registroEncontrado))
 
     @swagger_auto_schema(
         operation_description=(
@@ -763,6 +770,8 @@ class ItinerarioIdView(VistaCatalogo):
         itinerarioB.descripcion = datos.get("descripcion", itinerarioB.descripcion)
         itinerarioB.hora = datos.get("hora", itinerarioB.hora)
         itinerarioB.lugar = datos.get("lugar", itinerarioB.lugar)
+        if "lat" in datos:  # van juntas (leer_parada); null las quita
+            itinerarioB.lat, itinerarioB.lng = datos["lat"], datos["lng"]
         itinerarioB.save()
         return Response({"mensaje": "Itinerario actualizado"})
 

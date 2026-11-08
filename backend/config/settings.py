@@ -208,6 +208,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Minutos que una reserva guarda sus sillas sin comprobante de pago (regla de negocio: 1 hora).
 RESERVA_MINUTOS_PAGO = int(os.environ.get('RESERVA_MINUTOS_PAGO', '60'))
+# Distancia máxima (metros) entre el conductor y una parada con coordenadas para marcarla como cumplida.
+PARADA_RADIO_METROS = int(os.environ.get('PARADA_RADIO_METROS', '200'))
 
 EMAIL_BACKEND = os.environ.get(
     'EMAIL_BACKEND',
@@ -224,7 +226,7 @@ EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True') == 'True'
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER or 'RutaTour <noreply@rutatour.com>')
 FRONTEND_RESET_URL = os.environ.get('FRONTEND_RESET_URL', '')
-GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
 
 # Con DEBUG=False Django no imprime los errores 500: así aparecen en los logs de Render.
 LOGGING = {

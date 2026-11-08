@@ -52,6 +52,10 @@ class Itinerario(models.Model):
     descripcion = models.CharField(max_length=300)
     hora = models.TimeField()
     lugar = models.CharField(max_length=150)
+    # Punto de la parada. Con coordenadas, el conductor solo la marca estando a menos de
+    # PARADA_RADIO_METROS (200 m). Sin coordenadas no se puede verificar y se permite marcarla.
+    lat = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    lng = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
 
     def __str__(self):
         return self.titulo

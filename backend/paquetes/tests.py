@@ -268,6 +268,21 @@ class ItinerarioAgenciaTest(TestCase):
         del datos["descripcion"]
         self.assertEqual(self.admin.post("/api/itinerario/", datos, format="json").status_code, 201)
 
+    def test_coordenadas_de_la_parada(self):
+        datos = {**self.datos(self.e.paq_a), "lat": "2.611100", "lng": "-76.380000"}
+        id_ = self.admin.post("/api/itinerario/", datos, format="json").json()["id"]
+        r = self.admin.get(f"/api/itinerario/{id_}/").json()
+        self.assertEqual((r["lat"], r["lng"]), (2.6111, -76.38))
+        for malo in ({"lat": "2.6"}, {"lat": "95", "lng": "-76"}, {"lat": "2.6", "lng": "-200"}):
+            self.assertEqual(self.admin.put(f"/api/itinerario/{id_}/", malo, format="json").status_code, 400, malo)
+        # Editar otro dato conserva el punto; null en ambas lo quita.
+        self.admin.put(f"/api/itinerario/{id_}/", {"titulo": "Nuevo"}, format="json")
+        self.assertIsNotNone(Itinerario.objects.get(id=id_).lat)
+        self.assertEqual(self.admin.put(f"/api/itinerario/{id_}/", {"lat": None, "lng": None}, format="json").status_code, 200)
+        self.assertIsNone(Itinerario.objects.get(id=id_).lat)
+        # Sin coordenadas sigue siendo válida (son opcionales).
+        self.assertEqual(self.admin.post("/api/itinerario/", self.datos(self.e.paq_a), format="json").status_code, 201)
+
     def test_editar_conserva_lo_que_no_se_envia(self):
         id_ = self.admin.post("/api/itinerario/", self.datos(self.e.paq_a), format="json").json()["id"]
         self.assertEqual(self.admin.put(f"/api/itinerario/{id_}/", {"titulo": "Nuevo"}, format="json").status_code, 200)
