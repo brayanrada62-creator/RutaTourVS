@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     'pagos',
     'buses',
     'destinos',
+    'planes',
 ]
 # CORS: en Render definir CORS_ALLOWED_ORIGINS con el dominio del panel Angular,
 # separado por comas (ej. https://rutatour-admin.onrender.com). Sin la variable se permite todo.
