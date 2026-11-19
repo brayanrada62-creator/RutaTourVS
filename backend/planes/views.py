@@ -49,6 +49,28 @@ class PlanView(APIView):
 
         return Response({'message': 'Plan creado exitosamente'})
 
+
+    @swagger_auto_schema(request_body=PlanEntrada)
+    def get(self, request):
+        planes = Plan.objects.all()
+        planes_data = []
+        for plan in planes:
+            plan_data = {
+                'id': plan.id,
+                'nombre': plan.nombre,
+                'descripcion': plan.descripcion,
+                'precio_mensual': plan.precio_mensual,
+                'precio_trimestral': plan.precio_trimestral,
+                'precio_anual': plan.precio_anual,
+                'maximo_agencias': plan.maximo_agencias,
+                'maximo_paquetes': plan.maximo_paquetes,
+                'maximo_buses': plan.maximo_buses,
+                'maximo_administradores': plan.maximo_administradores,
+            }
+            planes_data.append(plan_data)
+        return Response(planes_data)
+    
+
     @swagger_auto_schema(request_body=PlanEntrada)
     def put(self, request, id):
         plan = Plan.objects.get(id=id)
