@@ -3,4 +3,5 @@ from .views import PlanView
 
 urlpatterns = [
     path('planes/', PlanView.as_view(), name='planes'),
+    path('planes/<int:id>/', PlanView.as_view(), name='plan-detalle'),
 ]

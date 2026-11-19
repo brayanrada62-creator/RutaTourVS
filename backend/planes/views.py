@@ -1,12 +1,31 @@
+from rest_framework.exceptions import NotAuthenticated
+from rest_framework.permissions import SAFE_METHODS
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
 from .serializers import PlanEntrada
 from .models import Plan, PlanAgencias
 from usuarios.models import Agencia
+from usuarios.permisos import SesionVigente, es_super, usuario_activo
+
+
+class PlanesPermiso(SesionVigente):
+    """La landing lee sin token. Crear y editar solo el superadministrador."""
+
+    message = "Solo el superadministrador puede modificar los planes"
+
+    def has_permission(self, request, view):
+        super().has_permission(request, view)
+        if request.method in SAFE_METHODS:
+            return True
+        usuario = usuario_activo(request)
+        if usuario is None:
+            raise NotAuthenticated("Debes iniciar sesión")
+        return es_super(usuario)
 
 
 class PlanView(APIView):
+    permission_classes = [PlanesPermiso]
     @swagger_auto_schema(request_body=PlanEntrada)
     def post(self, request):
         nombre = request.data.get('nombre')
