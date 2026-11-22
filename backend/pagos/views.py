@@ -13,6 +13,7 @@ from rest_framework import status
 
 from .serializer import PagoEntrada, MensajeSalida
 from .models import Pago
+from notificaciones.eventos import notificar_pago_aprobado
 from reservas.models import ESTADOS_QUE_LIBERAN, AsientoReserva, Reserva, marcar_vencidas, plazo_de_pago
 from reservas.views import codigo_reserva, total_reserva
 from destinos.imagenes import imagen_url
@@ -200,6 +201,8 @@ class PagoView(APIView):
                 revisado_en=timezone.now() if revisado else None,
             )
             ajustar_plazo(reserva)
+        if pago.estado == "aprobado":
+            notificar_pago_aprobado(pago)  # HU-M-11: pago creado ya aprobado por la agencia
         return Response({"mensaje": "Pago almacenado correctamente", "id": pago.id, "estado": pago.estado})
 
 
@@ -241,6 +244,7 @@ class PagoIdView(APIView):
         if estado == "rechazado" and not str(motivo or "").strip():
             return Response({"message": "Escribe el motivo del rechazo"}, status=status.HTTP_400_BAD_REQUEST)
         marcar_vencidas()
+        estado_previo = pagoB.estado
         with transaction.atomic():
             reserva = Reserva.objects.select_for_update().get(id=pagoB.reserva_id)
             pagoB = Pago.objects.select_for_update().get(id=pagoB.id)
@@ -270,6 +274,8 @@ class PagoIdView(APIView):
             pagoB.motivo_rechazo = request.data.get("motivo_rechazo", pagoB.motivo_rechazo) or ""
             pagoB.save()
             ajustar_plazo(reserva)
+        if estado == "aprobado" and estado_previo != "aprobado":
+            notificar_pago_aprobado(pagoB)  # HU-M-11: solo al aprobar; rechazado no avisa
         return Response({"mensaje": "Pago actualizado", "estado": pagoB.estado, "reserva_vence_en": reserva.vence_en})
 
     @swagger_auto_schema(

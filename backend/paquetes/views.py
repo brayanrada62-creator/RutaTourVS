@@ -22,6 +22,7 @@ from .serializer import (
     PaqueteRegistrarEntrada, PaqueteDestinoEntrada, ItinerarioEntrada, MensajeSalida, PaqueteValidar
 )
 from .models import Paquete, PaqueteDestino, Itinerario, ordenar_itinerario
+from notificaciones.eventos import notificar_cambio_paradas
 from usuarios.paginacion import PARAMETRO_AGENCIA, PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
 from usuarios.permisos import (
     LecturaPublica, agencia_para_guardar, es_admin, es_cliente_de_paquete, filtrar_agencia_super, filtrar_catalogo,
@@ -728,6 +729,7 @@ class ItinerarioView(VistaCatalogo):
             lat=datos.get("lat"),
             lng=datos.get("lng"),
         )
+        notificar_cambio_paradas(paquete.id)
         return Response({"id": itinerario.id, "mensaje": "Itinerario almacenado correctamente"},
                         status=status.HTTP_201_CREATED)
 
@@ -764,6 +766,7 @@ class ItinerarioIdView(VistaCatalogo):
         datos, error = leer_parada(request.data, parcial=True)
         if error:
             return error
+        antes = (itinerarioB.paquete_id, itinerarioB.titulo, itinerarioB.dia, itinerarioB.hora, itinerarioB.lugar)
         itinerarioB.titulo = datos.get("titulo", itinerarioB.titulo)
         itinerarioB.paquete = paquete
         itinerarioB.dia = str(datos.get("dia", itinerarioB.dia))
@@ -773,6 +776,11 @@ class ItinerarioIdView(VistaCatalogo):
         if "lat" in datos:  # van juntas (leer_parada); null las quita
             itinerarioB.lat, itinerarioB.lng = datos["lat"], datos["lng"]
         itinerarioB.save()
+        itinerarioB.refresh_from_db()
+        despues = (itinerarioB.paquete_id, itinerarioB.titulo, itinerarioB.dia, itinerarioB.hora, itinerarioB.lugar)
+        if antes != despues:  # HU-M-53: cambió una parada (lugar, día u hora); la descripción sola no avisa
+            for paquete_id in {antes[0], despues[0]}:
+                notificar_cambio_paradas(paquete_id)
         return Response({"mensaje": "Itinerario actualizado"})
 
     @swagger_auto_schema(
@@ -786,7 +794,9 @@ class ItinerarioIdView(VistaCatalogo):
         _, error = paquete_gestionable(usuario_de(request), itinerarioEliminar.paquete_id)
         if error:
             return error
+        paquete_id = itinerarioEliminar.paquete_id
         itinerarioEliminar.delete()
+        notificar_cambio_paradas(paquete_id)
         return Response({"mensaje": "Itinerario eliminado"})
 
 

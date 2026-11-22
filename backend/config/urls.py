@@ -24,6 +24,7 @@ urlpatterns = [
     path('api/', include('reservas.urls')),
     path('api/', include('pagos.urls')),
     path('api/', include('planes.urls')),
+    path('api/', include('notificaciones.urls')),
     path(
         'swagger/',
         schema_view.with_ui('swagger', cache_timeout=0),
