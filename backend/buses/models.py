@@ -63,6 +63,16 @@ class Asiento(models.Model):
     numero_asiento = models.IntegerField()
     tipo_bus = models.ForeignKey(TipoBus, on_delete=models.CASCADE)
 
+    def __str__(self):
+        return str(self.numero_asiento)
+
+    class Meta:
+        db_table = "asientos"
+        # Un mapa no puede tener dos sillas con el mismo número.
+        constraints = [
+            models.UniqueConstraint(fields=["tipo_bus", "numero_asiento"], name="asiento_numero_unico"),
+        ]
+
 
 class MapaBus(models.Model):
     """Cuadrícula fotografiada de UN bus. No se copia al tipo cuando ese tipo lo usan otros buses."""
@@ -85,21 +95,15 @@ class AsientoBus(models.Model):
     columna = models.PositiveIntegerField()
     lado = models.CharField(max_length=12)
 
+    def __str__(self):
+        return str(self.numero)
+
     class Meta:
         db_table = "asientos_bus"
         constraints = [
             models.UniqueConstraint(fields=["bus", "numero"], name="asiento_bus_numero_unico"),
         ]
 
-    def __str__(self):
-        return str(self.numero_asiento)
-
-    class Meta:
-        db_table = "asientos"
-        # Un mapa no puede tener dos sillas con el mismo número.
-        constraints = [
-            models.UniqueConstraint(fields=["tipo_bus", "numero_asiento"], name="asiento_numero_unico"),
-        ]
 
 class Viaje(models.Model):
     """Salida programada de un paquete en un bus. El conductor no se asigna aquí:
