@@ -10,7 +10,8 @@ from drf_yasg.utils import swagger_auto_schema
 
 from usuarios.paginacion import PARAMETRO_AGENCIA, PARAMETROS_LISTA, entero_query, paginar, texto_busqueda
 from .serializer import (
-    TipoBusEntrada, TipoBusEditarEntrada, BusEntrada, AsientoEntrada, MensajeSalida, BusConductorEntrada, BusTipoBusEntrada,AsientosBusEntrada
+    TipoBusEntrada, TipoBusEditarEntrada, BusEntrada, AsientoEntrada, MensajeSalida, BusConductorEntrada,
+    BusTipoBusEntrada, AsientosBusEntrada, MapaAsientosEntrada,
 )
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
@@ -19,14 +20,14 @@ from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError, Q
 from django.utils import timezone
 
-from .models import Bus_Conductor, TipoBus, Bus, BusTipoBus, Asiento, Viaje, ParadaCumplida
+from .models import AsientoBus, Bus_Conductor, TipoBus, Bus, BusTipoBus, Asiento, MapaBus, Viaje, ParadaCumplida
 from paquetes.models import Itinerario, Paquete, ordenar_itinerario
 from reservas.models import AsientoReserva, Reserva, marcar_vencidas, reservas_activas, reservas_que_ocupan
 from usuarios.models import Agencia, Usuario, UsuarioAgencia
 
 from usuarios.permisos import (
     ROL_CLIENTE, ROL_CONDUCTOR, LecturaPublica, agencia_para_guardar, agencias_de, agencias_de_catalogo, filtrar_agencia_super, filtrar_catalogo,
-    es_admin, es_conductor, es_super, gestiona_agencia, prohibido, usuario_de,
+    es_admin, es_conductor, es_super, gestiona_agencia, prohibido, usuario_de, EscrituraDeConductor,
 )
 
 
@@ -302,7 +303,59 @@ def error_placa(placa, bus=None):
     return "Ya existe un bus con esa placa" if repetidas.exists() else None
 
 
+def crear_bus_de_conductor(yo, datos):
+    """El conductor crea SU bus. El tipo nuevo es solo de este bus: no se toca un tipo compartido."""
+    mias = agencias_de(yo)
+    if not mias:
+        return prohibido("El conductor no tiene agencia")
+    if len(mias) == 1:
+        agencia_id = next(iter(mias))
+    else:
+        agencia_id = entero_o_none(datos.get("agencia_id"))
+        if agencia_id not in mias:
+            return Response({"message": "Perteneces a varias agencias: indica agencia_id de una de ellas"},
+                            status=status.HTTP_400_BAD_REQUEST)
+    placa = str(datos.get("placa") or "").strip()
+    error = error_placa(placa)
+    if error:
+        return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
+    if len(placa) > 15:
+        return Response({"message": "La placa no puede pasar de 15 caracteres"}, status=status.HTTP_400_BAD_REQUEST)
+    marca = str(datos.get("marca") or "").strip()
+    modelo = str(datos.get("modelo") or "").strip()
+    if not marca or not modelo:
+        return Response({"message": "Marca y modelo son obligatorios"}, status=status.HTTP_400_BAD_REQUEST)
+    sillas, error = leer_sillas(datos)
+    if error:
+        return error
+    if sillas is None:
+        return Response({"message": "Indica las sillas confirmadas"}, status=status.HTTP_400_BAD_REQUEST)
+    estado, error = leer_estado_bus(datos.get("estado") or "activo")
+    if error:
+        return error
+    with transaction.atomic():
+        tipo = TipoBus.objects.create(
+            nombre=f"Distribución {placa}"[:100],
+            agencia_id=agencia_id,
+            capacidad=sillas,
+            descripcion="Mapa de este bus. No se comparte con otros.",
+        )
+        bus = Bus.objects.create(
+            placa=placa,
+            agencia_id=agencia_id,
+            marca=marca[:100],
+            modelo=modelo[:100],
+            estado=estado,
+            fecha_registro=datos.get("fecha_registro") or timezone.now(),
+        )
+        bus.tipos_bus.set([tipo])
+        Bus_Conductor.objects.get_or_create(bus=bus, conductor=yo)
+    return Response({"mensaje": "Bus almacenado correctamente", "id": bus.id})
+
+
 class BusView(VistaCatalogo):
+    permission_classes = [EscrituraDeConductor]
+
     @swagger_auto_schema(
         operation_description=(
             "Listar Buses con tipo_bus_nombre y capacidad. Superadmin: todos. Admin y conductor: solo los de "
@@ -331,6 +384,8 @@ class BusView(VistaCatalogo):
     )
     def post(self, request):
         yo = usuario_de(request)
+        if es_conductor(yo):
+            return crear_bus_de_conductor(yo, request.data)
         agencia_id, error = agencia_del_bus(yo, request.data)
         if error:
             return error
@@ -586,23 +641,85 @@ def guardar_sillas(tipo, cantidad):
 
 
 def asientos_bus_json(bus):
-    """Sillas del bus. El mapa es una plantilla del tipo de bus: todos los buses de ese tipo la comparten."""
+    """Sillas del bus. Si hay mapa fotografiado, filas/columnas/asientos son de ESE bus.
+    cantidad sigue siendo la plantilla del tipo (la comparten los buses de ese tipo)."""
     tipo = tipo_principal(bus)
-    if tipo is None:
-        return {"bus_id": bus.id, "placa": bus.placa, "tipo_bus_id": None, "tipo_bus_nombre": None,
-                "capacidad": 0, "cantidad": 0, "buses_mismo_tipo": 0}
-    return {
+    mapa = MapaBus.objects.filter(bus=bus).first()
+    propios = list(AsientoBus.objects.filter(bus=bus).order_by("numero"))
+    base = {
         "bus_id": bus.id,
         "placa": bus.placa,
-        "tipo_bus_id": tipo.id,
-        "tipo_bus_nombre": tipo.nombre,
-        "capacidad": tipo.capacidad,
-        "cantidad": Asiento.objects.filter(tipo_bus=tipo).count(),
-        "buses_mismo_tipo": tipo.buses.count(),
+        "tipo_bus_id": tipo.id if tipo else None,
+        "tipo_bus_nombre": tipo.nombre if tipo else None,
+        "capacidad": tipo.capacidad if tipo else 0,
+        "cantidad": Asiento.objects.filter(tipo_bus=tipo).count() if tipo else 0,
+        "buses_mismo_tipo": tipo.buses.count() if tipo else 0,
+        "filas": mapa.filas if mapa else None,
+        "columnas": mapa.columnas if mapa else None,
+        "pasillo_despues_de_columna": mapa.pasillo_despues_de_columna if mapa else None,
+        "total": len(propios) if propios else (Asiento.objects.filter(tipo_bus=tipo).count() if tipo else 0),
+        "asientos": [
+            {"numero": silla.numero, "fila": silla.fila, "columna": silla.columna, "lado": silla.lado, "estado": "libre"}
+            for silla in propios
+        ],
     }
+    return base
+
+
+def error_mapa(datos):
+    """(datos válidos, respuesta de error). La lista manda: tiene que llenar filas × columnas."""
+    entrada = MapaAsientosEntrada(data=datos)
+    if not entrada.is_valid():
+        return None, Response({"message": "El mapa de asientos no es válido", "errores": entrada.errors},
+                              status=status.HTTP_400_BAD_REQUEST)
+    mapa = entrada.validated_data
+    asientos = mapa["asientos"]
+    if not asientos or len(asientos) > 100:
+        return None, Response({"message": "Las sillas deben ser entre 1 y 100"}, status=status.HTTP_400_BAD_REQUEST)
+    if mapa["pasillo_despues_de_columna"] > mapa["columnas"]:
+        return None, Response({"message": "El pasillo queda fuera de las columnas"}, status=status.HTTP_400_BAD_REQUEST)
+    fuera = [silla["numero"] for silla in asientos if silla["fila"] > mapa["filas"] or silla["columna"] > mapa["columnas"]]
+    if fuera:
+        return None, Response({"message": "Hay sillas fuera de la cuadrícula"}, status=status.HTTP_400_BAD_REQUEST)
+    puestos = [(silla["fila"], silla["columna"]) for silla in asientos]
+    if len(set(puestos)) != len(puestos):
+        return None, Response({"message": "Dos sillas no pueden ocupar el mismo puesto"}, status=status.HTTP_400_BAD_REQUEST)
+    numeros = [silla["numero"] for silla in asientos]
+    if sorted(numeros) != list(range(1, len(asientos) + 1)):
+        return None, Response({"message": "Los números de silla deben ir de 1 a la cantidad, sin repetirse"},
+                              status=status.HTTP_400_BAD_REQUEST)
+    return mapa, None
+
+
+def guardar_mapa(bus, mapa):
+    """Persiste la cuadrícula en el bus. Solo si el tipo es de este bus se numeran sus sillas para la venta."""
+    tipo = tipo_principal(bus)
+    cantidad = len(mapa["asientos"])
+    if tipo is not None and tipo.buses.count() == 1:
+        error = error_reducir_sillas(tipo, cantidad)
+        if error:
+            return error
+    with transaction.atomic():
+        MapaBus.objects.update_or_create(
+            bus=bus,
+            defaults={
+                "filas": mapa["filas"],
+                "columnas": mapa["columnas"],
+                "pasillo_despues_de_columna": mapa["pasillo_despues_de_columna"],
+            },
+        )
+        AsientoBus.objects.filter(bus=bus).delete()
+        AsientoBus.objects.bulk_create([
+            AsientoBus(bus=bus, numero=silla["numero"], fila=silla["fila"], columna=silla["columna"], lado=silla["lado"])
+            for silla in mapa["asientos"]
+        ])
+        if tipo is not None and tipo.buses.count() == 1:
+            guardar_sillas(tipo, cantidad)
+    return None
 
 
 class BusAsientosView(VistaCatalogo):
+    permission_classes = [EscrituraDeConductor]
     @swagger_auto_schema(
         operation_description=(
             "Cuántas sillas tiene el bus. Las sillas pertenecen al TIPO de bus, así que "
@@ -625,6 +742,19 @@ class BusAsientosView(VistaCatalogo):
     def post(self, request, id):
         bus = get_object_or_404(Bus, id=id)
         yo = usuario_de(request)
+        de_su_agencia = es_conductor(yo) and bus.agencia_id in agencias_de(yo)
+        if "asientos" in request.data:
+            if not (gestiona_agencia(yo, bus.agencia_id) or de_su_agencia):
+                return prohibido("Solo puedes guardar el mapa de un bus de tu agencia")
+            mapa, error = error_mapa(request.data)
+            if error:
+                return error
+            error = guardar_mapa(bus, mapa)
+            if error:
+                return error
+            respuesta = asientos_bus_json(bus)
+            respuesta["mensaje"] = f"El bus {bus.placa} quedó con {mapa['filas']} filas y {len(mapa['asientos'])} sillas"
+            return Response(respuesta)
         # El tipo de bus también debe ser de la agencia: no se tocan plantillas de otra agencia.
         if not gestiona_agencia(yo, bus.agencia_id):
             return prohibido("Solo puedes cambiar las sillas de los buses de tu agencia")
@@ -828,6 +958,7 @@ class AsientoView(VistaCatalogo):
         paquete_id = entero_query(request, "paquete_id")
         mias = agencias_de_sillas(usuario_de(request))
         marcar_vencidas()
+        propios = {}
         if viaje_id is not None:
             viaje = Viaje.objects.select_related("bus").filter(id=entero_o_none(viaje_id)).first()
             if viaje is None or (mias is not None and viaje.bus.agencia_id not in mias):
@@ -835,6 +966,7 @@ class AsientoView(VistaCatalogo):
             # El mapa es el de los tipos del bus de ESA salida y la ocupación es solo de esa salida.
             tipos = list(viaje.bus.tipos_bus.values_list("id", flat=True))
             ocupadoras = reservas_que_ocupan(viaje.paquete_id, viaje.id)
+            propios = {silla.numero: silla for silla in AsientoBus.objects.filter(bus=viaje.bus)}
         elif tipo:
             agencia_id = TipoBus.objects.filter(id=tipo).values_list("agencia_id", flat=True).first()
             if mias is not None and agencia_id is not None and agencia_id not in mias:
@@ -848,12 +980,18 @@ class AsientoView(VistaCatalogo):
         ocupados = set(AsientoReserva.objects.filter(reserva__in=ocupadoras).values_list("asiento_id", flat=True))
         lista = []
         for asiento in Asiento.objects.filter(tipo_bus_id__in=tipos).order_by("numero_asiento", "id"):
-            lista.append({
+            item = {
                 "id": asiento.id,
                 "tipo_bus_id": asiento.tipo_bus_id,
                 "numero_asiento": asiento.numero_asiento,
                 "ocupado": asiento.id in ocupados,
-            })
+            }
+            propio = propios.get(asiento.numero_asiento)
+            if propio:
+                item["fila"] = propio.fila
+                item["columna"] = propio.columna
+                item["lado"] = propio.lado
+            lista.append(item)
         return Response(lista)
 
     @swagger_auto_schema(

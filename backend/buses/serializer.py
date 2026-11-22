@@ -57,3 +57,19 @@ class AsientosBusEntrada(serializers.Serializer):
         min_value=1, max_value=100,
         help_text="Número de sillas del bus (1 a 100). Se numeran de 1 a cantidad."
     )
+
+
+class AsientoMapaEntrada(serializers.Serializer):
+    numero = serializers.IntegerField(min_value=1, max_value=100)
+    fila = serializers.IntegerField(min_value=1, max_value=40)
+    columna = serializers.IntegerField(min_value=1, max_value=10)
+    lado = serializers.ChoiceField(choices=["izquierda", "derecha"])
+
+
+class MapaAsientosEntrada(serializers.Serializer):
+    """Mapa confirmado por el conductor. Se guarda en ese bus, no en un tipo compartido."""
+
+    filas = serializers.IntegerField(min_value=1, max_value=40)
+    columnas = serializers.IntegerField(min_value=1, max_value=10)
+    pasillo_despues_de_columna = serializers.IntegerField(min_value=0, max_value=10)
+    asientos = AsientoMapaEntrada(many=True)

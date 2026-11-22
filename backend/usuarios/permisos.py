@@ -223,6 +223,15 @@ class LecturaPublica(SesionVigente):
         return es_personal(usuario_activo(request))
 
 
+class EscrituraDeConductor(LecturaPublica):
+    """Igual que el catálogo, y además el conductor puede hacer POST: crear su bus y guardar su mapa."""
+
+    def has_permission(self, request, view):
+        if super().has_permission(request, view):
+            return True
+        return request.method == "POST" and es_conductor(usuario_activo(request))
+
+
 class SoloPersonal(BasePermission):
     """Solo administrador o superadministrador."""
     message = "Solo un administrador puede hacer esta operación"

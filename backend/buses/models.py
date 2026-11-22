@@ -63,6 +63,34 @@ class Asiento(models.Model):
     numero_asiento = models.IntegerField()
     tipo_bus = models.ForeignKey(TipoBus, on_delete=models.CASCADE)
 
+
+class MapaBus(models.Model):
+    """Cuadrícula fotografiada de UN bus. No se copia al tipo cuando ese tipo lo usan otros buses."""
+
+    bus = models.OneToOneField(Bus, on_delete=models.CASCADE, related_name="mapa")
+    filas = models.PositiveIntegerField()
+    columnas = models.PositiveIntegerField()
+    pasillo_despues_de_columna = models.PositiveIntegerField()
+
+    class Meta:
+        db_table = "mapas_bus"
+
+
+class AsientoBus(models.Model):
+    """Silla de un bus concreto, con fila y columna. El estado inicial es libre."""
+
+    bus = models.ForeignKey(Bus, on_delete=models.CASCADE, related_name="asientos_propios")
+    numero = models.PositiveIntegerField()
+    fila = models.PositiveIntegerField()
+    columna = models.PositiveIntegerField()
+    lado = models.CharField(max_length=12)
+
+    class Meta:
+        db_table = "asientos_bus"
+        constraints = [
+            models.UniqueConstraint(fields=["bus", "numero"], name="asiento_bus_numero_unico"),
+        ]
+
     def __str__(self):
         return str(self.numero_asiento)
 

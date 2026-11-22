@@ -30,9 +30,6 @@ class PlanView(APIView):
     def post(self, request):
         nombre = request.data.get('nombre')
         descripcion = request.data.get('descripcion')
-        precio_mensual = request.data.get('precio_mensual')
-        precio_trimestral = request.data.get('precio_trimestral')
-        precio_anual = request.data.get('precio_anual')
         maximo_agencias = request.data.get('maximo_agencias')
         maximo_paquetes = request.data.get('maximo_paquetes')
         maximo_buses = request.data.get('maximo_buses')
@@ -45,9 +42,6 @@ class PlanView(APIView):
         planNuevo = Plan.objects.create(
             nombre=nombre,
             descripcion=descripcion,
-            precio_mensual=precio_mensual,
-            precio_trimestral=precio_trimestral,
-            precio_anual=precio_anual,
             maximo_agencias=maximo_agencias,
             maximo_paquetes=maximo_paquetes,
             maximo_buses=maximo_buses,
@@ -78,9 +72,9 @@ class PlanView(APIView):
                 'id': plan.id,
                 'nombre': plan.nombre,
                 'descripcion': plan.descripcion,
-                'precio_mensual': plan.precio_mensual,
-                'precio_trimestral': plan.precio_trimestral,
-                'precio_anual': plan.precio_anual,
+                'precio_mensual': plan.precio_de(1),
+                'precio_trimestral': plan.precio_de(3),
+                'precio_anual': plan.precio_de(12),
                 'maximo_agencias': plan.maximo_agencias,
                 'maximo_paquetes': plan.maximo_paquetes,
                 'maximo_buses': plan.maximo_buses,
@@ -95,9 +89,6 @@ class PlanView(APIView):
         plan = Plan.objects.get(id=id)
         plan.nombre = request.data.get('nombre')
         plan.descripcion = request.data.get('descripcion')
-        plan.precio_mensual = request.data.get('precio_mensual')
-        plan.precio_trimestral = request.data.get('precio_trimestral')
-        plan.precio_anual = request.data.get('precio_anual')
         plan.maximo_agencias = request.data.get('maximo_agencias')
         plan.maximo_paquetes = request.data.get('maximo_paquetes')
         plan.maximo_buses = request.data.get('maximo_buses')

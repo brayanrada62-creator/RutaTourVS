@@ -739,3 +739,75 @@ class AislamientoSillasTest(TestCase):
             cliente = Escenario.cliente_http(usuario) if usuario else Escenario.cliente_http()
             for ruta in self.rutas:
                 self.assertEqual(cliente.get(ruta).status_code, 200, ruta)
+
+
+def mapa_de(filas, columnas, pasillo):
+    asientos = []
+    numero = 1
+    for fila in range(1, filas + 1):
+        for columna in range(1, columnas + 1):
+            asientos.append({
+                "numero": numero,
+                "fila": fila,
+                "columna": columna,
+                "lado": "izquierda" if columna <= pasillo else "derecha",
+            })
+            numero += 1
+    return {
+        "filas": filas,
+        "columnas": columnas,
+        "pasillo_despues_de_columna": pasillo,
+        "asientos": asientos,
+    }
+
+
+class MapaFotografiadoTest(TestCase):
+    """El conductor guarda la cuadrícula en SU bus. Un tipo compartido no se modifica."""
+
+    def setUp(self):
+        self.e = Escenario()
+        self.conductor = Escenario.cliente_http(self.e.cond_a)
+
+    def test_crear_bus_y_guardar_el_mapa_en_ese_bus(self):
+        from buses.models import AsientoBus
+        antes = Asiento.objects.filter(tipo_bus=self.e.tipo_a).count()
+        creado = self.conductor.post("/api/bus/", {
+            "placa": "FOTO01", "marca": "Chevrolet", "modelo": "2020", "estado": "activo", "sillas": 4,
+        }, format="json")
+        self.assertEqual(creado.status_code, 200, creado.content)
+        bus_id = creado.json()["id"]
+        mapa = self.conductor.post(f"/api/bus/{bus_id}/asientos/", mapa_de(2, 2, 1), format="json")
+        self.assertEqual(mapa.status_code, 200, mapa.content)
+        cuerpo = mapa.json()
+        self.assertEqual(cuerpo["filas"], 2)
+        self.assertEqual(cuerpo["columnas"], 2)
+        self.assertEqual(cuerpo["pasillo_despues_de_columna"], 1)
+        self.assertEqual(cuerpo["total"], 4)
+        self.assertEqual(len(cuerpo["asientos"]), 4)
+        self.assertTrue(all(silla["estado"] == "libre" for silla in cuerpo["asientos"]))
+        self.assertEqual(Asiento.objects.filter(tipo_bus=self.e.tipo_a).count(), antes)
+        tipo = TipoBus.objects.get(nombre="Distribución FOTO01")
+        self.assertEqual(tipo.buses.count(), 1)
+        self.assertEqual(Asiento.objects.filter(tipo_bus=tipo).count(), 4)
+        self.assertEqual(AsientoBus.objects.filter(bus_id=bus_id).count(), 4)
+        self.assertTrue(Bus_Conductor.objects.filter(bus_id=bus_id, conductor=self.e.cond_a).exists())
+        consulta = self.conductor.get(f"/api/bus/{bus_id}/asientos/")
+        self.assertEqual(consulta.json()["total"], 4)
+
+    def test_el_mapa_de_un_tipo_compartido_no_cambia_la_plantilla(self):
+        from buses.models import AsientoBus
+        antes = list(Asiento.objects.filter(tipo_bus=self.e.tipo_a).values_list("numero_asiento", flat=True))
+        r = self.conductor.post(f"/api/bus/{self.e.bus_a.id}/asientos/", mapa_de(1, 2, 1), format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(list(Asiento.objects.filter(tipo_bus=self.e.tipo_a).values_list("numero_asiento", flat=True)), antes)
+        self.assertEqual(AsientoBus.objects.filter(bus=self.e.bus_a).count(), 2)
+        self.assertEqual(self.e.tipo_a.buses.count(), 2)
+
+    def test_la_cantidad_sigue_siendo_solo_del_administrador(self):
+        r = self.conductor.post(f"/api/bus/{self.e.bus_a.id}/asientos/", {"cantidad": 5}, format="json")
+        self.assertEqual(r.status_code, 403)
+
+    def test_otro_conductor_no_guarda_el_mapa(self):
+        otro = Escenario.cliente_http(self.e.cond_b)
+        r = otro.post(f"/api/bus/{self.e.bus_a.id}/asientos/", mapa_de(1, 2, 1), format="json")
+        self.assertEqual(r.status_code, 403)
