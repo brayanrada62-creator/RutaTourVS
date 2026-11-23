@@ -13,4 +13,17 @@ from django.core.asgi import get_asgi_application
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 
-application = get_asgi_application()
+django_asgi_app = get_asgi_application()
+
+# WebSocket de notificaciones del panel (ws/alertas/). Solo si `channels` está instalado y el servidor es ASGI
+# (uvicorn/daphne); con gunicorn + wsgi (como hoy) este archivo no se usa y todo sigue igual.
+try:
+    from channels.routing import ProtocolTypeRouter, URLRouter
+    from notificaciones.routing import websocket_urlpatterns
+
+    application = ProtocolTypeRouter({
+        'http': django_asgi_app,
+        'websocket': URLRouter(websocket_urlpatterns),
+    })
+except ImportError:
+    application = django_asgi_app

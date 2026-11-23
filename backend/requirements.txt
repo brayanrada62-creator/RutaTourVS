@@ -20,3 +20,5 @@ tzdata==2026.2
 uritemplate==4.2.0
 whitenoise==6.12.0
 python-dotenv
+# Push de notificaciones (FCM). Sin FIREBASE_CREDENTIALS_FILE no hace nada; el historial funciona igual.
+firebase-admin==7.8.0
