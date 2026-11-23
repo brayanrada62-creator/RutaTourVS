@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
 from .serializers import PlanEntrada
-from .models import Plan, PlanAgencias
+from .models import Plan, PlanAgencias, PrecioPlanNoDisponible
 from usuarios.models import Agencia
 from usuarios.permisos import SesionVigente, es_super, usuario_activo
 
@@ -47,6 +47,10 @@ class PlanView(APIView):
             maximo_buses=maximo_buses,
             maximo_administradores=maximo_administradores,
         )
+        try:
+            guardar_precios(planNuevo, request.data)
+        except PrecioPlanNoDisponible as exc:
+            return Response({'message': str(exc)}, status=400)
 
         if id_agencia:
             if not periodo or not vencimiento:
@@ -72,9 +76,9 @@ class PlanView(APIView):
                 'id': plan.id,
                 'nombre': plan.nombre,
                 'descripcion': plan.descripcion,
-                'precio_mensual': plan.precio_de(1),
-                'precio_trimestral': plan.precio_de(3),
-                'precio_anual': plan.precio_de(12),
+                'precio_mensual': plan.precio_vigente('mensual'),
+                'precio_trimestral': plan.precio_vigente('trimestral'),
+                'precio_anual': plan.precio_vigente('anual'),
                 'maximo_agencias': plan.maximo_agencias,
                 'maximo_paquetes': plan.maximo_paquetes,
                 'maximo_buses': plan.maximo_buses,
@@ -93,6 +97,10 @@ class PlanView(APIView):
         plan.maximo_paquetes = request.data.get('maximo_paquetes')
         plan.maximo_buses = request.data.get('maximo_buses')
         plan.maximo_administradores = request.data.get('maximo_administradores')
+        try:
+            guardar_precios(plan, request.data)
+        except PrecioPlanNoDisponible as exc:
+            return Response({'message': str(exc)}, status=400)
         plan.save()
 
         id_agencia = request.data.get('id_agencia')
@@ -116,3 +124,15 @@ class PlanView(APIView):
             )
 
         return Response({'message': 'Plan actualizado exitosamente'})
+
+
+def guardar_precios(plan, data):
+    pares = (
+        ('mensual', data.get('precio_mensual')),
+        ('trimestral', data.get('precio_trimestral')),
+        ('anual', data.get('precio_anual')),
+    )
+    for periodo, monto in pares:
+        if monto is None or monto == '':
+            continue
+        plan.registrar_precio(periodo, monto)
