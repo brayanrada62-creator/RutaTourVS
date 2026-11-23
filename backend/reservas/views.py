@@ -27,6 +27,7 @@ from django.utils import timezone
 from usuarios.models import Usuario
 from usuarios.notificaciones import enviar_push_en_segundo_plano
 from pagos.models import Pago
+from notificaciones.eventos import notificar_novedad
 from buses.models import Asiento, Bus_Conductor
 from paquetes.models import Paquete
 from buses.models import Viaje
@@ -1021,6 +1022,8 @@ class NovedadView(APIView):
         if not detalle:
             return Response({"message": "Escribe el detalle de la novedad"}, status=status.HTTP_400_BAD_REQUEST)
         n = Novedad.objects.create(paquete_id=paquete_id, viaje=viaje, tipo=tipo, detalle=detalle)
+        if es_conductor(yo):
+            notificar_novedad(n, yo)  # HU-W-46: avisa a los administradores de la agencia de la novedad
         return Response(novedad_json(n), status=status.HTTP_201_CREATED)
 
 

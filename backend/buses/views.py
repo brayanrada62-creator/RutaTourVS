@@ -21,6 +21,7 @@ from django.db.models import ProtectedError, Q
 from django.utils import timezone
 
 from .models import AsientoBus, Bus_Conductor, TipoBus, Bus, BusTipoBus, Asiento, MapaBus, Viaje, ParadaCumplida
+from notificaciones.eventos import notificar_cambio_viaje
 from paquetes.models import Itinerario, Paquete, ordenar_itinerario
 from reservas.models import AsientoReserva, Reserva, marcar_vencidas, reservas_activas, reservas_que_ocupan
 from usuarios.models import Agencia, Usuario, UsuarioAgencia
@@ -1334,6 +1335,7 @@ class ViajeIdView(APIView):
         fecha, hora, error = leer_fecha_hora(request.data, viaje)
         if error:
             return error
+        cambios = [campo for campo, antes, ahora in (("fecha", viaje.fecha, fecha), ("hora", viaje.hora, hora)) if antes != ahora]
         # Solo se valida si cambia el bus o el día: así un viaje antiguo que ya estaba repetido
         # se puede corregir (moverlo de día o de bus) sin que su gemelo lo bloquee.
         if (bus.id, fecha) != (viaje.bus_id, viaje.fecha):
@@ -1346,6 +1348,7 @@ class ViajeIdView(APIView):
                 viaje.save()
         except IntegrityError:
             return bus_ocupado_ese_dia(bus, fecha, excluir_id=viaje.id) or conflicto("Un bus solo puede hacer un viaje por día")
+        notificar_cambio_viaje(viaje, cambios)
         return Response(viaje_json(viaje))
 
     @swagger_auto_schema(operation_description="Eliminar un viaje PROGRAMADO sin reservas asociadas. Solo admin.")

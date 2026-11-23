@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     'buses',
     'destinos',
     'planes',
+    'notificaciones',
 ]
 # CORS: en Render definir CORS_ALLOWED_ORIGINS con el dominio del panel Angular,
 # separado por comas (ej. https://rutatour-admin.onrender.com). Sin la variable se permite todo.
@@ -239,6 +240,7 @@ VERIFICAR_CORREO = os.environ.get('VERIFICAR_CORREO', 'True') == 'True'
 # Notificaciones push (Firebase Cloud Messaging). FIREBASE_CREDENTIALS = el JSON de la cuenta de servicio
 # del proyecto de Firebase (completo, en una sola variable de entorno de Render). Sin ella no se envían pushes.
 FIREBASE_CREDENTIALS = os.environ.get('FIREBASE_CREDENTIALS', '')
+FIREBASE_CREDENTIALS_FILE = os.environ.get('FIREBASE_CREDENTIALS_FILE', '')
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
 
 
