@@ -3,7 +3,6 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.utils import timezone
-from pydantic import ValidationError
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -126,7 +125,7 @@ class RegistroVerificar(APIView):
                 expected_origin=settings.WEBAUTHN_ORIGINS,
                 require_user_verification=True,
             )
-        except (WebAuthnException, ValidationError, ValueError):
+        except (WebAuthnException, ValueError):
             return _error("No se pudo activar este equipo.", status.HTTP_400_BAD_REQUEST)
 
         CredencialBiometrica.objects.update_or_create(
@@ -198,7 +197,7 @@ class LoginVerificar(APIView):
                 credential_current_sign_count=fila.contador,
                 require_user_verification=True,
             )
-        except (WebAuthnException, ValidationError, ValueError):
+        except (WebAuthnException, ValueError):
             return _error("No se pudo verificar este equipo.", status.HTTP_401_UNAUTHORIZED)
 
         fila.contador = verificado.new_sign_count
