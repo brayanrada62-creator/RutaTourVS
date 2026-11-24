@@ -1,10 +1,11 @@
+from django.db.utils import OperationalError, ProgrammingError
 from rest_framework.exceptions import NotAuthenticated
 from rest_framework.permissions import SAFE_METHODS
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
 from .serializers import PlanEntrada
-from .models import Plan, PlanAgencias, PrecioPlanNoDisponible
+from .models import NUMERO_WHATSAPP_INICIAL, ContactoLanding, Plan, PlanAgencias, PrecioPlanNoDisponible
 from usuarios.models import Agencia
 from usuarios.permisos import SesionVigente, es_super, usuario_activo
 
@@ -124,6 +125,57 @@ class PlanView(APIView):
             )
 
         return Response({'message': 'Plan actualizado exitosamente'})
+
+
+def normalizar_whatsapp(valor):
+    """Celular de Colombia: 10 dígitos que empiezan por 3. Acepta el 57 delante y lo quita."""
+    digitos = "".join(caracter for caracter in str(valor or "") if caracter.isdigit())
+    if len(digitos) == 12 and digitos.startswith("57"):
+        digitos = digitos[2:]
+    if len(digitos) == 10 and digitos.startswith("3"):
+        return digitos
+    return None
+
+
+def whatsapp_guardado():
+    """El número que abre el chat. Si la tabla aún no existe, se usa el inicial."""
+    try:
+        fila = ContactoLanding.objects.order_by("id").first()
+    except (OperationalError, ProgrammingError):
+        return NUMERO_WHATSAPP_INICIAL
+    if fila is None or not fila.whatsapp.strip():
+        return NUMERO_WHATSAPP_INICIAL
+    return fila.whatsapp
+
+
+class ContactoLandingView(APIView):
+    """GET público para la landing. PUT solo el superadministrador."""
+
+    permission_classes = [PlanesPermiso]
+
+    def get(self, request):
+        return Response({"whatsapp": whatsapp_guardado()})
+
+    def put(self, request):
+        numero = normalizar_whatsapp(request.data.get("whatsapp"))
+        if numero is None:
+            return Response(
+                {"message": "Escribe un celular de 10 dígitos que empiece por 3."},
+                status=400,
+            )
+        try:
+            fila = ContactoLanding.objects.order_by("id").first()
+            if fila is None:
+                ContactoLanding.objects.create(whatsapp=numero)
+            else:
+                fila.whatsapp = numero
+                fila.save(update_fields=["whatsapp"])
+        except (OperationalError, ProgrammingError):
+            return Response(
+                {"message": "La tabla del WhatsApp todavía no está creada. Hay que migrar antes de guardar otro número."},
+                status=503,
+            )
+        return Response({"whatsapp": numero})
 
 
 def guardar_precios(plan, data):

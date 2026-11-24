@@ -24,7 +24,7 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from usuarios.permisos import MENSAJE_AGENCIA_DESACTIVADA, agencia_desactivada, es_personal, usuario_de
+from usuarios.permisos import MENSAJE_AGENCIA_DESACTIVADA, agencia_desactivada, es_admin, usuario_de
 from usuarios.views import emitir_sesion
 
 from .models import CredencialBiometrica, RetoBiometrico
@@ -79,7 +79,7 @@ class RegistroOpciones(APIView):
 
     def post(self, request):
         usuario = usuario_de(request)
-        if not es_personal(usuario):
+        if not es_admin(usuario):
             return _error("Solo administradores pueden activar este acceso.", status.HTTP_403_FORBIDDEN)
 
         existentes = [
@@ -109,7 +109,7 @@ class RegistroVerificar(APIView):
 
     def post(self, request):
         usuario = usuario_de(request)
-        if not es_personal(usuario):
+        if not es_admin(usuario):
             return _error("Solo administradores pueden activar este acceso.", status.HTTP_403_FORBIDDEN)
 
         tomado = _consumir_reto(request.data, "registro")
@@ -180,7 +180,7 @@ class LoginVerificar(APIView):
             )
 
         usuario = fila.usuario
-        if not es_personal(usuario):
+        if not es_admin(usuario):
             return _error(SOLO_ADMIN, status.HTTP_403_FORBIDDEN)
         if not usuario.activo:
             return _error("Usuario suspendido. Comunícate con tu agencia", status.HTTP_403_FORBIDDEN)

@@ -94,6 +94,18 @@ class SolicitudPlan(models.Model):
     def __str__(self):
         return f"{self.id_agencia.nombre} - {self.id_plan.nombre} - {self.estado}"
 
+NUMERO_WHATSAPP_INICIAL = "3022726350"
+
+
+class ContactoLanding(models.Model):
+    """Un solo celular: el botón de WhatsApp de la landing de la app."""
+
+    whatsapp = models.CharField(max_length=10)
+
+    def __str__(self):
+        return self.whatsapp
+
+
 class PrecioPlan(models.Model):
     PERIODOS = [
         ('mensual', 'Mensual'),
