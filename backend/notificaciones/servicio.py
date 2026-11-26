@@ -1,11 +1,12 @@
 """Servicio central de notificaciones. Todo aviso del sistema pasa por `notificar`."""
-from usuarios.permisos import ROL_ADMIN, ROL_CLIENTE, ROL_CONDUCTOR
+from usuarios.permisos import ROL_ADMIN, ROL_CLIENTE, ROL_CONDUCTOR, ROL_SUPER
 
 from . import fcm, ws
 from .models import DispositivoFCM, Notificacion, PreferenciaNotificacion, Tipo
 
 # Tipos que puede recibir cada rol: define qué interruptores ve cada usuario en preferencias.
 TIPOS_POR_ROL = {
+    ROL_SUPER: [Tipo.COMPROBANTE_PLAN],
     ROL_CLIENTE: [Tipo.PAGO_APROBADO],
     ROL_CONDUCTOR: [Tipo.CAMBIO_VIAJE],
     ROL_ADMIN: [Tipo.NOVEDAD_INCIDENTE, Tipo.PAGO_PENDIENTE],
@@ -13,6 +14,7 @@ TIPOS_POR_ROL = {
 
 # Tipo de recurso al que apunta cada notificación.
 REFERENCIA_POR_TIPO = {
+    Tipo.COMPROBANTE_PLAN: "solicitud_plan",
     Tipo.PAGO_APROBADO: "compra",
     Tipo.PAGO_PENDIENTE: "pago",
     Tipo.CAMBIO_VIAJE: "viaje",
