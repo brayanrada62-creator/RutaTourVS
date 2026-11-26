@@ -40,6 +40,18 @@ def administradores_de_agencia(agencia_id):
 
 
 @sin_romper_el_flujo
+def notificar_pago_pendiente(pago):
+    """Avisa a la agencia cuando un cliente envía un comprobante nuevo."""
+    reserva = pago.reserva
+    for admin in administradores_de_agencia(reserva.paquete.agencia_id):
+        notificar(
+            admin, Tipo.PAGO_PENDIENTE, "Nuevo comprobante pendiente de revisión",
+            f"Hay un comprobante para la reserva #{reserva.id} de {reserva.paquete.nombre}.",
+            referencia_id=pago.id, datos={"reserva_id": reserva.id},
+        )
+
+
+@sin_romper_el_flujo
 def notificar_pago_aprobado(pago):
     """HU-M-11: al cliente dueño de la reserva. Se llama solo cuando el estado pasa a aprobado (no con rechazado)."""
     reserva = pago.reserva

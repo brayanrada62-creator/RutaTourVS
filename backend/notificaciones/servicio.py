@@ -8,12 +8,13 @@ from .models import DispositivoFCM, Notificacion, PreferenciaNotificacion, Tipo
 TIPOS_POR_ROL = {
     ROL_CLIENTE: [Tipo.PAGO_APROBADO],
     ROL_CONDUCTOR: [Tipo.CAMBIO_VIAJE],
-    ROL_ADMIN: [Tipo.NOVEDAD_INCIDENTE],
+    ROL_ADMIN: [Tipo.NOVEDAD_INCIDENTE, Tipo.PAGO_PENDIENTE],
 }
 
 # Tipo de recurso al que apunta cada notificación.
 REFERENCIA_POR_TIPO = {
     Tipo.PAGO_APROBADO: "compra",
+    Tipo.PAGO_PENDIENTE: "pago",
     Tipo.CAMBIO_VIAJE: "viaje",
     Tipo.NOVEDAD_INCIDENTE: "novedad",
 }

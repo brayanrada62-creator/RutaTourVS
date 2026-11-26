@@ -1,13 +1,13 @@
 # Contrato de API de notificaciones
 
 Todos los endpoints exigen `Authorization: Bearer <token>` y filtran por el usuario del token.
-Base: `/api/`. Tipos (`tipo`): `PAGO_APROBADO` (cliente), `CAMBIO_VIAJE` (conductor), `NOVEDAD_INCIDENTE` (administrador).
+Base: `/api/`. Tipos (`tipo`): `PAGO_APROBADO` (cliente), `CAMBIO_VIAJE` (conductor), `NOVEDAD_INCIDENTE` y `PAGO_PENDIENTE` (administrador).
 
 ## Decisiones
 - Si el destinatario desactivó el tipo, el aviso **no se guarda, no se envía por push y no se emite por WebSocket**.
 - Sin fila en `preferencias_notificacion` el tipo está activo.
 - Un tipo solo se entrega al rol que lo puede recibir (`TIPOS_POR_ROL` en `servicio.py`).
-- `referencia_tipo`: `compra` (id de la reserva), `viaje` (id del viaje), `novedad` (id de la novedad).
+- `referencia_tipo`: `compra` (id de la reserva), `viaje` (id del viaje), `novedad` (id de la novedad), `pago` (id del pago, con `reserva_id` en `datos`).
 
 ## GET /notificaciones/?page=1&page_size=12[&leida=false]
 Orden: más reciente primero. Sin `page` devuelve la lista sin paginar.
@@ -71,6 +71,7 @@ Grupo `notif_usuario_<id>`; incluye `titulo`, `mensaje`, `fecha` (compatibles co
 ## Cuándo se dispara cada tipo
 | Tipo | Punto | Regla |
 |---|---|---|
+| PAGO_PENDIENTE | `POST /pago/` | Después de confirmar un comprobante nuevo del cliente, a los administradores de la agencia de la reserva |
 | PAGO_APROBADO | `PUT /pago/{id}/` (y `POST /pago/` creado ya aprobado) | Solo al pasar a `aprobado`; `rechazado` no avisa; aprobar dos veces avisa una |
 | CAMBIO_VIAJE | `PUT /viaje/{id}/` | Solo si cambia `fecha` u `hora`; el cambio de bus solo no avisa |
 | CAMBIO_VIAJE | `POST/PUT/DELETE /itinerario/` | Solo si cambia parada (paquete, título, día, hora, lugar); a conductores de viajes no completados del paquete |
