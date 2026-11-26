@@ -10,6 +10,7 @@ from PIL import Image
 
 from buses.models import Asiento, Viaje
 from buses.views import hoy_colombia
+from notificaciones.models import Notificacion, Tipo
 from pagos.models import Pago
 from reservas.models import AsientoReserva, Reserva
 from usuarios.pruebas import Escenario
@@ -58,6 +59,25 @@ class ComprobanteTest(TestCase):
         self.assertEqual(pago.estado, "pendiente")
         self.assertTrue(pago.comprobante.name)
         self.assertTrue(self.c.get(f"/api/pago/{pago.id}/").json()["comprobante"])
+
+    def test_notifica_solo_a_la_agencia_por_cada_comprobante_nuevo(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            pago_id = self.pagar(imagen()).json()["id"]
+            self.assertEqual(self.pagar(imagen()).status_code, 409)
+
+        aviso = Notificacion.objects.get(tipo=Tipo.PAGO_PENDIENTE)
+        self.assertEqual(aviso.destinatario, self.e.admin_a)
+        self.assertEqual(aviso.referencia_tipo, "pago")
+        self.assertEqual(aviso.referencia_id, pago_id)
+        self.assertEqual(aviso.datos["reserva_id"], self.reserva.id)
+
+        self.assertEqual(self.revisar(pago_id, "rechazado").status_code, 200)
+        with self.captureOnCommitCallbacks(execute=True):
+            nuevo = self.pagar(imagen()).json()["id"]
+        self.assertEqual(
+            set(Notificacion.objects.filter(tipo=Tipo.PAGO_PENDIENTE).values_list("referencia_id", flat=True)),
+            {pago_id, nuevo},
+        )
 
     def test_acepta_jpg_y_webp(self):
         self.assertEqual(self.pagar(imagen("c.jpg", "JPEG")).status_code, 200)
