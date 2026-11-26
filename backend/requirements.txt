@@ -6,7 +6,6 @@ django-cors-headers==4.9.0
 djangorestframework==3.17.1
 djangorestframework-simplejwt==5.5.1
 drf-yasg==1.21.15
-firebase-admin==7.6.0
 gunicorn==26.2.0
 inflection==0.5.1
 mysqlclient==2.2.8
@@ -20,5 +19,7 @@ tzdata==2026.2
 uritemplate==4.2.0
 whitenoise==6.12.0
 python-dotenv
+# WebAuthn 2.8 no usa pydantic. Alta y verificación de Touch ID, Windows Hello y Face ID.
+webauthn==2.8.0
 # Push de notificaciones (FCM). Sin FIREBASE_CREDENTIALS_FILE no hace nada; el historial funciona igual.
 firebase-admin==7.8.0
