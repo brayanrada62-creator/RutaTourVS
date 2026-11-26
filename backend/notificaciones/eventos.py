@@ -40,6 +40,19 @@ def administradores_de_agencia(agencia_id):
 
 
 @sin_romper_el_flujo
+def notificar_comprobante_plan(solicitud):
+    from usuarios.models import Usuario
+    from usuarios.permisos import ROL_SUPER
+
+    for superadmin in Usuario.objects.filter(rol_id=ROL_SUPER, activo=True):
+        notificar(
+            superadmin, Tipo.COMPROBANTE_PLAN, "Nuevo comprobante de membresía",
+            f"{solicitud.id_agencia.nombre} envió un comprobante para el plan {solicitud.id_plan.nombre}.",
+            referencia_id=solicitud.id,
+        )
+
+
+@sin_romper_el_flujo
 def notificar_pago_pendiente(pago):
     """Avisa a la agencia cuando un cliente envía un comprobante nuevo."""
     reserva = pago.reserva
