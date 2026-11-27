@@ -75,6 +75,8 @@ class PlanAgencias(models.Model):
         return f"{self.id_plan.nombre} - {self.id_agencia.nombre}"
 
 class SolicitudPlan(models.Model):
+    """Comprobante de pago de la membresía. Al aprobarse actualiza PlanAgencias."""
+
     ESTADOS = [
         ('pendiente', 'Pendiente'),
         ('aprobada', 'Aprobada'),
@@ -88,8 +90,14 @@ class SolicitudPlan(models.Model):
     ]
     id_agencia = models.ForeignKey('usuarios.Agencia', on_delete=models.CASCADE)
     id_plan = models.ForeignKey(Plan, on_delete=models.CASCADE)
+    periodo = models.CharField(max_length=20, choices=PERIODOS, default='mensual')
+    precio = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    comprobante = models.ImageField(upload_to='membresias/', max_length=255, blank=True, default='')
     estado = models.CharField(max_length=20, choices=ESTADOS, default='pendiente')
+    motivo = models.CharField(max_length=255, blank=True, default='')
     fecha_solicitud = models.DateTimeField(auto_now_add=True)
+    inicia_el = models.DateField(null=True, blank=True)
+    vencimiento = models.DateField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.id_agencia.nombre} - {self.id_plan.nombre} - {self.estado}"

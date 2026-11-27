@@ -355,7 +355,8 @@ class PaqueteView(VistaCatalogo):
     @swagger_auto_schema(
         operation_description=(
             "Listar paquetes con destinos e imagen. Superadmin: todos. Admin: solo los de su agencia "
-            "(su ?agencia_id= se ignora). Un cliente registrado por una agencia solo ve los de esa agencia. "
+            "(su ?agencia_id= se ignora), aunque la membresía esté vencida. Un cliente o visitante solo ve "
+            "paquetes de agencias con la membresía vigente. Un cliente registrado por una agencia solo ve los de esa agencia. "
             "Las agencias desactivadas salen del catálogo. Opcional: ?search=, ?destino_id=, ?estado=, ?agencia_id=, "
             "?precio_min=, ?precio_max=, ?fecha= (AAAA-MM-DD, desde hoy), ?page= y ?page_size="
         ),

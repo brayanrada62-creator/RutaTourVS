@@ -1,17 +1,22 @@
 from django.db.utils import OperationalError, ProgrammingError
 from rest_framework.exceptions import NotAuthenticated
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import SAFE_METHODS
+from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
+from destinos.imagenes import imagen_url, validar_foto
 from .serializers import PlanEntrada
-from .models import NUMERO_WHATSAPP_INICIAL, ContactoLanding, Plan, PlanAgencias, PrecioPlanNoDisponible
+from .models import NUMERO_WHATSAPP_INICIAL, ContactoLanding, Plan, PlanAgencias, PrecioPlanNoDisponible, SolicitudPlan
+from .vigencia import activar_membresia
 from usuarios.models import Agencia
-from usuarios.permisos import SesionVigente, es_super, usuario_activo
+from usuarios.permisos import (
+    SesionVigente, agencia_para_guardar, agencias_de, es_admin, es_super, prohibido, usuario_activo, usuario_de,
+)
 
 
 class PlanesPermiso(SesionVigente):
-    """La landing lee sin token. Crear y editar solo el superadministrador."""
 
     message = "Solo el superadministrador puede modificar los planes"
 
@@ -128,7 +133,6 @@ class PlanView(APIView):
 
 
 def normalizar_whatsapp(valor):
-    """Celular de Colombia: 10 dígitos que empiezan por 3. Acepta el 57 delante y lo quita."""
     digitos = "".join(caracter for caracter in str(valor or "") if caracter.isdigit())
     if len(digitos) == 12 and digitos.startswith("57"):
         digitos = digitos[2:]
@@ -138,7 +142,6 @@ def normalizar_whatsapp(valor):
 
 
 def whatsapp_guardado():
-    """El número que abre el chat. Si la tabla aún no existe, se usa el inicial."""
     try:
         fila = ContactoLanding.objects.order_by("id").first()
     except (OperationalError, ProgrammingError):
@@ -149,7 +152,6 @@ def whatsapp_guardado():
 
 
 class ContactoLandingView(APIView):
-    """GET público para la landing. PUT solo el superadministrador."""
 
     permission_classes = [PlanesPermiso]
 
@@ -161,7 +163,7 @@ class ContactoLandingView(APIView):
         if numero is None:
             return Response(
                 {"message": "Escribe un celular de 10 dígitos que empiece por 3."},
-                status=400,
+            
             )
         try:
             fila = ContactoLanding.objects.order_by("id").first()
@@ -173,9 +175,111 @@ class ContactoLandingView(APIView):
         except (OperationalError, ProgrammingError):
             return Response(
                 {"message": "La tabla del WhatsApp todavía no está creada. Hay que migrar antes de guardar otro número."},
-                status=503,
+                
             )
         return Response({"whatsapp": numero})
+
+
+ESTADOS_PARA_EL_PANEL = {
+    'pendiente': 'validando',
+    'aprobada': 'aprobado',
+    'rechazada': 'rechazado',
+}
+
+
+def solicitud_json(solicitud, request):
+    comprobante = imagen_url(solicitud.comprobante, request)
+    return {
+        'id': solicitud.id,
+        'agenciaId': str(solicitud.id_agencia_id),
+        'agencia': solicitud.id_agencia.nombre,
+        'planId': solicitud.id_plan_id,
+        'planNombre': solicitud.id_plan.nombre,
+        'planDescripcion': solicitud.id_plan.descripcion,
+        'periodo': solicitud.periodo,
+        'precio': int(solicitud.precio),
+        'comprobante': comprobante or '',
+        'archivo': solicitud.comprobante.name.rsplit('/', 1)[-1] if solicitud.comprobante else '',
+        'estado': ESTADOS_PARA_EL_PANEL.get(solicitud.estado, solicitud.estado),
+        'motivo': solicitud.motivo,
+        'creadaEn': solicitud.fecha_solicitud.isoformat(),
+        'iniciaEl': solicitud.inicia_el.isoformat() if solicitud.inicia_el else None,
+        'venceEl': solicitud.vencimiento.isoformat() if solicitud.vencimiento else None,
+    }
+
+
+class SolicitudPlanView(APIView):
+    """El administrador envía el comprobante. El superadministrador lista todas."""
+
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get(self, request):
+        yo = usuario_de(request)
+        if es_super(yo):
+            lista = SolicitudPlan.objects.all()
+        elif es_admin(yo):
+            lista = SolicitudPlan.objects.filter(id_agencia_id__in=agencias_de(yo))
+        else:
+            return prohibido('No puedes ver estos comprobantes')
+        lista = lista.select_related('id_agencia', 'id_plan').order_by('-id')
+        return Response([solicitud_json(solicitud, request) for solicitud in lista])
+
+    def post(self, request):
+        yo = usuario_de(request)
+        if not es_admin(yo):
+            return prohibido('Solo el administrador de la agencia envía el comprobante')
+        agencia_id, error = agencia_para_guardar(yo, request.data.get('agencia_id') or request.data.get('id_agencia'))
+        if error:
+            return Response({'message': error[1]}, status=error[0])
+        plan = Plan.objects.filter(id=request.data.get('plan_id') or request.data.get('id_plan')).first()
+        periodo = request.data.get('periodo')
+        if plan is None:
+            return Response({'message': 'El plan no existe'}, status=status.HTTP_400_BAD_REQUEST)
+        if periodo not in dict(SolicitudPlan.PERIODOS):
+            return Response({'message': 'El periodo debe ser mensual, trimestral o anual'}, status=status.HTTP_400_BAD_REQUEST)
+        archivo = request.FILES.get('comprobante')
+        if archivo is None:
+            return Response({'message': 'Adjunta la foto del comprobante'}, status=status.HTTP_400_BAD_REQUEST)
+        error_foto = validar_foto(archivo, 'El comprobante')
+        if error_foto:
+            return Response({'message': error_foto}, status=status.HTTP_400_BAD_REQUEST)
+        if SolicitudPlan.objects.filter(id_agencia_id=agencia_id, estado='pendiente').exists():
+            return Response({'message': 'Ya hay un comprobante en revisión'}, status=status.HTTP_400_BAD_REQUEST)
+        solicitud = SolicitudPlan.objects.create(
+            id_agencia_id=agencia_id,
+            id_plan=plan,
+            periodo=periodo,
+            precio=plan.precio_vigente(periodo),
+            comprobante=archivo,
+        )
+        return Response(solicitud_json(solicitud, request), status=status.HTTP_201_CREATED)
+
+
+class SolicitudPlanResolverView(APIView):
+    """Aprueba o rechaza un comprobante. Aprobar renueva PlanAgencias en la misma transacción."""
+
+    def post(self, request, id, accion):
+        yo = usuario_de(request)
+        if not es_super(yo):
+            return prohibido('Solo el superadministrador aprueba o rechaza comprobantes')
+        solicitud = SolicitudPlan.objects.select_related('id_agencia', 'id_plan').filter(id=id).first()
+        if solicitud is None:
+            return Response({'message': 'El comprobante no existe'}, status=status.HTTP_404_NOT_FOUND)
+        if solicitud.estado != 'pendiente':
+            return Response({'message': 'Ese comprobante ya fue revisado'}, status=status.HTTP_400_BAD_REQUEST)
+        if accion == 'aprobar':
+            activar_membresia(solicitud)
+        elif accion == 'rechazar':
+            motivo = str(request.data.get('motivo') or '').strip()
+            if not motivo:
+                return Response({'message': 'Escribe el motivo del rechazo'}, status=status.HTTP_400_BAD_REQUEST)
+            solicitud.estado = 'rechazada'
+            solicitud.motivo = motivo[:255]
+            solicitud.save(update_fields=['estado', 'motivo'])
+        else:
+            return Response({'message': 'Acción no válida'}, status=status.HTTP_404_NOT_FOUND)
+        solicitud.refresh_from_db()
+        return Response(solicitud_json(solicitud, request))
 
 
 def guardar_precios(plan, data):

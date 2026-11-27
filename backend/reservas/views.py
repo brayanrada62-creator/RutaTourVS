@@ -315,6 +315,10 @@ class ReservaView(APIView):
         if not personal and (paquete.estado != "activo" or not paquete.agencia.activo):
             return Response({"message": "Este paquete no está disponible para reservar"},
                             status=status.HTTP_400_BAD_REQUEST)
+        from planes.vigencia import agencia_puede_vender
+        if not agencia_puede_vender(paquete.agencia_id):
+            return Response({"message": "La agencia no tiene la membresía vigente"},
+                            status=status.HTTP_400_BAD_REQUEST)
         clave = str(request.data.get("clave_idempotencia") or "").strip()[:64] or None
         if clave:
             repetida = Reserva.objects.filter(usuario=yo, clave_idempotencia=clave).first()

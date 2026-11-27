@@ -253,12 +253,18 @@ def agencias_de_catalogo(usuario):
 
 def filtrar_catalogo(usuario, lista, campo="agencia_id"):
     """Aplica agencias_de_catalogo a un QuerySet (campo = ruta hasta el id de la agencia).
-    Las agencias desactivadas salen del catálogo; el superadmin y el admin siguen viendo lo que gestionan."""
+    Las agencias desactivadas salen del catálogo; el superadmin y el admin siguen viendo lo que gestionan.
+    Cliente y visitante solo ven agencias con la membresía vigente. El conductor no: opera el viaje
+    aunque la agencia deba renovar."""
     agencias = agencias_de_catalogo(usuario)
     if agencias is not None:
         lista = lista.filter(**{f"{campo}__in": agencias})
     if not es_personal(usuario):
         lista = lista.exclude(**{f"{campo}__in": agencias_inactivas()})
+        if not es_conductor(usuario):
+            from planes.vigencia import ids_agencias_vigentes  # import local: planes no importa permisos
+
+            lista = lista.filter(**{f"{campo}__in": ids_agencias_vigentes()})
     return lista
 
 

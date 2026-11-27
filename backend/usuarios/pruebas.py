@@ -1,10 +1,14 @@
 """Datos y utilidades comunes para las pruebas (solo se usan en tests)."""
+from datetime import timedelta
+
 from django.contrib.auth.hashers import make_password
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from buses.models import Bus, TipoBus
 from paquetes.models import Paquete
+from planes.models import Plan, PlanAgencias
+from planes.vigencia import fecha_colombia
 from usuarios.models import Agencia, Rol, Usuario, UsuarioAgencia
 
 CLAVE = "clave123"
@@ -34,6 +38,17 @@ class Escenario:
                                             fecha_creacion=timezone.now())
         self.paq_b = Paquete.objects.create(nombre="PB", agencia=self.ag_b, descripcion="", duracion_estimada="1",
                                             fecha_creacion=timezone.now())
+        # Las pruebas del catálogo esperan ver estos paquetes: la membresía nace vigente.
+        self.plan = Plan.objects.create(
+            nombre="Básico", descripcion="Membresía de prueba",
+            maximo_agencias=1, maximo_paquetes=10, maximo_buses=5, maximo_administradores=1,
+        )
+        hoy = fecha_colombia()
+        for agencia in (self.ag_a, self.ag_b):
+            PlanAgencias.objects.create(
+                id_plan=self.plan, id_agencia=agencia, periodo="anual",
+                inicia_el=hoy, vencimiento=hoy + timedelta(days=365), estado="activo",
+            )
 
     _doc = 100
 

@@ -1,7 +1,4 @@
 """Envío del push con Firebase Cloud Messaging (solo el aviso; el historial vive en la base de datos).
-
-Se activa con FIREBASE_CREDENTIALS_FILE (JSON de la cuenta de servicio) y `pip install firebase-admin`.
-Sin eso no hace nada: la notificación igual queda guardada y se ve en el centro de notificaciones.
 """
 import logging
 import os
@@ -24,8 +21,7 @@ def _iniciar():
 
 
 def enviar_push(tokens, titulo, mensaje, datos):
-    """Manda el push a cada token. Devuelve los tokens que FCM rechazó por inválidos (hay que borrarlos).
-    Nunca lanza: un fallo de FCM no debe romper la operación de negocio que originó el aviso."""
+    
     if not tokens:
         return []
     try:
