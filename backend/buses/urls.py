@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    TipoBusView, TipoBusIdView,
+    TipoBusView, TipoBusIdView, MarcaView,
     BusView, BusIdView, BusPlacaView, BusAsientosView,
     BusTipoBusView, BusTipoBusIdView,
     AsientoView, AsientoIdView, AsientoNumeroView, BusConductorView, BusConductorIdView,
@@ -9,6 +9,7 @@ from .views import (
 
 urlpatterns = [
     # TipoBus
+    path('marca/', MarcaView.as_view(), name='marca'),
     path('tipobus/', TipoBusView.as_view(), name='tipobus'),
     path('tipobus/<int:id>/', TipoBusIdView.as_view(), name='tipobus-id'),
 

@@ -29,7 +29,9 @@ class BusEntrada(serializers.Serializer):
     agencia_id = serializers.IntegerField(required=False, allow_null=True,
                                           help_text="Solo superadmin. Al admin se le toma de su sesión (se ignora)")
     tipo_bus_id = serializers.IntegerField(help_text="Tipo de bus de la misma agencia")
-    marca = serializers.CharField(max_length=100)
+    marca = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    marca_id = serializers.IntegerField(required=False, allow_null=True,
+                                        help_text="Marca del catálogo. Si viene, se guarda en marcaBus")
     modelo = serializers.CharField(max_length=100)
     estado = serializers.ChoiceField(choices=["activo", "inactivo", "mantenimiento"], required=False,
                                      help_text="activo (por defecto), inactivo o mantenimiento")

@@ -20,7 +20,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError, Q
 from django.utils import timezone
 
-from .models import AsientoBus, Bus_Conductor, TipoBus, Bus, BusTipoBus, Asiento, MapaBus, Viaje, ParadaCumplida
+from .models import AsientoBus, Bus_Conductor, TipoBus, Bus, BusTipoBus, Asiento, MapaBus, Marca, MarcaBus, Viaje, ParadaCumplida
 from notificaciones.eventos import notificar_cambio_viaje
 from paquetes.models import Itinerario, Paquete, ordenar_itinerario
 from reservas.models import AsientoReserva, Reserva, marcar_vencidas, reservas_activas, reservas_que_ocupan
@@ -81,6 +81,12 @@ def error_de_datos(serializador):
     """400 con el primer error del serializer, en el formato {"message": "campo: detalle"}."""
     campo, errores = next(iter(serializador.errors.items()))
     return Response({"message": f"{campo}: {errores[0]}"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class MarcaView(VistaCatalogo):
+    @swagger_auto_schema(operation_description="Listar las marcas del catálogo, ordenadas por nombre.")
+    def get(self, request):
+        return Response([{"id": marca.id, "nombre": marca.nombre} for marca in Marca.objects.order_by("nombre")])
 
 
 class TipoBusView(VistaCatalogo):
@@ -214,9 +220,47 @@ def validar_tipos_bus_de_agencia(agencia_id, tipo_bus_ids):
 
 
 ##################################################################################################
+def marca_del_bus(bus):
+    """La marca del catálogo ligada por marcaBus. Si aún no hay fila, queda el texto guardado en el bus."""
+    vinculos = sorted(bus.marcas_bus.all(), key=lambda vinculo: vinculo.id)
+    if not vinculos:
+        return bus.marca, None
+    marca = vinculos[0].marca
+    return marca.nombre, marca.id
+
+
+def resolver_marca(datos, obligatoria=True, actual=""):
+    """(marca del catálogo o None, nombre para el bus, si hay que tocar marcaBus, error)."""
+    if datos.get("marca_id") not in (None, ""):
+        marca = Marca.objects.filter(id=entero_o_none(datos.get("marca_id"))).first()
+        if marca is None:
+            return None, actual, False, Response(
+                {"message": "Selecciona una marca de la lista"}, status=status.HTTP_400_BAD_REQUEST
+            )
+        return marca, marca.nombre[:100], True, None
+    if "marca" in datos or obligatoria:
+        nombre = str(datos.get("marca") if "marca" in datos else actual).strip()
+        if obligatoria and not nombre:
+            return None, actual, False, Response(
+                {"message": "Selecciona una marca"}, status=status.HTTP_400_BAD_REQUEST
+            )
+        if not nombre:
+            return None, actual, False, None
+        return Marca.objects.filter(nombre__iexact=nombre).first(), nombre[:100], True, None
+    return None, actual, False, None
+
+
+def ligar_marca(bus, marca):
+    """Deja una sola fila marcaBus. Sin marca de catálogo, quita el vínculo anterior."""
+    MarcaBus.objects.filter(bus=bus).delete()
+    if marca is not None:
+        MarcaBus.objects.create(bus=bus, marca=marca)
+
+
 def bus_json(bus):
     tipos_bus = list(bus.tipos_bus.order_by("id"))
     tipo_bus = tipos_bus[0] if tipos_bus else None
+    marca, marca_id = marca_del_bus(bus)
     return {
         "id": bus.id,
         "placa": bus.placa,
@@ -229,7 +273,8 @@ def bus_json(bus):
         ],
         "tipo_bus_nombre": tipo_bus.nombre if tipo_bus else None,
         "capacidad": tipo_bus.capacidad if tipo_bus else None,
-        "marca": bus.marca,
+        "marca": marca,
+        "marca_id": marca_id,
         "modelo": bus.modelo,
         "estado": bus.estado,
         "fecha_registro": bus.fecha_registro,
@@ -242,10 +287,13 @@ ESTADOS_BUS = dict(Bus.ESTADOS)  # activo, mantenimiento, inactivo
 def buses_visibles(yo):
     """Multitenant: superadmin ve todos; admin y conductor, solo los de su(s) agencia(s);
     cliente o sin sesión, ninguno (la app del cliente recibe placa y tipo de bus dentro de /viaje/)."""
-    base = Bus.objects.prefetch_related("tipos_bus")
+    base = Bus.objects.prefetch_related("tipos_bus", "marcas_bus__marca")
     if es_super(yo):
         return base
-    if es_admin(yo) or es_conductor(yo):
+    if es_conductor(yo):
+        asignados = Bus_Conductor.objects.filter(conductor=yo).values("bus_id")
+        return base.filter(agencia_id__in=agencias_de(yo), id__in=asignados)
+    if es_admin(yo):
         return base.filter(agencia_id__in=agencias_de(yo))
     return base.none()
 
@@ -322,16 +370,18 @@ def crear_bus_de_conductor(yo, datos):
         return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
     if len(placa) > 15:
         return Response({"message": "La placa no puede pasar de 15 caracteres"}, status=status.HTTP_400_BAD_REQUEST)
-    marca = str(datos.get("marca") or "").strip()
     modelo = str(datos.get("modelo") or "").strip()
-    if not marca or not modelo:
-        return Response({"message": "Marca y modelo son obligatorios"}, status=status.HTTP_400_BAD_REQUEST)
+    if not modelo:
+        return Response({"message": "El modelo es obligatorio"}, status=status.HTTP_400_BAD_REQUEST)
     sillas, error = leer_sillas(datos)
     if error:
         return error
     if sillas is None:
         return Response({"message": "Indica las sillas confirmadas"}, status=status.HTTP_400_BAD_REQUEST)
     estado, error = leer_estado_bus(datos.get("estado") or "activo")
+    if error:
+        return error
+    marca, nombre_marca, tocar_marca, error = resolver_marca(datos)
     if error:
         return error
     with transaction.atomic():
@@ -344,11 +394,13 @@ def crear_bus_de_conductor(yo, datos):
         bus = Bus.objects.create(
             placa=placa,
             agencia_id=agencia_id,
-            marca=marca[:100],
+            marca=nombre_marca,
             modelo=modelo[:100],
             estado=estado,
             fecha_registro=datos.get("fecha_registro") or timezone.now(),
         )
+        if tocar_marca:
+            ligar_marca(bus, marca)
         bus.tipos_bus.set([tipo])
         Bus_Conductor.objects.get_or_create(bus=bus, conductor=yo)
     return Response({"mensaje": "Bus almacenado correctamente", "id": bus.id})
@@ -359,8 +411,9 @@ class BusView(VistaCatalogo):
 
     @swagger_auto_schema(
         operation_description=(
-            "Listar Buses con tipo_bus_nombre y capacidad. Superadmin: todos. Admin y conductor: solo los de "
-            "su agencia. Cliente o sin sesión: lista vacía. Opcional: ?agencia_id= (solo superadmin), ?search=, "
+            "Listar Buses con tipo_bus_nombre y capacidad. Superadmin: todos. Admin: los de su agencia. "
+            "Conductor: solo los buses que tiene asignados. Cliente o sin sesión: lista vacía. "
+            "Opcional: ?agencia_id= (solo superadmin), ?search=, "
             "?page= y ?page_size="
         ),
         manual_parameters=PARAMETROS_LISTA + [PARAMETRO_AGENCIA],
@@ -409,16 +462,21 @@ class BusView(VistaCatalogo):
         error = error_reducir_sillas(tipo, sillas)
         if error:
             return error
+        marca, nombre_marca, tocar_marca, error = resolver_marca(request.data)
+        if error:
+            return error
 
         with transaction.atomic():
             bus = Bus.objects.create(
                 placa=request.data.get("placa"),
                 agencia_id=agencia_id,
-                marca=request.data.get("marca"),
+                marca=nombre_marca,
                 modelo=request.data.get("modelo"),
                 estado=estado,
                 fecha_registro=request.data.get("fecha_registro")
             )
+            if tocar_marca:
+                ligar_marca(bus, marca)
             bus.tipos_bus.set(tipo_bus_ids)
             guardar_sillas(tipo, sillas)
         return Response({"mensaje": "Bus almacenado correctamente", "id": bus.id})
@@ -488,12 +546,17 @@ class BusIdView(VistaCatalogo):
             return error
         busB.placa = request.data.get("placa") or busB.placa
         busB.agencia_id = agencia_id
-        busB.marca = request.data.get("marca") or busB.marca
+        marca, nombre_marca, tocar_marca, error = resolver_marca(request.data, obligatoria=False, actual=busB.marca)
+        if error:
+            return error
+        busB.marca = nombre_marca
         busB.modelo = request.data.get("modelo") or busB.modelo
         busB.estado = estado
         busB.fecha_registro = request.data.get("fecha_registro") or busB.fecha_registro
         with transaction.atomic():
             busB.save()
+            if tocar_marca:
+                ligar_marca(busB, marca)
             if nuevos != actuales:
                 busB.tipos_bus.set(nuevos)
             guardar_sillas(tipo, sillas)

@@ -14,6 +14,18 @@ class TipoBus(models.Model):
         db_table = "tipo_bus"
 
 
+class Marca(models.Model):
+    """Catálogo de marcas. Las filas las carga quien administra los datos."""
+
+    nombre = models.CharField(max_length=100, unique=True)
+
+    def __str__(self):
+        return self.nombre
+
+    class Meta:
+        db_table = "marca"
+
+
 class Bus(models.Model):
     ESTADOS = [
         ("activo", "Activo"),
@@ -35,6 +47,19 @@ class Bus(models.Model):
 
     class Meta:
         db_table = "buses"
+
+
+class MarcaBus(models.Model):
+    """Marca de un bus: marca -< marcaBus >- bus."""
+
+    marca = models.ForeignKey(Marca, on_delete=models.PROTECT, related_name="buses_de_marca")
+    bus = models.ForeignKey(Bus, on_delete=models.CASCADE, related_name="marcas_bus")
+
+    class Meta:
+        db_table = "marcaBus"
+        constraints = [
+            models.UniqueConstraint(fields=["marca", "bus"], name="marca_bus_unico"),
+        ]
 
 
 class BusTipoBus(models.Model):
