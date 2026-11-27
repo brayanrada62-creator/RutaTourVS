@@ -13,7 +13,7 @@ from rest_framework import status
 
 from .serializer import PagoEntrada, MensajeSalida
 from .models import Pago
-from notificaciones.eventos import notificar_pago_aprobado
+from notificaciones.eventos import notificar_pago_aprobado, notificar_pago_pendiente
 from reservas.models import ESTADOS_QUE_LIBERAN, AsientoReserva, Reserva, marcar_vencidas, plazo_de_pago
 from reservas.views import codigo_reserva, total_reserva
 from destinos.imagenes import imagen_url
@@ -201,6 +201,8 @@ class PagoView(APIView):
                 revisado_en=timezone.now() if revisado else None,
             )
             ajustar_plazo(reserva)
+            if not personal:
+                transaction.on_commit(lambda: notificar_pago_pendiente(pago))
         if pago.estado == "aprobado":
             notificar_pago_aprobado(pago)  # HU-M-11: pago creado ya aprobado por la agencia
         return Response({"mensaje": "Pago almacenado correctamente", "id": pago.id, "estado": pago.estado})

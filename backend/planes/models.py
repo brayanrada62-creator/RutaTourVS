@@ -96,8 +96,17 @@ class SolicitudPlan(models.Model):
     estado = models.CharField(max_length=20, choices=ESTADOS, default='pendiente')
     motivo = models.CharField(max_length=255, blank=True, default='')
     fecha_solicitud = models.DateTimeField(auto_now_add=True)
+<<<<<<< HEAD
     inicia_el = models.DateField(null=True, blank=True)
     vencimiento = models.DateField(null=True, blank=True)
+=======
+    periodo = models.CharField(max_length=20, choices=PERIODOS, default="mensual")
+    precio = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    comprobante = models.ImageField(upload_to="comprobantes_planes/", blank=True)
+    motivo = models.CharField(max_length=255, blank=True)
+    inicia_el = models.DateField(null=True, blank=True)
+    vence_el = models.DateField(null=True, blank=True)
+>>>>>>> 6cfc482172709f5ac336187ac85d1405e151bf01
 
     def __str__(self):
         return f"{self.id_agencia.nombre} - {self.id_plan.nombre} - {self.estado}"
