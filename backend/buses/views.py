@@ -647,6 +647,33 @@ def asientos_bus_json(bus):
     tipo = tipo_principal(bus)
     mapa = MapaBus.objects.filter(bus=bus).first()
     propios = list(AsientoBus.objects.filter(bus=bus).order_by("numero"))
+    marcar_vencidas()
+    ocupados = set()
+    if tipo is not None:
+        ocupados = set(
+            AsientoReserva.objects.filter(
+                asiento__tipo_bus=tipo, reserva__in=reservas_activas(),
+            ).values_list("asiento__numero_asiento", flat=True)
+        )
+    asientos = [
+        {
+            "numero": silla.numero, "fila": silla.fila, "columna": silla.columna, "lado": silla.lado,
+            "estado": "ocupado" if silla.numero in ocupados else "libre",
+        }
+        for silla in propios
+    ]
+    if not asientos and tipo is not None:
+        for indice, numero in enumerate(
+            Asiento.objects.filter(tipo_bus=tipo).order_by("numero_asiento").values_list("numero_asiento", flat=True)
+        ):
+            columna = indice % 4 + 1
+            asientos.append({
+                "numero": numero,
+                "fila": indice // 4 + 1,
+                "columna": columna,
+                "lado": "izquierda" if columna <= 2 else "derecha",
+                "estado": "ocupado" if numero in ocupados else "libre",
+            })
     base = {
         "bus_id": bus.id,
         "placa": bus.placa,
@@ -655,14 +682,11 @@ def asientos_bus_json(bus):
         "capacidad": tipo.capacidad if tipo else 0,
         "cantidad": Asiento.objects.filter(tipo_bus=tipo).count() if tipo else 0,
         "buses_mismo_tipo": tipo.buses.count() if tipo else 0,
-        "filas": mapa.filas if mapa else None,
-        "columnas": mapa.columnas if mapa else None,
-        "pasillo_despues_de_columna": mapa.pasillo_despues_de_columna if mapa else None,
-        "total": len(propios) if propios else (Asiento.objects.filter(tipo_bus=tipo).count() if tipo else 0),
-        "asientos": [
-            {"numero": silla.numero, "fila": silla.fila, "columna": silla.columna, "lado": silla.lado, "estado": "libre"}
-            for silla in propios
-        ],
+        "filas": mapa.filas if mapa else (asientos[-1]["fila"] if asientos else None),
+        "columnas": mapa.columnas if mapa else (4 if asientos else None),
+        "pasillo_despues_de_columna": mapa.pasillo_despues_de_columna if mapa else (2 if asientos else None),
+        "total": len(asientos) if asientos else (Asiento.objects.filter(tipo_bus=tipo).count() if tipo else 0),
+        "asientos": asientos,
     }
     return base
 
