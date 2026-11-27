@@ -9,12 +9,14 @@ TIPOS_POR_ROL = {
     ROL_SUPER: [Tipo.COMPROBANTE_PLAN],
     ROL_CLIENTE: [Tipo.PAGO_APROBADO],
     ROL_CONDUCTOR: [Tipo.CAMBIO_VIAJE],
-    ROL_ADMIN: [Tipo.NOVEDAD_INCIDENTE, Tipo.PAGO_PENDIENTE],
+    ROL_ADMIN: [Tipo.NOVEDAD_INCIDENTE, Tipo.PAGO_PENDIENTE, Tipo.COMPROBANTE_PLAN_APROBADO, Tipo.COMPROBANTE_PLAN_RECHAZADO],
 }
 
 # Tipo de recurso al que apunta cada notificación.
 REFERENCIA_POR_TIPO = {
     Tipo.COMPROBANTE_PLAN: "solicitud_plan",
+    Tipo.COMPROBANTE_PLAN_APROBADO: "solicitud_plan",
+    Tipo.COMPROBANTE_PLAN_RECHAZADO: "solicitud_plan",
     Tipo.PAGO_APROBADO: "compra",
     Tipo.PAGO_PENDIENTE: "pago",
     Tipo.CAMBIO_VIAJE: "viaje",
@@ -72,10 +74,14 @@ def notificar(destinatario, tipo, titulo, mensaje, referencia_id=None, referenci
         referencia_id=referencia_id, referencia_tipo=referencia_tipo or REFERENCIA_POR_TIPO.get(tipo, ""),
         datos=datos,
     )
-    tokens = list(DispositivoFCM.objects.filter(usuario=destinatario).values_list("token", flat=True))
-    invalidos = fcm.enviar_push(tokens, n.titulo, n.mensaje, datos_push(n))
+    from usuarios.models import Dispositivo
+    # La app registra el teléfono en dispositivos (chat). El panel también guarda DispositivoFCM.
+    tokens = set(DispositivoFCM.objects.filter(usuario=destinatario).values_list("token", flat=True))
+    tokens.update(Dispositivo.objects.filter(usuario=destinatario).values_list("token", flat=True))
+    invalidos = fcm.enviar_push(list(tokens), n.titulo, n.mensaje, datos_push(n))
     if invalidos:
         DispositivoFCM.objects.filter(token__in=invalidos).delete()
-    if destinatario.rol_id == ROL_ADMIN:
+        Dispositivo.objects.filter(token__in=invalidos).delete()
+    if destinatario.rol_id in (ROL_ADMIN, ROL_SUPER):
         ws.emitir(destinatario.id, {**notificacion_json(n), "fecha": n.fecha_creacion.isoformat()})
     return n

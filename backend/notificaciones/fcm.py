@@ -1,5 +1,9 @@
 """Envío del push con Firebase Cloud Messaging (solo el aviso; el historial vive en la base de datos).
+
+Usa la misma cuenta de servicio que el chat: FIREBASE_CREDENTIALS (JSON) o, si existe,
+FIREBASE_CREDENTIALS_FILE (ruta a ese JSON).
 """
+import json
 import logging
 import os
 
@@ -11,12 +15,23 @@ def _iniciar():
     global _app
     if _app is not None:
         return _app
-    ruta = os.environ.get("FIREBASE_CREDENTIALS_FILE", "")
-    if not ruta:
-        return None
     import firebase_admin
     from firebase_admin import credentials
-    _app = firebase_admin.initialize_app(credentials.Certificate(ruta))
+    try:
+        _app = firebase_admin.get_app("rutatour-avisos")
+        return _app
+    except ValueError:
+        pass
+    ruta = os.environ.get("FIREBASE_CREDENTIALS_FILE", "")
+    crudo = os.environ.get("FIREBASE_CREDENTIALS", "")
+    if not ruta and not crudo:
+        return None
+    try:
+        certificado = credentials.Certificate(ruta) if ruta else credentials.Certificate(json.loads(crudo))
+        _app = firebase_admin.initialize_app(certificado, name="rutatour-avisos")
+    except Exception:
+        logger.exception("FCM no pudo leer las credenciales")
+        return None
     return _app
 
 

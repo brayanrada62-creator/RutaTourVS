@@ -5,6 +5,8 @@ class Tipo(models.TextChoices):
     """Tipos de notificación. Para agregar uno: nuevo valor aquí, su rol en TIPOS_POR_ROL (servicio.py)
     y su disparo en el punto del flujo de negocio; no cambia ninguna tabla."""
     COMPROBANTE_PLAN = "COMPROBANTE_PLAN", "Comprobante de membresía pendiente"
+    COMPROBANTE_PLAN_APROBADO = "COMPROBANTE_PLAN_APROBADO", "Membresía aprobada"
+    COMPROBANTE_PLAN_RECHAZADO = "COMPROBANTE_PLAN_RECHAZADO", "Membresía rechazada"
     PAGO_PENDIENTE = "PAGO_PENDIENTE", "Comprobante pendiente de revisión"
     PAGO_APROBADO = "PAGO_APROBADO", "Pago aprobado"
     CAMBIO_VIAJE = "CAMBIO_VIAJE", "Cambio en un viaje asignado"

@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
 from destinos.imagenes import imagen_url, validar_foto
+from notificaciones.eventos import notificar_comprobante_plan, notificar_resultado_plan
 from .serializers import PlanEntrada
 from .models import NUMERO_WHATSAPP_INICIAL, ContactoLanding, Plan, PlanAgencias, PrecioPlanNoDisponible, SolicitudPlan
 from .vigencia import activar_membresia
@@ -252,6 +253,7 @@ class SolicitudPlanView(APIView):
             precio=plan.precio_vigente(periodo),
             comprobante=archivo,
         )
+        notificar_comprobante_plan(solicitud)
         return Response(solicitud_json(solicitud, request), status=status.HTTP_201_CREATED)
 
 
@@ -279,6 +281,7 @@ class SolicitudPlanResolverView(APIView):
         else:
             return Response({'message': 'Acción no válida'}, status=status.HTTP_404_NOT_FOUND)
         solicitud.refresh_from_db()
+        notificar_resultado_plan(solicitud)
         return Response(solicitud_json(solicitud, request))
 
 

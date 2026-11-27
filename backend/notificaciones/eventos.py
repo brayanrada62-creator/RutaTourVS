@@ -53,6 +53,23 @@ def notificar_comprobante_plan(solicitud):
 
 
 @sin_romper_el_flujo
+def notificar_resultado_plan(solicitud):
+    """Avisa a los administradores de esa agencia cuando el super aprueba o rechaza el comprobante."""
+    aprobada = solicitud.estado == "aprobada"
+    tipo = Tipo.COMPROBANTE_PLAN_APROBADO if aprobada else Tipo.COMPROBANTE_PLAN_RECHAZADO
+    if aprobada:
+        hasta = solicitud.vencimiento.isoformat() if solicitud.vencimiento else ""
+        titulo = "Membresía aprobada"
+        mensaje = f"El comprobante del plan {solicitud.id_plan.nombre} fue aprobado. Queda vigente hasta {hasta}."
+    else:
+        titulo = "Membresía rechazada"
+        motivo = solicitud.motivo or "Sin motivo"
+        mensaje = f"El comprobante del plan {solicitud.id_plan.nombre} fue rechazado. Motivo: {motivo}."
+    for admin in administradores_de_agencia(solicitud.id_agencia_id):
+        notificar(admin, tipo, titulo, mensaje, referencia_id=solicitud.id)
+
+
+@sin_romper_el_flujo
 def notificar_pago_pendiente(pago):
     """Avisa a la agencia cuando un cliente envía un comprobante nuevo."""
     reserva = pago.reserva

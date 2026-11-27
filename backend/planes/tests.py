@@ -8,6 +8,7 @@ from django.utils import timezone
 from PIL import Image
 from rest_framework.test import APIClient
 
+from notificaciones.models import Notificacion, Tipo
 from planes.models import PlanAgencias
 from planes.vigencia import fecha_colombia
 from reservas.models import Reserva
@@ -69,6 +70,9 @@ class MembresiaCatalogoTest(TestCase):
         cuerpo = creada.json()
         self.assertEqual(cuerpo["estado"], "validando")
         self.assertTrue(cuerpo["comprobante"])
+        self.assertTrue(Notificacion.objects.filter(
+            destinatario=self.e.super, tipo=Tipo.COMPROBANTE_PLAN, referencia_id=cuerpo["id"],
+        ).exists())
         self.assertEqual(self.cliente.get("/api/solicitudes-plan/").status_code, 403)
         aprobada = self.super.post(f"/api/solicitudes-plan/{cuerpo['id']}/aprobar/", {}, format="json")
         self.assertEqual(aprobada.status_code, 200)
@@ -77,6 +81,9 @@ class MembresiaCatalogoTest(TestCase):
         self.assertIn(self.e.paq_a.id, self.ids(self.anonimo))
         self.assertTrue(PlanAgencias.objects.filter(
             id_agencia=self.e.ag_a, estado="activo", vencimiento__gte=fecha_colombia(),
+        ).exists())
+        self.assertTrue(Notificacion.objects.filter(
+            destinatario=self.e.admin_a, tipo=Tipo.COMPROBANTE_PLAN_APROBADO, referencia_id=cuerpo["id"],
         ).exists())
 
     def test_rechazar_no_reactiva_el_catalogo(self):
@@ -96,3 +103,6 @@ class MembresiaCatalogoTest(TestCase):
         self.assertEqual(rechazada.json()["estado"], "rechazado")
         self.assertEqual(rechazada.json()["motivo"], "Foto ilegible")
         self.assertNotIn(self.e.paq_a.id, self.ids(self.anonimo))
+        self.assertTrue(Notificacion.objects.filter(
+            destinatario=self.e.admin_a, tipo=Tipo.COMPROBANTE_PLAN_RECHAZADO, referencia_id=sid,
+        ).exists())
