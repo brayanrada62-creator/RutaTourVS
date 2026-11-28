@@ -98,9 +98,9 @@ REST_FRAMEWORK = {
 # quien no usa la app en 7 días sí debe volver a entrar). El panel web cierra antes: 30 min sin actividad.
 # BLACKLIST_AFTER_ROTATION=False: las apps ya instaladas que no guardan el refresh nuevo siguen usando el
 # suyo hasta que venza (como antes). Suspender o desactivar la agencia revoca todos (revocar_sesiones).
-# WebAuthn (Touch ID, Windows Hello, Face ID). El RP ID es el dominio de la página del panel,
-# sin https ni puerto. El origen es la barra de direcciones completa. Una credencial de localhost
-# no sirve en el dominio publicado.
+# WebAuthn (Touch ID, Windows Hello, Face ID). Respaldo si la petición no trae Origin.
+# Con Origin, biometria/views.py usa el dominio de esa página: localhost en local y el https publicado en el panel.
+# Una credencial de localhost no sirve en el dominio publicado.
 WEBAUTHN_RP_ID = os.environ.get('WEBAUTHN_RP_ID', 'localhost')
 WEBAUTHN_RP_NAME = 'Ruta Tour'
 WEBAUTHN_ORIGINS = [

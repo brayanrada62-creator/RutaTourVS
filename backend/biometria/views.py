@@ -1,5 +1,6 @@
 import json
 from datetime import timedelta
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.utils import timezone
@@ -35,6 +36,24 @@ SOLO_ADMIN = "Solo administradores pueden ingresar."
 
 def _error(mensaje, codigo):
     return Response({"message": mensaje, "mensaje": mensaje}, status=codigo)
+
+
+def _sitio(request):
+    """Dominio y origen de la página que pide la biometría.
+
+    En local sigue siendo localhost. En el panel publicado el navegador manda su
+    propio Origin (https://…); la llave tiene que firmarse para ese dominio, no para localhost.
+    """
+    crudo = (request.headers.get("Origin") or "").strip()
+    partes = urlparse(crudo)
+    host = (partes.hostname or "").lower()
+    if partes.scheme and partes.netloc:
+        origen = f"{partes.scheme}://{partes.netloc}"
+        local = partes.scheme == "http" and host in ("localhost", "127.0.0.1")
+        publicado = partes.scheme == "https" and host not in ("", "localhost")
+        if local or publicado:
+            return host, [origen]
+    return settings.WEBAUTHN_RP_ID, settings.WEBAUTHN_ORIGINS
 
 
 def _opciones_dict(opciones):
@@ -86,8 +105,9 @@ class RegistroOpciones(APIView):
             PublicKeyCredentialDescriptor(id=base64url_to_bytes(fila.credential_id))
             for fila in usuario.credenciales_biometricas.all()
         ]
+        rp_id, _ = _sitio(request)
         opciones = generate_registration_options(
-            rp_id=settings.WEBAUTHN_RP_ID,
+            rp_id=rp_id,
             rp_name=settings.WEBAUTHN_RP_NAME,
             user_id=str(usuario.pk).encode(),
             user_name=usuario.correo,
@@ -118,11 +138,12 @@ class RegistroVerificar(APIView):
         challenge, _ = tomado
 
         try:
+            rp_id, origenes = _sitio(request)
             verificado = verify_registration_response(
                 credential=request.data,
                 expected_challenge=base64url_to_bytes(challenge),
-                expected_rp_id=settings.WEBAUTHN_RP_ID,
-                expected_origin=settings.WEBAUTHN_ORIGINS,
+                expected_rp_id=rp_id,
+                expected_origin=origenes,
                 require_user_verification=True,
             )
         except (WebAuthnException, ValueError):
@@ -146,8 +167,9 @@ class LoginOpciones(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        rp_id, _ = _sitio(request)
         opciones = generate_authentication_options(
-            rp_id=settings.WEBAUTHN_RP_ID,
+            rp_id=rp_id,
             user_verification=UserVerificationRequirement.REQUIRED,
             allow_credentials=[],
         )
@@ -188,11 +210,12 @@ class LoginVerificar(APIView):
             return _error(MENSAJE_AGENCIA_DESACTIVADA, status.HTTP_403_FORBIDDEN)
 
         try:
+            rp_id, origenes = _sitio(request)
             verificado = verify_authentication_response(
                 credential=request.data,
                 expected_challenge=base64url_to_bytes(challenge),
-                expected_rp_id=settings.WEBAUTHN_RP_ID,
-                expected_origin=settings.WEBAUTHN_ORIGINS,
+                expected_rp_id=rp_id,
+                expected_origin=origenes,
                 credential_public_key=base64url_to_bytes(fila.llave_publica),
                 credential_current_sign_count=fila.contador,
                 require_user_verification=True,
